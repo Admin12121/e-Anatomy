@@ -7,7 +7,9 @@ import { useLenis } from "lenis/react"
 
 gsap.registerPlugin(useGSAP)
 
-export let isInitialLoad = true
+type PreloaderProps = {
+  onComplete?: () => void
+}
 
 const BLOCK_SIZE_DESKTOP = 120
 const BLOCK_SIZE_MOBILE = 80
@@ -26,22 +28,16 @@ const GAP_BEFORE_BLOCKS = 0
 const BLOCKS_OUT = 0.5
 const BLOCK_STAGGER = 0.05
 
-export default function Preloader() {
+export default function Preloader({ onComplete }: PreloaderProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const blocksRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
   const basePathRef = useRef<SVGPathElement | null>(null)
   const fillPathRef = useRef<SVGPathElement | null>(null)
 
-  const [showPreloader, setShowPreloader] = useState(isInitialLoad)
-  const [loaderAnimating, setLoaderAnimating] = useState(isInitialLoad)
+  const [showPreloader, setShowPreloader] = useState(true)
+  const [loaderAnimating, setLoaderAnimating] = useState(true)
   const lenis = useLenis()
-
-  useEffect(() => {
-    return () => {
-      isInitialLoad = false
-    }
-  }, [])
 
   useEffect(() => {
     if (loaderAnimating) {
@@ -110,6 +106,7 @@ export default function Preloader() {
           setLoaderAnimating(false)
           completionTimer = window.setTimeout(() => {
             setShowPreloader(false)
+            onComplete?.()
           }, 100)
         },
       })
@@ -175,7 +172,7 @@ export default function Preloader() {
         timeline.kill()
       }
     },
-    { scope: wrapperRef, dependencies: [showPreloader] },
+    { scope: wrapperRef, dependencies: [onComplete, showPreloader] },
   )
 
   if (!showPreloader) {

@@ -132,14 +132,14 @@ export default function MusicToggle() {
     <>
       <audio ref={audioRef} src="/music/bg.mp3" loop />
 
-      <div className="pointer-events-none fixed left-1/2 top-0 z-20 h-[100svh] w-full max-w-[2000px] -translate-x-1/2">
+      <div className="pointer-events-none fixed left-1/2 top-0 z-20 h-[100svh] w-full -translate-x-1/2">
         <button
           type="button"
           onClick={handleToggle}
           aria-pressed={isPlaying}
           aria-label={isPlaying ? "Mute music" : "Play music"}
           className={cn(
-            "pointer-events-auto absolute right-6 top-6 inline-flex h-18 w-18 cursor-pointer items-center justify-center overflow-hidden rounded-[0.4rem] border-0 bg-transparent p-0 text-[var(--base-500)] outline-none transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            "pointer-events-auto absolute right-6 top-6 inline-flex h-12 w-18 cursor-pointer items-center justify-center overflow-hidden rounded-[0.4rem] border-0 bg-transparent p-0 text-[var(--base-500)] outline-none transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
             isPlaying && "text-[var(--base-500)]",
           )}
         >

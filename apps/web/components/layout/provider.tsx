@@ -1,11 +1,13 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import type { LenisOptions } from "lenis"
 import { ReactLenis } from "lenis/react"
+import { usePathname } from "next/navigation"
 
 import MusicToggle from "./music-toggle"
+import Preloader from "./preloader"
 import TransitionProvider from "./transition"
 
 type LayoutProviderProps = {
@@ -41,11 +43,12 @@ const LENIS_DESKTOP = {
   lerp: 0.1,
 } satisfies LenisOptions
 
-export default function LayoutProvider({ children }: LayoutProviderProps) {
-  const pageRef = useRef<HTMLDivElement | null>(null)
-  const pageWrapperRef = useRef<HTMLDivElement | null>(null)
+let hasBootstrappedDocument = false
 
+export default function LayoutProvider({ children }: LayoutProviderProps) {
+  const pathname = usePathname()
   const [isMobile, setIsMobile] = useState(false)
+  const [showPreloader, setShowPreloader] = useState(() => !hasBootstrappedDocument)
 
   useEffect(() => {
     const handleResize = () =>
@@ -57,14 +60,29 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
     return () => window.removeEventListener("resize", handleResize)
   }, [])
 
+  useEffect(() => {
+    // Keep the preloader tied to the current document load, not client-side route changes.
+    hasBootstrappedDocument = true
+  }, [])
+
   const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
+  const handlePreloaderComplete = useCallback(() => {
+    setShowPreloader(false)
+  }, [])
+  const shouldShowPreloader = pathname === "/" && showPreloader
 
   return (
     <TransitionProvider>
       <ReactLenis root options={lenisOptions}>
-        <div className="page" ref={pageRef}>
+        <div className="relative">
+          {shouldShowPreloader ? <Preloader onComplete={handlePreloaderComplete} /> : null}
           <MusicToggle />
-          <div className="page-wrapper" ref={pageWrapperRef}>
+          <div
+            aria-hidden={shouldShowPreloader}
+            className={`transition-opacity duration-300 ${
+              shouldShowPreloader ? "pointer-events-none opacity-0" : "opacity-100"
+            }`}
+          >
             {children}
           </div>
         </div>
