@@ -43,3 +43,9 @@ export function sanitizeNextPath(nextPath?: string | null) {
 
   return nextPath
 }
+
+export function createLoginRedirectPath(nextPath = DEFAULT_AUTHENTICATED_REDIRECT) {
+  const safeNextPath = sanitizeNextPath(nextPath) ?? DEFAULT_AUTHENTICATED_REDIRECT
+
+  return `/login?next=${encodeURIComponent(safeNextPath)}`
+}

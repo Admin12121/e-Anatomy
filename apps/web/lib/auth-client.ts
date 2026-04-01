@@ -58,17 +58,19 @@ export const authClient = {
         `${providerLabel} sign-in is not configured in this app yet`
       )
     },
-    async passkey(_: { autoFill?: boolean }): Promise<AuthClientResult> {
+    async passkey(options: { autoFill?: boolean }): Promise<AuthClientResult> {
+      void options
       return unsupportedResult("Passkey sign-in is not configured in this app yet")
     },
   },
   signUp: {
-    async email(_: {
+    async email(options: {
       name: string
       email: string
       password: string
       callbackURL?: string
     }): Promise<AuthClientResult> {
+      void options
       return unsupportedResult("Account creation is not configured in this app yet")
     },
   },

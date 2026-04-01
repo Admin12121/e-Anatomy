@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/field"
 import { Frame } from "@/components/ui/frame"
 import { Input } from "@/components/ui/input"
+import { DEFAULT_AUTHENTICATED_REDIRECT } from "@/lib/auth/access"
 import { authClient } from "@/lib/auth-client"
 import { cn } from "@/lib/utils"
 
@@ -30,7 +31,9 @@ export function LoginForm({
 }: React.ComponentProps<"div"> & { nextPath?: string }) {
   const router = useRouter()
   const nextUrl =
-    nextPath && nextPath.startsWith("/") ? nextPath : "/dashboard"
+    nextPath && nextPath.startsWith("/")
+      ? nextPath
+      : DEFAULT_AUTHENTICATED_REDIRECT
 
   const [mode, setMode] = useState<AuthMode>("signin")
   const [pending, setPending] = useState(false)
@@ -132,13 +135,13 @@ export function LoginForm({
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Frame className="border-none bg-white py-5">
-        <div className="text-center mb-5">
+        <div className="mb-5 text-center">
           <Link
             href="/"
             className="flex flex-col items-center gap-2 self-center font-medium text-3xl font-otis-display"
           >
             <div className="flex size-14 items-center justify-center rounded-md">
-              <Image src={"/logo.png"} alt="Alert" height={500} width={500} />
+              <Image src="/logo.png" alt="Alert" height={500} width={500} />
             </div>
             E-Anatomy.
           </Link>
@@ -146,9 +149,9 @@ export function LoginForm({
         <CardContent>
           <form onSubmit={handleEmailAuth}>
             <FieldGroup>
-              <Field className="flex items-center justify-center flex-row w-full relative">
+              <Field className="relative flex w-full flex-row items-center justify-center">
                 <Button
-                  size={"icon-xl"}
+                  size="icon-xl"
                   type="button"
                   onClick={() => handleSocial("google")}
                   disabled={pending}
@@ -158,7 +161,7 @@ export function LoginForm({
                   Google
                 </Button>
                 <Button
-                  size={"icon-xl"}
+                  size="icon-xl"
                   type="button"
                   onClick={() => handleSocial("github")}
                   disabled={pending}
@@ -168,7 +171,7 @@ export function LoginForm({
                   GitHub
                 </Button>
                 <Button
-                  size={"icon-xl"}
+                  size="icon-xl"
                   type="button"
                   onClick={handlePasskeySignIn}
                   disabled={pending}
@@ -178,7 +181,7 @@ export function LoginForm({
                   Passkey
                 </Button>
               </Field>
-              <FieldSeparator className="*:data-[slot=field-separator-content]:bg-[#262629] mt-1">
+              <FieldSeparator className="mt-1 *:data-[slot=field-separator-content]:bg-[#262629]">
                 Or continue with
               </FieldSeparator>
               {mode === "signup" ? (
@@ -215,7 +218,7 @@ export function LoginForm({
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  placeholder="•••••••••••••"
+                  placeholder="*************"
                   required
                   className="border-border"
                 />

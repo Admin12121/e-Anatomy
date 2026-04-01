@@ -5,12 +5,18 @@ import { redirect } from "next/navigation"
 
 import { serverApiFetch } from "@/lib/api/server"
 import { ApiClientError } from "@/lib/api/errors"
-import { isPrivilegedRole, sanitizeNextPath } from "@/lib/auth/access"
+import {
+  createLoginRedirectPath,
+  DEFAULT_AUTHENTICATED_REDIRECT,
+  isPrivilegedRole,
+} from "@/lib/auth/access"
 import type { SessionResponse } from "@/lib/auth/types"
 
 export const getSession = cache(async (): Promise<SessionResponse | null> => {
   try {
-    return await serverApiFetch<SessionResponse>("/auth/session")
+    return await serverApiFetch<SessionResponse>("/auth/session", {
+      cache: "no-store",
+    })
   } catch (error) {
     if (error instanceof ApiClientError && error.status === 401) {
       return null
@@ -20,17 +26,31 @@ export const getSession = cache(async (): Promise<SessionResponse | null> => {
   }
 })
 
-export async function requireAdminSession(nextPath = "/admin/dashboard") {
-  const session = await getSession()
-  const safeNextPath = sanitizeNextPath(nextPath) ?? "/admin/dashboard"
+export const requireAdminSession = cache(
+  async (nextPath = DEFAULT_AUTHENTICATED_REDIRECT) => {
+    const session = await getSession()
 
-  if (!session) {
-    redirect(`/login?next=${encodeURIComponent(safeNextPath)}`)
+    if (!session) {
+      redirect(createLoginRedirectPath(nextPath))
+    }
+
+    if (!isPrivilegedRole(session.account.roleCode)) {
+      redirect("/")
+    }
+
+    return session
+  },
+)
+
+export const getAdminViewer = cache(async () => {
+  const session = await requireAdminSession()
+
+  return {
+    accountName: session.account.name,
+    displayName: session.user.displayName,
+    email: session.user.email,
+    expiresAt: session.session.expiresAt,
+    roleCode: session.account.roleCode,
+    status: session.user.status,
   }
-
-  if (!isPrivilegedRole(session.account.roleCode)) {
-    redirect("/")
-  }
-
-  return session
-}
+})
