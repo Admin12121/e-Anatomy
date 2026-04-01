@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ElementRef } from "react";
+import { useMemo, useRef, useState, type ElementRef } from "react";
 import dynamic from "next/dynamic";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import type { HighlightableLayerId } from "@/components/anatomy/anatomy-stage";
+import { ClickDissolveTransition } from "@/components/landing/click-dissolve-transition";
 import { SkullFluidReveal } from "@/components/landing/skull-fluid-reveal";
 import { PulsatingButton } from "@/components/layout/pulsating-button";
 import { cn } from "@/lib/utils";
@@ -89,6 +90,11 @@ const LANDING_CATEGORIES: readonly LandingCategory[] = [
 
 export default function HomePage() {
   const [hasStartedExperience, setHasStartedExperience] = useState(false);
+  const [isExitingExperience, setIsExitingExperience] = useState(false);
+  const [transitionDirection, setTransitionDirection] = useState<
+    "enter" | "exit"
+  >("enter");
+  const [transitionRunId, setTransitionRunId] = useState(0);
   const [hoveredCategoryId, setHoveredCategoryId] = useState<string | null>(
     null,
   );
@@ -106,7 +112,8 @@ export default function HomePage() {
   const backButtonRef = useRef<HTMLButtonElement | null>(null);
   const categoryPanelRef = useRef<HTMLDivElement | null>(null);
   const categoryListRef = useRef<HTMLDivElement | null>(null);
-  const timelineRef = useRef<gsap.core.Timeline | null>(null);
+  const enterTimelineRef = useRef<gsap.core.Timeline | null>(null);
+  const exitTimelineRef = useRef<gsap.core.Timeline | null>(null);
 
   const activeCategory = useMemo(
     () =>
@@ -155,11 +162,7 @@ export default function HomePage() {
         : [];
 
       gsap.set(skull, { autoAlpha: 1 });
-      gsap.set(stage, {
-        autoAlpha: 0,
-        scale: 0.72,
-        transformOrigin: "50% 58%",
-      });
+      gsap.set(stage, { autoAlpha: 0 });
       gsap.set(title, { top: "50%", yPercent: -50 });
       gsap.set(startButton, { autoAlpha: 1, y: 0 });
       gsap.set([footerLeft, footerRight], { autoAlpha: 1, x: 0 });
@@ -172,41 +175,27 @@ export default function HomePage() {
       });
       gsap.set(categoryItems, { autoAlpha: 0, y: 18 });
 
-      timelineRef.current = gsap.timeline({
+      enterTimelineRef.current = gsap.timeline({
         defaults: {
           ease: "power3.inOut",
-        },
-        onReverseComplete: () => {
-          setHoveredCategoryId(null);
-          setSelectedCategoryId(null);
         },
         paused: true,
       });
 
-      timelineRef.current
-        .to(
-          skull,
-          {
-            autoAlpha: 0,
-            duration: 1,
-            ease: "power2.inOut",
-          },
-          0,
-        )
+      enterTimelineRef.current
         .to(
           stage,
           {
             autoAlpha: 1,
-            duration: 1.2,
-            ease: "expo.out",
-            scale: 1,
+            duration: 0.16,
+            ease: "none",
           },
-          0,
+          0.04,
         )
         .to(
           title,
           {
-            duration: 1.05,
+            duration: 1.08,
             ease: "expo.inOut",
             top: "2.75rem",
             yPercent: 0,
@@ -245,23 +234,23 @@ export default function HomePage() {
           backButton,
           {
             autoAlpha: 1,
-            duration: 0.55,
+            duration: 0.5,
             ease: "expo.out",
             scale: 1,
             y: 0,
           },
-          0.32,
+          0.58,
         )
         .to(
           categoryPanel,
           {
             autoAlpha: 1,
-            duration: 0.95,
+            duration: 0.88,
             ease: "expo.out",
             height: "auto",
             y: 0,
           },
-          0.3,
+          0.56,
         )
         .to(
           categoryItems,
@@ -272,31 +261,156 @@ export default function HomePage() {
             stagger: 0.06,
             y: 0,
           },
-          0.5,
+          0.76,
+        )
+        .to(
+          skull,
+          {
+            autoAlpha: 0,
+            duration: 0.24,
+            ease: "power2.out",
+          },
+          1.06,
+        );
+
+      exitTimelineRef.current = gsap.timeline({
+        defaults: {
+          ease: "power3.inOut",
+        },
+        onComplete: () => {
+          setHasStartedExperience(false);
+          setHoveredCategoryId(null);
+          setSelectedCategoryId(null);
+          setIsExitingExperience(false);
+        },
+        paused: true,
+      });
+
+      exitTimelineRef.current
+        .to(
+          categoryItems,
+          {
+            autoAlpha: 0,
+            duration: 0.32,
+            ease: "power2.inOut",
+            stagger: {
+              each: 0.03,
+              from: "end",
+            },
+            y: 18,
+          },
+          0,
+        )
+        .to(
+          categoryPanel,
+          {
+            autoAlpha: 0,
+            duration: 0.82,
+            ease: "expo.inOut",
+            height: 0,
+            y: 28,
+          },
+          0.08,
+        )
+        .to(
+          backButton,
+          {
+            autoAlpha: 0,
+            duration: 0.46,
+            ease: "expo.in",
+            scale: 0.86,
+            y: -24,
+          },
+          0.06,
+        )
+        .to(
+          title,
+          {
+            duration: 1.08,
+            ease: "expo.inOut",
+            top: "50%",
+            yPercent: -50,
+          },
+          0.24,
+        )
+        .to(
+          footerLeft,
+          {
+            autoAlpha: 1,
+            duration: 0.9,
+            x: 0,
+          },
+          0.46,
+        )
+        .to(
+          footerRight,
+          {
+            autoAlpha: 1,
+            duration: 0.9,
+            x: 0,
+          },
+          0.46,
+        )
+        .to(
+          startButton,
+          {
+            autoAlpha: 1,
+            duration: 0.62,
+            ease: "expo.out",
+            y: 0,
+          },
+          0.7,
+        )
+        .to(
+          skull,
+          {
+            autoAlpha: 1,
+            duration: 0.12,
+            ease: "none",
+          },
+          2.72,
+        )
+        .to(
+          stage,
+          {
+            autoAlpha: 0,
+            duration: 0.12,
+            ease: "none",
+          },
+          2.72,
         );
     },
     { scope: rootRef },
   );
 
-  useEffect(() => {
-    const timeline = timelineRef.current;
-
-    if (!timeline) {
-      return;
-    }
-
-    if (hasStartedExperience) {
-      timeline.play();
-      return;
-    }
-
-    timeline.reverse();
-  }, [hasStartedExperience]);
-
   const handleCategorySelect = (categoryId: string) => {
     setSelectedCategoryId((currentCategoryId) =>
       currentCategoryId === categoryId ? null : categoryId,
     );
+  };
+
+  const handleStartExperience = () => {
+    if (hasStartedExperience) {
+      return;
+    }
+
+    setTransitionDirection("enter");
+    setHasStartedExperience(true);
+    setTransitionRunId((currentRunId) => currentRunId + 1);
+    exitTimelineRef.current?.pause(0);
+    enterTimelineRef.current?.restart();
+  };
+
+  const handleExitExperience = () => {
+    if (!hasStartedExperience || isExitingExperience) {
+      return;
+    }
+
+    setTransitionDirection("exit");
+    setIsExitingExperience(true);
+    setTransitionRunId((currentRunId) => currentRunId + 1);
+    enterTimelineRef.current?.pause();
+    exitTimelineRef.current?.restart();
   };
 
   return (
@@ -312,7 +426,9 @@ export default function HomePage() {
         ref={stageRef}
         className={cn(
           "absolute inset-0 z-[1]",
-          hasStartedExperience ? "pointer-events-auto" : "pointer-events-none",
+          hasStartedExperience && !isExitingExperience
+            ? "pointer-events-auto"
+            : "pointer-events-none",
         )}
       >
         <AnatomyStage
@@ -323,15 +439,23 @@ export default function HomePage() {
         />
       </div>
 
+      <ClickDissolveTransition
+        runId={transitionRunId}
+        sourceRootRef={transitionDirection === "enter" ? skullRef : stageRef}
+        targetRootRef={transitionDirection === "enter" ? stageRef : skullRef}
+      />
+
       <button
         ref={backButtonRef}
         aria-label="Back"
         className={cn(
           "absolute left-6 top-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-white/20 text-slate-900 shadow-[0_24px_80px_rgba(63,66,176,0.24)] backdrop-blur-xl",
-          hasStartedExperience ? "pointer-events-auto" : "pointer-events-none",
+          hasStartedExperience && !isExitingExperience
+            ? "pointer-events-auto"
+            : "pointer-events-none",
         )}
         type="button"
-        onClick={() => setHasStartedExperience(false)}
+        onClick={handleExitExperience}
       >
         <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-900">
           <ArrowLeft className="h-5 w-5" />
@@ -342,7 +466,9 @@ export default function HomePage() {
         ref={categoryPanelRef}
         className={cn(
           "absolute bottom-5 right-5 z-20 w-[340px] rounded-[30px] border border-white/16 bg-white/10 p-4 shadow-[0_30px_120px_rgba(57,61,175,0.35)] backdrop-blur-2xl",
-          hasStartedExperience ? "pointer-events-auto" : "pointer-events-none",
+          hasStartedExperience && !isExitingExperience
+            ? "pointer-events-auto"
+            : "pointer-events-none",
         )}
       >
         <p className="pb-4 text-center text-[0.78rem] font-semibold tracking-[0.22em] text-slate-900/80 uppercase">
@@ -410,7 +536,7 @@ export default function HomePage() {
                 pulseColor="#ffffff63"
                 className="bg-white text-xl text-indigo-900"
                 disabled={hasStartedExperience}
-                onClick={() => setHasStartedExperience(true)}
+                onClick={handleStartExperience}
               >
                 Start Experience
               </PulsatingButton>

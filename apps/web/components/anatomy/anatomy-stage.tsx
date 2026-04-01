@@ -219,9 +219,7 @@ const ROTATION_EULER_ORDER: EulerOrder = "XYZ"
 const ROTATION_SMOOTH_TIME = 0.18
 const BASE_MODEL_ROTATION_X = -Math.PI / 2
 const DEFAULT_TARGET_MODEL_HEIGHT = 5.6
-const FOCUS_POSITION_MAX_SPEED = 0.52
-const FOCUS_SCALE_MAX_SPEED = 0.14
-const FOCUS_SMOOTH_TIME = 1.45
+const FOCUS_VIEW_SMOOTH_TIME = 0.82
 
 const FOCUS_PRESETS: Record<
   HighlightableLayerId,
@@ -424,6 +422,11 @@ function AnatomyAssembly({
     modelOffsetY,
     targetModelHeight,
   })
+  const animatedViewRef = useRef({
+    modelOffsetX,
+    modelOffsetY,
+    targetModelHeight,
+  })
 
   useLayoutEffect(() => {
     const normalizedGroup = normalizedGroupRef.current
@@ -456,6 +459,11 @@ function AnatomyAssembly({
         -center.y * scale + initialFitSettings.modelOffsetY,
         -center.z * scale,
       )
+      animatedViewRef.current = {
+        modelOffsetX: initialFitSettings.modelOffsetX,
+        modelOffsetY: initialFitSettings.modelOffsetY,
+        targetModelHeight: initialFitSettings.targetModelHeight,
+      }
       hasInitializedFitRef.current = true
     }
   }, [])
@@ -474,7 +482,31 @@ function AnatomyAssembly({
     const resolvedModelOffsetX = preset?.modelOffsetX ?? modelOffsetX
     const resolvedTargetModelHeight = preset?.targetModelHeight ?? targetModelHeight
     const resolvedModelOffsetY = preset?.modelOffsetY ?? modelOffsetY
-    const scale = resolvedTargetModelHeight / fitMetrics.sizeY
+    const animatedView = animatedViewRef.current
+
+    easing.damp(
+      animatedView,
+      "targetModelHeight",
+      resolvedTargetModelHeight,
+      FOCUS_VIEW_SMOOTH_TIME,
+      delta,
+    )
+    easing.damp(
+      animatedView,
+      "modelOffsetX",
+      resolvedModelOffsetX,
+      FOCUS_VIEW_SMOOTH_TIME,
+      delta,
+    )
+    easing.damp(
+      animatedView,
+      "modelOffsetY",
+      resolvedModelOffsetY,
+      FOCUS_VIEW_SMOOTH_TIME,
+      delta,
+    )
+
+    const scale = animatedView.targetModelHeight / fitMetrics.sizeY
 
     easing.dampE(
       rotationGroup.rotation,
@@ -482,23 +514,11 @@ function AnatomyAssembly({
       ROTATION_SMOOTH_TIME,
       delta,
     )
-    easing.damp3(
-      normalizedGroup.scale,
-      [scale, scale, scale],
-      FOCUS_SMOOTH_TIME,
-      delta,
-      FOCUS_SCALE_MAX_SPEED,
-    )
-    easing.damp3(
-      normalizedGroup.position,
-      [
-        -fitMetrics.center.x * scale + resolvedModelOffsetX,
-        -fitMetrics.center.y * scale + resolvedModelOffsetY,
-        -fitMetrics.center.z * scale,
-      ],
-      FOCUS_SMOOTH_TIME,
-      delta,
-      FOCUS_POSITION_MAX_SPEED,
+    normalizedGroup.scale.setScalar(scale)
+    normalizedGroup.position.set(
+      -fitMetrics.center.x * scale + animatedView.modelOffsetX,
+      -fitMetrics.center.y * scale + animatedView.modelOffsetY,
+      -fitMetrics.center.z * scale,
     )
   })
 
