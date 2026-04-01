@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Oxanium } from "next/font/google";
+import { Toaster } from "sonner";
 
 import "./globals.css";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ export default function RootLayout({
     >
       <body className="min-h-full bg-background font-sans text-foreground">
         {children}
+        <Toaster />
       </body>
     </html>
   );

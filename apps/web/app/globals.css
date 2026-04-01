@@ -43,32 +43,76 @@
   --base-300: #ffae00;
   --base-400: #171717;
   --base-500: #0f0f0f;
-  --background: oklch(0.98 0.008 95.61);
-  --foreground: oklch(0.23 0.026 248.77);
-  --card: oklch(0.995 0.004 95.21);
-  --card-foreground: oklch(0.23 0.026 248.77);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.23 0.026 248.77);
-  --primary: oklch(0.45 0.11 222.05);
-  --primary-foreground: oklch(0.98 0.006 95.53);
-  --secondary: oklch(0.94 0.01 212.73);
-  --secondary-foreground: oklch(0.31 0.03 244.52);
-  --muted: oklch(0.94 0.012 100.01);
-  --muted-foreground: oklch(0.51 0.03 244.61);
-  --accent: oklch(0.9 0.031 197.21);
-  --accent-foreground: oklch(0.28 0.034 235.77);
-  --destructive: oklch(0.62 0.19 24.39);
-  --destructive-foreground: oklch(0.98 0.006 95.53);
-  --border: oklch(0.89 0.012 218.94);
-  --input: oklch(0.89 0.012 218.94);
-  --ring: oklch(0.58 0.12 221.2);
-  --success: oklch(0.64 0.13 164.83);
-  --success-foreground: oklch(0.27 0.04 172.09);
-  --warning: oklch(0.77 0.14 79.77);
-  --warning-foreground: oklch(0.39 0.06 53.4);
-  --info: oklch(0.7 0.1 219.43);
-  --info-foreground: oklch(0.29 0.04 229.53);
-  --radius: 1rem;
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.51 0.23 277);
+  --primary-foreground: oklch(0.96 0.02 272);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.967 0.001 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.92 0.004 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --chart-1: oklch(0.79 0.1 275);
+  --chart-2: oklch(0.68 0.16 277);
+  --chart-3: oklch(0.59 0.2 277);
+  --chart-4: oklch(0.51 0.23 277);
+  --chart-5: oklch(0.46 0.21 277);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.141 0.005 285.823);
+  --sidebar-primary: oklch(0.51 0.23 277);
+  --sidebar-primary-foreground: oklch(0.96 0.02 272);
+  --sidebar-accent: oklch(0.967 0.001 286.375);
+  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+  --sidebar-border: oklch(0.92 0.004 286.32);
+  --sidebar-ring: oklch(0.705 0.015 286.067);
+  --black: #3f3f3f;
+  --destructive-foreground: var(--color-red-700);
+}
+
+.dark {
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.21 0.006 285.885);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.21 0.006 285.885);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.59 0.2 277);
+  --primary-foreground: oklch(0.96 0.02 272);
+  --secondary: oklch(0.274 0.006 286.033);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.274 0.006 286.033);
+  --muted-foreground: oklch(0.705 0.015 286.067);
+  --accent: oklch(0.274 0.006 286.033);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.552 0.016 285.938);
+  --chart-1: oklch(0.79 0.1 275);
+  --chart-2: oklch(0.68 0.16 277);
+  --chart-3: oklch(0.59 0.2 277);
+  --chart-4: oklch(0.51 0.23 277);
+  --chart-5: oklch(0.46 0.21 277);
+  --sidebar: oklch(0.21 0.006 285.885);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.68 0.16 277);
+  --sidebar-primary-foreground: oklch(0.96 0.02 272);
+  --sidebar-accent: oklch(0.274 0.006 286.033);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.552 0.016 285.938);
+  --black: #cfcfcfaf;
+  --destructive-foreground: var(--color-red-400);
 }
 
 @theme inline {
@@ -108,6 +152,10 @@
         transparent 28%
       ),
       linear-gradient(180deg, rgba(247, 249, 251, 0.92), rgba(243, 246, 248, 1));
+  }
+
+  .font-otis-display {
+    font-family: var(--font-heading), sans-serif;
   }
 
   ::selection {

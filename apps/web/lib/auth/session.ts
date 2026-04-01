@@ -5,16 +5,8 @@ import { redirect } from "next/navigation"
 
 import { serverApiFetch } from "@/lib/api/server"
 import { ApiClientError } from "@/lib/api/errors"
+import { isPrivilegedRole, sanitizeNextPath } from "@/lib/auth/access"
 import type { SessionResponse } from "@/lib/auth/types"
-
-const privilegedRoles = new Set([
-  "owner",
-  "admin",
-  "platform_admin",
-  "content_admin",
-  "editor",
-  "reviewer",
-])
 
 export const getSession = cache(async (): Promise<SessionResponse | null> => {
   try {
@@ -28,14 +20,15 @@ export const getSession = cache(async (): Promise<SessionResponse | null> => {
   }
 })
 
-export async function requireAdminSession() {
+export async function requireAdminSession(nextPath = "/admin/dashboard") {
   const session = await getSession()
+  const safeNextPath = sanitizeNextPath(nextPath) ?? "/admin/dashboard"
 
   if (!session) {
-    redirect("/login")
+    redirect(`/login?next=${encodeURIComponent(safeNextPath)}`)
   }
 
-  if (!privilegedRoles.has(session.account.roleCode)) {
+  if (!isPrivilegedRole(session.account.roleCode)) {
     redirect("/")
   }
 
