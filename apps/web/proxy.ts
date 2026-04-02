@@ -1,14 +1,15 @@
 import type { NextRequest } from "next/server"
+import { getSessionCookie } from "better-auth/cookies"
 import { NextResponse } from "next/server"
 
-import { AUTH_COOKIE_NAME, createLoginRedirectPath } from "@/lib/auth/access"
+import { createLoginRedirectPath } from "@/lib/auth/access"
 
-// Proxy only performs an optimistic cookie presence check.
-// Secure session and role validation stay in the server-side auth DAL.
+// Better Auth recommends proxy for optimistic redirects only.
+// Authoritative session and role checks stay in server routes/layouts.
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
 
-  if (request.cookies.has(AUTH_COOKIE_NAME)) {
+  if (getSessionCookie(request)) {
     return NextResponse.next()
   }
 
@@ -21,5 +22,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/dashboard/:path*", "/playground/:path*"],
 }

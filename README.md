@@ -2,7 +2,7 @@
 
 This repository now matches the early monorepo shape from the architecture brief:
 
-- `apps/web`: Next.js 16 auth shell and review dashboard
+- `apps/web`: Next.js 16 app with Better Auth, Drizzle, and RTK Query
 - `services/api`: Rust/Axum API with SQLx migrations and account-aware auth
 - `infra/docker`: dev container images
 - `infra/nginx`: local reverse proxy for `http://localhost`
@@ -10,9 +10,10 @@ This repository now matches the early monorepo shape from the architecture brief
 
 ## Current scope
 
-- backend-first auth with seeded admin credentials
+- Better Auth + Drizzle-managed web authentication with seeded admin credentials
 - account, membership, module, module version, published release, and session tables
 - protected admin dashboard in the frontend
+- RTK Query-managed module data fetching through authenticated Next.js route handlers
 - Docker-first development with hot reload for the web app through bind mounts
 
 ## Local development
@@ -40,4 +41,4 @@ You can also use:
 - email: `admin@gmail.com`
 - password: `admin@#12`
 
-The API seeds this admin on startup if the user does not already exist.
+The API seeds the platform account, and the web app bootstraps the matching Better Auth admin on startup.

@@ -5,6 +5,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub auth: AuthConfig,
+    pub internal_web_api_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,10 @@ impl AppConfig {
                 bootstrap_admin_password: env_or("BOOTSTRAP_ADMIN_PASSWORD", "admin@#12"),
                 bootstrap_admin_name: env_or("BOOTSTRAP_ADMIN_NAME", "Platform Admin"),
             },
+            internal_web_api_key: env_or(
+                "INTERNAL_WEB_API_KEY",
+                "anatomy-internal-web-key-dev-only",
+            ),
         })
     }
 }

@@ -2,14 +2,13 @@
 
 import { useRouter } from "next/navigation"
 import { useTransition } from "react"
+import { toast } from "sonner"
 
-import { useAuthSession } from "@/components/auth/auth-session-provider"
-import { browserApiFetch } from "@/lib/api/browser"
 import { Button } from "@/components/ui/button"
+import { authClient } from "@/lib/auth-client"
 
 export function LogoutButton() {
   const router = useRouter()
-  const { replaceSession } = useAuthSession()
   const [isPending, startTransition] = useTransition()
 
   function handleClick() {
@@ -19,9 +18,15 @@ export function LogoutButton() {
   }
 
   async function signOut() {
-    await browserApiFetch("/auth/logout", { method: "POST" })
-    replaceSession(null)
+    const result = await authClient.signOut()
+
+    if (result.error) {
+      toast.error(result.error.message || "Unable to sign out")
+      return
+    }
+
     router.replace("/login")
+    router.refresh()
   }
 
   return (

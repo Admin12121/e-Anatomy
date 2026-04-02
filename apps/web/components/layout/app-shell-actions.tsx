@@ -4,10 +4,11 @@ import Link from "next/link"
 
 import { LogoutButton } from "@/components/auth/logout-button"
 import { Button } from "@/components/ui/button"
-import { useAuthSession } from "@/components/auth/auth-session-provider"
+import { authClient } from "@/lib/auth-client"
 
 export function AppShellActions() {
-  const { isPending, session } = useAuthSession()
+  const { data: session, isPending } = authClient.useSession()
+  const canAccessAdmin = session?.user.canAccessAdmin ?? false
 
   return (
     <div className="flex items-center gap-3">
@@ -17,9 +18,11 @@ export function AppShellActions() {
 
       {session ? (
         <>
-          <Button asChild variant="ghost">
-            <Link href="/admin/dashboard">Dashboard</Link>
-          </Button>
+          {canAccessAdmin ? (
+            <Button asChild variant="ghost">
+              <Link href="/dashboard">Dashboard</Link>
+            </Button>
+          ) : null}
           <LogoutButton />
         </>
       ) : isPending ? (

@@ -3,7 +3,6 @@
 import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
-import { RiGithubFill, RiGoogleFill, RiKey2Fill } from "@remixicon/react"
 import { Link } from "next-transition-router"
 import { toast } from "sonner"
 
@@ -14,11 +13,13 @@ import {
   FieldDescription,
   FieldGroup,
   FieldLabel,
-  FieldSeparator,
 } from "@/components/ui/field"
 import { Frame } from "@/components/ui/frame"
 import { Input } from "@/components/ui/input"
-import { DEFAULT_AUTHENTICATED_REDIRECT } from "@/lib/auth/access"
+import {
+  DEFAULT_AUTHENTICATED_REDIRECT,
+  resolveAuthenticatedRedirectPath,
+} from "@/lib/auth/access"
 import { authClient } from "@/lib/auth-client"
 import { cn } from "@/lib/utils"
 
@@ -46,33 +47,38 @@ export function LoginForm({
     setPending(true)
 
     try {
+      const result =
+        mode === "signin"
+          ? await authClient.signIn.email({
+              email,
+              password,
+            })
+          : await authClient.signUp.email({
+              email,
+              name,
+              password,
+            })
+
+      if (result.error) {
+        toast.error(
+          result.error.message ||
+            (mode === "signin" ? "Unable to sign in" : "Unable to create account"),
+        )
+        return
+      }
+
+      const destination = resolveAuthenticatedRedirectPath({
+        hasApiAccountId: Boolean(result.data?.user.apiAccountId),
+        nextPath: nextUrl,
+        roleCode: result.data?.user.role,
+      })
+
       if (mode === "signin") {
-        const result = await authClient.signIn.email({
-          email,
-          password,
-          callbackURL: nextUrl,
-        })
-        if (result.error) {
-          const message = result.error.message || "Unable to sign in"
-          toast.error(message)
-          return
-        }
         toast.success("Login successful")
       } else {
-        const result = await authClient.signUp.email({
-          name,
-          email,
-          password,
-          callbackURL: nextUrl,
-        })
-        if (result.error) {
-          const message = result.error.message || "Unable to create account"
-          toast.error(message)
-          return
-        }
         toast.success("Account created successfully")
       }
-      router.push(nextUrl)
+      router.push(destination)
       router.refresh()
     } catch (submitError) {
       const message =
@@ -85,56 +91,9 @@ export function LoginForm({
     }
   }
 
-  async function handleSocial(provider: "google" | "github") {
-    setPending(true)
-    try {
-      const result = await authClient.signIn.social({
-        provider,
-        callbackURL: nextUrl,
-      })
-      if (result?.error) {
-        const message = result.error.message || "Social sign-in failed"
-        toast.error(message)
-      }
-    } catch (socialError) {
-      const message =
-        socialError instanceof Error
-          ? socialError.message
-          : "Social sign-in failed"
-      toast.error(message)
-    } finally {
-      setPending(false)
-    }
-  }
-
-  async function handlePasskeySignIn() {
-    setPending(true)
-    try {
-      const result = await authClient.signIn.passkey({
-        autoFill: true,
-      })
-      if (result.error) {
-        const message = result.error.message || "Passkey sign-in failed"
-        toast.error(message)
-        return
-      }
-      toast.success("Login successful")
-      router.push(nextUrl)
-      router.refresh()
-    } catch (passkeyError) {
-      const message =
-        passkeyError instanceof Error
-          ? passkeyError.message
-          : "Passkey sign-in failed"
-      toast.error(message)
-    } finally {
-      setPending(false)
-    }
-  }
-
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Frame className="border-none bg-white py-5">
+      <Frame className="border-none bg-white dark:bg-[#18181b] py-5">
         <div className="mb-5 text-center">
           <Link
             href="/"
@@ -149,41 +108,6 @@ export function LoginForm({
         <CardContent>
           <form onSubmit={handleEmailAuth}>
             <FieldGroup>
-              <Field className="relative flex w-full flex-row items-center justify-center">
-                <Button
-                  size="icon-xl"
-                  type="button"
-                  onClick={() => handleSocial("google")}
-                  disabled={pending}
-                  className="!w-auto px-4"
-                >
-                  <RiGoogleFill />
-                  Google
-                </Button>
-                <Button
-                  size="icon-xl"
-                  type="button"
-                  onClick={() => handleSocial("github")}
-                  disabled={pending}
-                  className="!w-auto px-4"
-                >
-                  <RiGithubFill />
-                  GitHub
-                </Button>
-                <Button
-                  size="icon-xl"
-                  type="button"
-                  onClick={handlePasskeySignIn}
-                  disabled={pending}
-                  className="!w-auto px-4"
-                >
-                  <RiKey2Fill />
-                  Passkey
-                </Button>
-              </Field>
-              <FieldSeparator className="mt-1 *:data-[slot=field-separator-content]:bg-[#262629]">
-                Or continue with
-              </FieldSeparator>
               {mode === "signup" ? (
                 <Field>
                   <FieldLabel htmlFor="name">Name</FieldLabel>

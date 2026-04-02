@@ -1,1 +1,1 @@
-export { LoginForm } from "@/components/login-form"
+export { LoginForm } from "@/app/(app)/(auth)/login/_components/login-form"

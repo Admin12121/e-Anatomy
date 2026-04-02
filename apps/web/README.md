@@ -1,10 +1,10 @@
 # Web App
 
-Next.js 16 App Router shell for the anatomy platform.
+Next.js 16 App Router app for the anatomy platform.
 
 Current scope:
 
-- login and session bootstrap against the Rust API
+- Better Auth + Drizzle-managed login and session handling
 - protected admin dashboard for manual review
-- server-side auth DAL helpers and API client wrappers
+- RTK Query-managed module data via authenticated Next.js route handlers
 - Docker-first local development with hot reload

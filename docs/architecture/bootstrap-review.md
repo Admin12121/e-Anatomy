@@ -5,12 +5,12 @@
 - Rust/Axum API bootstrapped under `services/api`
 - SQLx migrations for the first identity, ownership, content, and session tables
 - Seeded default admin and owner account
-- Frontend auth shell and protected dashboard in `apps/web`
+- Better Auth + Drizzle frontend auth and protected dashboard in `apps/web`
+- RTK Query-backed frontend data access for module review flows
 - Docker Compose dev stack with Postgres, Redis, API, web, and Nginx
 
 ## Scope intentionally left for later
 
-- Better Auth integration
 - structure library, imaging, ingest worker, annotations, and publish workflow UI
 - viewer integration with Cornerstone3D
 - fine-grained authorization and audit logs

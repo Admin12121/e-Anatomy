@@ -4,10 +4,11 @@ import Link from "next/link"
 import { ArrowRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { useAuthSession } from "@/components/auth/auth-session-provider"
+import { authClient } from "@/lib/auth-client"
 
 export function HomeSessionActions() {
-  const { isPending, session } = useAuthSession()
+  const { data: session, isPending } = authClient.useSession()
+  const canAccessAdmin = session?.user.canAccessAdmin ?? false
 
   return (
     <div className="flex flex-wrap gap-3">
@@ -17,8 +18,12 @@ export function HomeSessionActions() {
         </Button>
       ) : (
         <Button asChild size="lg" className="h-11 rounded-full px-5 text-sm">
-          <Link href={session ? "/admin/dashboard" : "/login"}>
-            {session ? "Open Admin Dashboard" : "Sign In to Review"}
+          <Link href={canAccessAdmin ? "/dashboard" : session ? "/" : "/login"}>
+            {canAccessAdmin
+              ? "Open Admin Dashboard"
+              : session
+                ? "Open Overview"
+                : "Sign In to Review"}
             <ArrowRight className="size-4" />
           </Link>
         </Button>

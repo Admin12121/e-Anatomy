@@ -1,20 +1,24 @@
-export type SessionResponse = {
-  user: {
-    id: string
-    email: string
-    displayName: string
-    status: string
-  }
-  account: {
-    id: string
-    slug: string
-    name: string
-    accountType: string
-    roleCode: string
-  }
-  session: {
-    expiresAt: string
-  }
+export type SessionUser = {
+  id: string
+  name: string
+  email: string
+  image: string | null
+  roleCode: string
+  status: string
+  apiAccountId: string | null
+  apiAccountSlug: string | null
+  apiAccountName: string | null
+  apiAccountType: string | null
+  canAccessAdmin: boolean
+}
+
+export type DashboardViewer = {
+  accountName: string
+  displayName: string
+  email: string
+  expiresAt: string
+  roleCode: string
+  status: string
 }
 
 export type ModuleListItem = {

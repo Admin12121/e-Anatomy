@@ -1,56 +1,154 @@
 import "server-only"
 
 import { cache } from "react"
+import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
-import { serverApiFetch } from "@/lib/api/server"
-import { ApiClientError } from "@/lib/api/errors"
+import { auth } from "@/lib/auth"
 import {
   createLoginRedirectPath,
   DEFAULT_AUTHENTICATED_REDIRECT,
-  isPrivilegedRole,
+  hasAdminAccess,
+  resolveAuthenticatedRedirectPath,
 } from "@/lib/auth/access"
-import type { SessionResponse } from "@/lib/auth/types"
+import type { AuthSession } from "@/lib/auth"
+import type { DashboardViewer, SessionUser } from "@/lib/auth/types"
 
-export const getSession = cache(async (): Promise<SessionResponse | null> => {
-  try {
-    return await serverApiFetch<SessionResponse>("/auth/session", {
-      cache: "no-store",
-    })
-  } catch (error) {
-    if (error instanceof ApiClientError && error.status === 401) {
-      return null
-    }
+async function readSession(
+  requestHeaders: Headers,
+  { disableCookieCache = false }: { disableCookieCache?: boolean } = {},
+) {
+  return auth.api.getSession({
+    headers: requestHeaders,
+    query: disableCookieCache ? { disableCookieCache: true } : undefined,
+  })
+}
 
-    throw error
-  }
+export const getServerSession = cache(async () => {
+  return readSession(await headers())
 })
 
-export const requireAdminSession = cache(
-  async (nextPath = DEFAULT_AUTHENTICATED_REDIRECT) => {
-    const session = await getSession()
+export const getSession = getServerSession
+
+const getValidatedServerSession = cache(async () => {
+  return readSession(await headers(), { disableCookieCache: true })
+})
+
+async function getValidatedSessionFromHeaders(requestHeaders: Headers) {
+  return readSession(requestHeaders, { disableCookieCache: true })
+}
+
+export function normalizeSessionUser(user: AuthSession["user"]): SessionUser {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    image: user.image ?? null,
+    roleCode: user.role ?? "reviewer",
+    status: user.status ?? "active",
+    apiAccountId: user.apiAccountId ?? null,
+    apiAccountSlug: user.apiAccountSlug ?? null,
+    apiAccountName: user.apiAccountName ?? null,
+    apiAccountType: user.apiAccountType ?? null,
+    canAccessAdmin: hasAdminAccess({
+      apiAccountId: user.apiAccountId,
+      roleCode: user.role,
+    }),
+  }
+}
+
+function toDashboardViewer({
+  session,
+  user,
+}: {
+  session: AuthSession
+  user: SessionUser
+}): DashboardViewer {
+  return {
+    accountName: user.apiAccountName ?? "Platform Administration",
+    displayName: user.name,
+    email: user.email,
+    expiresAt:
+      session.session.expiresAt instanceof Date
+        ? session.session.expiresAt.toISOString()
+        : String(session.session.expiresAt),
+    roleCode: user.roleCode,
+    status: user.status,
+  }
+}
+
+export const requireSession = cache(
+  async (
+    allowedRoles?: readonly string[],
+    nextPath = DEFAULT_AUTHENTICATED_REDIRECT,
+  ) => {
+    const session = await getValidatedServerSession()
 
     if (!session) {
       redirect(createLoginRedirectPath(nextPath))
     }
 
-    if (!isPrivilegedRole(session.account.roleCode)) {
-      redirect("/")
+    const user = normalizeSessionUser(session.user)
+
+    if (allowedRoles && !allowedRoles.includes(user.roleCode)) {
+      redirect(
+        resolveAuthenticatedRedirectPath({
+          hasApiAccountId: user.canAccessAdmin,
+          roleCode: user.roleCode,
+        }),
+      )
     }
 
-    return session
+    return { session, user }
   },
 )
 
-export const getAdminViewer = cache(async () => {
-  const session = await requireAdminSession()
+export const requireAdminSession = cache(
+  async (nextPath = DEFAULT_AUTHENTICATED_REDIRECT) => {
+    const result = await requireSession(undefined, nextPath)
 
-  return {
-    accountName: session.account.name,
-    displayName: session.user.displayName,
-    email: session.user.email,
-    expiresAt: session.session.expiresAt,
-    roleCode: session.account.roleCode,
-    status: session.user.status,
+    if (!result.user.canAccessAdmin) {
+      redirect(
+        resolveAuthenticatedRedirectPath({
+          hasApiAccountId: Boolean(result.user.apiAccountId),
+          roleCode: result.user.roleCode,
+        }),
+      )
+    }
+
+    return result
+  },
+)
+
+export async function requireApiSession(
+  requestHeaders: Headers,
+  allowedRoles?: readonly string[],
+) {
+  const session = await getValidatedSessionFromHeaders(requestHeaders)
+
+  if (!session) {
+    return null
   }
+
+  const user = normalizeSessionUser(session.user)
+
+  if (allowedRoles && !allowedRoles.includes(user.roleCode)) {
+    return null
+  }
+
+  return { session, user }
+}
+
+export async function requireAdminApiSession(requestHeaders: Headers) {
+  const result = await requireApiSession(requestHeaders)
+
+  if (!result || !result.user.canAccessAdmin) {
+    return null
+  }
+
+  return result
+}
+
+export const getAdminViewer = cache(async (): Promise<DashboardViewer> => {
+  return toDashboardViewer(await requireAdminSession())
 })
