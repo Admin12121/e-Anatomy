@@ -819,8 +819,6 @@ function AnatomyAssembly({
     )
   })
 
-  // Keep the original organ-area hover as the highest-priority highlight source.
-  // Category hover is only a preview, and category click is a fallback focus state.
   const activeLayer = hoveredLayer ?? previewLayer ?? focusLayer
 
   return (

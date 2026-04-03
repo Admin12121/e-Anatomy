@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { requireAdminSession } from "@/lib/auth/session";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/dashboard/app-sidebar";
+import { SiteHeader } from "@/components/dashboard/site-header";
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -30,7 +31,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
         }}
       />
       <SidebarInset className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
-        {/* <SiteHeader /> */}
+        <SiteHeader />
         <div
           data-lenis-prevent
           className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-y-contain"

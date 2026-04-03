@@ -25,6 +25,10 @@ export function LogoutButton() {
       return
     }
 
+    await fetch("/api/auth/second-factor", {
+      method: "DELETE",
+    })
+
     router.replace("/login")
     router.refresh()
   }

@@ -1,11 +1,12 @@
 import { eq } from "drizzle-orm"
 
-import { auth } from "../lib/auth"
+import { createBootstrapAuth } from "../lib/auth/base-auth"
 import { user } from "../lib/db/auth-schema"
 import { db, sql } from "../lib/db/client"
 import { apiAccounts } from "../lib/db/legacy-schema"
 
 async function main() {
+  const auth = createBootstrapAuth()
   const email = (process.env.BOOTSTRAP_ADMIN_EMAIL ?? "admin@gmail.com")
     .trim()
     .toLowerCase()

@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation"
 
 import { LoginForm } from "./_components/login-form"
+import { getAuthFeatureFlags } from "@/lib/auth/config"
+import { getLoginMethodsForEmail } from "@/lib/auth/login-methods"
+import { hasVerifiedSecondFactor } from "@/lib/auth/second-factor"
 import {
   resolveAuthenticatedRedirectPath,
   sanitizeNextPath,
@@ -15,8 +18,30 @@ export default async function LoginPage({
   const params = await searchParams
   const nextPath = sanitizeNextPath(params.next)
   const session = await getSession()
+  const featureFlags = getAuthFeatureFlags()
 
   if (session) {
+    const secondFactorVerified = session.user.twoFactorEnabled
+      ? await hasVerifiedSecondFactor(session.session.id)
+      : true
+
+    if (!secondFactorVerified) {
+      return (
+        <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10">
+          <div className="flex w-full max-w-sm flex-col gap-2">
+            <LoginForm
+              nextPath={nextPath ?? undefined}
+              initialDiscovery={await getLoginMethodsForEmail(session.user.email)}
+              initialEmail={session.user.email}
+              initialStep="second-factor"
+              googleConfigured={featureFlags.googleEnabled}
+              resumeTwoFactorSession
+            />
+          </div>
+        </div>
+      )
+    }
+
     redirect(
       resolveAuthenticatedRedirectPath({
         hasApiAccountId: Boolean(session.user.apiAccountId),
@@ -29,7 +54,10 @@ export default async function LoginPage({
   return (
     <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-muted p-6 md:p-10">
       <div className="flex w-full max-w-sm flex-col gap-2">
-        <LoginForm nextPath={nextPath ?? undefined} />
+        <LoginForm
+          googleConfigured={featureFlags.googleEnabled}
+          nextPath={nextPath ?? undefined}
+        />
       </div>
     </div>
   )

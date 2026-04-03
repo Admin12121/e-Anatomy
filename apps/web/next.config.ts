@@ -4,6 +4,11 @@ const proxyTarget = process.env.NEXT_SERVER_API_PROXY_TARGET?.replace(/\/$/, "")
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  turbopack: {
+    resolveAlias: {
+      "@better-auth/passkey/client": "@better-auth/passkey/dist/client.mjs",
+    },
+  },
   async rewrites() {
     if (!proxyTarget) {
       return []

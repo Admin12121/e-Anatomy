@@ -1,76 +1,76 @@
-import { betterAuth, type BetterAuthOptions } from "better-auth"
-import { drizzleAdapter } from "better-auth/adapters/drizzle"
+import { passkey } from "@better-auth/passkey"
+import { betterAuth } from "better-auth"
 import { nextCookies } from "better-auth/next-js"
-import { customSession } from "better-auth/plugins"
+import {
+  customSession,
+  emailOTP,
+  twoFactor,
+} from "better-auth/plugins"
 
 import { hasAdminAccess } from "@/lib/auth/access"
-import { db } from "@/lib/db/client"
-import * as authSchema from "@/lib/db/auth-schema"
-
-const trustedOrigins = (process.env.BETTER_AUTH_TRUSTED_ORIGINS ?? "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean)
+import { baseAuthOptions } from "@/lib/auth/base-auth"
+import {
+  AUTH_APP_NAME,
+  AUTH_PASSKEY_ORIGINS,
+  AUTH_PASSKEY_RP_ID,
+} from "@/lib/auth/config"
+import { formatOtpEmail, sendAuthEmail } from "@/lib/auth/email"
 
 const authOptions = {
-  appName: "Anatomy Platform",
-  baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost",
-  secret:
-    process.env.BETTER_AUTH_SECRET ??
-    "anatomy_better_auth_dev_secret_that_is_long_enough",
-  database: drizzleAdapter(db, {
-    provider: "pg",
-    schema: authSchema,
-  }),
-  emailAndPassword: {
-    enabled: true,
-  },
-  session: {
-    cookieCache: {
-      enabled: true,
-      maxAge: 5 * 60,
-      strategy: "compact",
-    },
-  },
-  user: {
-    additionalFields: {
-      role: {
-        type: "string",
-        input: false,
-        required: false,
-        defaultValue: "reviewer",
+  ...baseAuthOptions,
+  plugins: [
+    nextCookies(),
+    emailOTP({
+      changeEmail: {
+        enabled: true,
       },
-      status: {
-        type: "string",
-        input: false,
-        required: false,
-        defaultValue: "active",
+      disableSignUp: true,
+      async sendVerificationOTP({ email, otp, type }) {
+        void formatOtpEmail({
+          email,
+          otp,
+          type,
+        })
+          .then((message) =>
+            sendAuthEmail({
+              ...message,
+              to: email,
+            }),
+          )
+          .catch((error) => {
+            console.error("Failed to send auth email OTP.", error)
+          })
       },
-      apiAccountId: {
-        type: "string",
-        input: false,
-        required: false,
+    }),
+    twoFactor({
+      issuer: AUTH_APP_NAME,
+      otpOptions: {
+        async sendOTP({ otp, user }) {
+          void formatOtpEmail({
+            email: user.email,
+            otp,
+            type: "two-factor",
+          })
+            .then((message) =>
+              sendAuthEmail({
+                ...message,
+                to: user.email,
+              }),
+            )
+            .catch((error) => {
+              console.error("Failed to send two-factor email OTP.", error)
+            })
+        },
       },
-      apiAccountSlug: {
-        type: "string",
-        input: false,
-        required: false,
-      },
-      apiAccountName: {
-        type: "string",
-        input: false,
-        required: false,
-      },
-      apiAccountType: {
-        type: "string",
-        input: false,
-        required: false,
-      },
-    },
-  },
-  trustedOrigins: trustedOrigins.length > 0 ? trustedOrigins : undefined,
-  plugins: [nextCookies()],
-} satisfies BetterAuthOptions
+      totpOptions: {},
+    }),
+    passkey({
+      origin: AUTH_PASSKEY_ORIGINS,
+      rpID: AUTH_PASSKEY_RP_ID,
+      rpName: AUTH_APP_NAME,
+    }),
+  ],
+}
 
 export const auth = betterAuth({
   ...authOptions,

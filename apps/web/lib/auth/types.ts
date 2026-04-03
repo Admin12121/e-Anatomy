@@ -10,6 +10,7 @@ export type SessionUser = {
   apiAccountName: string | null
   apiAccountType: string | null
   canAccessAdmin: boolean
+  twoFactorEnabled: boolean
 }
 
 export type DashboardViewer = {
@@ -34,4 +35,23 @@ export type ModuleListItem = {
 export type ModuleListResponse = {
   total: number
   items: ModuleListItem[]
+}
+
+export type LoginDiscoveryResult = {
+  canUseEmailOtp: boolean
+  canUseGoogle: boolean
+  email: string
+  exists: boolean
+  hasGoogleAccount: boolean
+  hasPassword: boolean
+  hasPasskey: boolean
+  mailDeliveryConfigured: boolean
+  name: string | null
+  passkeyEnabled: boolean
+  secondFactor: {
+    emailOtp: boolean
+    totp: boolean
+  }
+  status: string | null
+  twoFactorEnabled: boolean
 }

@@ -48,6 +48,7 @@ import {
   IconSettings,
 } from "@tabler/icons-react";
 import { NavSecondary } from "./nav-secondary";
+import Image from "next/image";
 
 type SidebarUser = {
   name: string;
@@ -130,8 +131,15 @@ export function AppSidebar({
               className="data-[slot=sidebar-menu-button]:!p-1.5"
             >
               <Link href={"#"}>
-                <IconInnerShadowTop className="!size-5" />
-                <span className="text-base font-semibold">Ancs Studio</span>
+                <div className="flex size-14 items-center justify-center rounded-md">
+                  <Image
+                    src="/logo.png"
+                    alt="Anatomy"
+                    height={35}
+                    width={35}
+                  />
+                </div>
+                <span className="text-base font-semibold">E-Anatomy</span>
               </Link>
             </SidebarMenuButton>
             <SidebarTrigger className="-ml-1 flex sm:hidden" />

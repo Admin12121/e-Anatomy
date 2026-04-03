@@ -11,6 +11,10 @@ import {
   hasAdminAccess,
   resolveAuthenticatedRedirectPath,
 } from "@/lib/auth/access"
+import {
+  hasVerifiedSecondFactor,
+  hasVerifiedSecondFactorFromCookieHeader,
+} from "@/lib/auth/second-factor"
 import type { AuthSession } from "@/lib/auth"
 import type { DashboardViewer, SessionUser } from "@/lib/auth/types"
 
@@ -54,6 +58,7 @@ export function normalizeSessionUser(user: AuthSession["user"]): SessionUser {
       apiAccountId: user.apiAccountId,
       roleCode: user.role,
     }),
+    twoFactorEnabled: Boolean(user.twoFactorEnabled),
   }
 }
 
@@ -89,6 +94,13 @@ export const requireSession = cache(
     }
 
     const user = normalizeSessionUser(session.user)
+
+    if (
+      user.twoFactorEnabled &&
+      !(await hasVerifiedSecondFactor(session.session.id))
+    ) {
+      redirect(createLoginRedirectPath(nextPath))
+    }
 
     if (allowedRoles && !allowedRoles.includes(user.roleCode)) {
       redirect(
@@ -131,6 +143,16 @@ export async function requireApiSession(
   }
 
   const user = normalizeSessionUser(session.user)
+
+  if (
+    user.twoFactorEnabled &&
+    !(await hasVerifiedSecondFactorFromCookieHeader(
+      session.session.id,
+      requestHeaders.get("cookie"),
+    ))
+  ) {
+    return null
+  }
 
   if (allowedRoles && !allowedRoles.includes(user.roleCode)) {
     return null
