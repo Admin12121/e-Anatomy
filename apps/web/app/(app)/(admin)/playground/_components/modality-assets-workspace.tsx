@@ -26,7 +26,6 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { NativeSelect } from "@/components/ui/native-select"
 import { Textarea } from "@/components/ui/textarea"
 import type {
   CreateZoneModalityAssetInput,
@@ -41,6 +40,7 @@ import {
   useGetZoneModalityAssetsQuery,
   useUpdateZoneModalityAssetMutation,
 } from "@/lib/store/services/playground-api"
+import { PlaygroundSelect } from "./playground-select"
 
 const ASSET_KIND_OPTIONS: Array<{ label: string; value: ModalityAssetKind }> = [
   { label: "Slice", value: "slice" },
@@ -49,7 +49,8 @@ const ASSET_KIND_OPTIONS: Array<{ label: string; value: ModalityAssetKind }> = [
   { label: "Reference", value: "reference" },
 ]
 
-const WEIGHTING_OPTIONS: Array<{ label: string; value: ModalityWeightingCode }> = [
+const WEIGHTING_OPTIONS: Array<{ label: string; value: ModalityWeightingCode | "" }> = [
+  { label: "None", value: "" },
   { label: "T1", value: "t1" },
   { label: "T1 Gado", value: "t1_gado" },
   { label: "T2", value: "t2" },
@@ -368,40 +369,22 @@ export function ModalityAssetsWorkspace({
           <div className="grid gap-3 md:grid-cols-2">
             <Field>
               <FieldLabel htmlFor={`asset-kind-${modality.id}`}>Asset kind</FieldLabel>
-              <NativeSelect
+              <PlaygroundSelect
                 id={`asset-kind-${modality.id}`}
+                options={ASSET_KIND_OPTIONS}
                 value={formState.assetKind}
-                onChange={(event) =>
-                  updateField("assetKind", event.target.value as ModalityAssetKind)
-                }
-              >
-                {ASSET_KIND_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </NativeSelect>
+                onValueChange={(value) => updateField("assetKind", value)}
+              />
             </Field>
 
             <Field>
               <FieldLabel htmlFor={`asset-weighting-${modality.id}`}>Weighting</FieldLabel>
-              <NativeSelect
+              <PlaygroundSelect
                 id={`asset-weighting-${modality.id}`}
+                options={WEIGHTING_OPTIONS}
                 value={formState.weightingCode}
-                onChange={(event) =>
-                  updateField(
-                    "weightingCode",
-                    event.target.value as ModalityWeightingCode | "",
-                  )
-                }
-              >
-                <option value="">None</option>
-                {WEIGHTING_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </NativeSelect>
+                onValueChange={(value) => updateField("weightingCode", value)}
+              />
             </Field>
           </div>
 

@@ -28,8 +28,10 @@ export function ZoneCombobox({
   return (
     <Combobox
       items={items}
+      isItemEqualToValue={(item, value) => item.id === value.id}
       value={selectedZone}
-      itemToStringValue={(item) => item.name}
+      itemToStringLabel={(item) => item.name}
+      itemToStringValue={(item) => item.id}
       onValueChange={(value) => onSelect(value?.id ?? null)}
     >
       <ComboboxInput

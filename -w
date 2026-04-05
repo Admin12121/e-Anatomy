@@ -1,1 +1,20 @@
-{"redirect":false,"token":"mTFi0fv9GZ8MEi17gZJ0jF8EV38MGrf0","user":{"name":"Platform Admin","email":"admin@gmail.com","emailVerified":true,"image":null,"createdAt":"2026-04-04T03:26:50.478Z","updatedAt":"2026-04-04T03:43:26.480Z","twoFactorEnabled":false,"role":"owner","status":"active","apiAccountId":"ff3b71cd-4914-4b66-94b8-6abcfed4949d","apiAccountSlug":"platform-admin","apiAccountName":"Platform Administration","apiAccountType":"system","id":"BcyObiGMceJ7gmDl4JtTe7ASTq6q4JOI"}}
+{
+    "redirect": false,
+    "token": "mTFi0fv9GZ8MEi17gZJ0jF8EV38MGrf0",
+    "user": {
+        "name": "Platform Admin",
+        "email": "admin@gmail.com",
+        "emailVerified": true,
+        "image": null,
+        "createdAt": "2026-04-04T03:26:50.478Z",
+        "updatedAt": "2026-04-04T03:43:26.480Z",
+        "twoFactorEnabled": false,
+        "role": "owner",
+        "status": "active",
+        "apiAccountId": "ff3b71cd-4914-4b66-94b8-6abcfed4949d",
+        "apiAccountSlug": "platform-admin",
+        "apiAccountName": "Platform Administration",
+        "apiAccountType": "system",
+        "id": "BcyObiGMceJ7gmDl4JtTe7ASTq6q4JOI"
+    }
+}

@@ -93,6 +93,22 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    uploadZoneModality: builder.mutation<
+      ZoneModality,
+      {
+        zoneId: string
+        formData: FormData
+      }
+    >({
+      invalidatesTags: (_result, _error, { zoneId }) => [
+        { type: "ZoneModalities", id: `LIST:${zoneId}` },
+      ],
+      query: ({ zoneId, formData }) => ({
+        url: `/playground/zones/${zoneId}/modalities/intake`,
+        method: "POST",
+        body: formData,
+      }),
+    }),
     updateZoneModality: builder.mutation<
       ZoneModality,
       {
@@ -178,6 +194,7 @@ export const {
   useGetZoneModalityAssetsQuery,
   useGetZoneModalitiesQuery,
   useGetZonesQuery,
+  useUploadZoneModalityMutation,
   useUpdateZoneMutation,
   useUpdateZoneModalityAssetMutation,
   useUpdateZoneModalityMutation,

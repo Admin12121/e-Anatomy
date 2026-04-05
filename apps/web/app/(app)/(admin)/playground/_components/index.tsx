@@ -6,25 +6,15 @@ import {
   CrosshairIcon,
   LoaderCircleIcon,
   MapPinnedIcon,
-  PlusIcon,
   SaveIcon,
   Sparkle,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Field,
-  FieldDescription,
   FieldGroup,
   FieldLabel,
   FieldSeparator,
@@ -49,7 +39,6 @@ import { ZoneModalitiesManager } from "./zone-modalities-manager";
 import { ZoneCombobox } from "./zone-combobox";
 import {
   Frame,
-  FrameDescription,
   FrameHeader,
   FramePanel,
   FrameTitle,
@@ -195,7 +184,7 @@ export function AnatomyPlayground() {
   }
 
   return (
-    <div className="grid h-[calc(100vh-65px)] min-h-0 gap-2 xl:grid-cols-[minmax(0,1fr)_30rem]">
+    <div className="grid h-full min-h-0 overflow-hidden gap-2 xl:grid-cols-[minmax(0,1fr)_30rem]">
       <div
         className={cn(
           "relative min-h-0 overflow-hidden rounded-xl",
@@ -216,9 +205,9 @@ export function AnatomyPlayground() {
         />
       </div>
 
-      <aside className="flex min-h-0 flex-col gap-3">
-        <Frame>
-          <FrameHeader>
+      <aside className="xl:sticky xl:top-0 flex h-full min-h-0 flex-col gap-3 self-start overflow-y-auto overscroll-contain pr-1">
+        <Frame className="shrink-0">
+          <FrameHeader className="p-2">
             <FrameTitle>Zone Library</FrameTitle>
           </FrameHeader>
           <FramePanel className="space-y-4 pt-4">
@@ -233,7 +222,7 @@ export function AnatomyPlayground() {
                 />
               </Field>
             </FieldGroup>
-            <FieldSeparator className="*:data-[slot=field-separator-content]:bg-[#262629] mt-1">
+            <FieldSeparator className="dark:data-[slot=field-separator-content]:bg-[#262629] mt-1">
               Or
             </FieldSeparator>
             <FieldGroup className="mt-5">
@@ -253,13 +242,13 @@ export function AnatomyPlayground() {
           </FramePanel>
         </Frame>
 
-        <Frame className="h-full">
-          <FrameHeader>
+        <Frame className="shrink-0">
+          <FrameHeader className="p-2">
             <FrameTitle>
               {mode === "create" ? "Create Zone" : "Zone Details"}
             </FrameTitle>
           </FrameHeader>
-          <FramePanel className="h-full">
+          <FramePanel>
             {mode === "create" ? (
               <FieldGroup className="gap-5">
                 <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-4">
@@ -364,33 +353,6 @@ export function AnatomyPlayground() {
 
 export default AnatomyPlayground;
 
-function CoordinateBadge({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-lg border border-border/80 bg-muted/20 px-3 py-2">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-1 truncate text-sm font-medium text-foreground">
-        {value.toFixed(2)}
-      </div>
-    </div>
-  );
-}
-
-function formatShortDate(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
-}
-
 function ZoneDetailEditor({
   pending,
   zone,
@@ -423,20 +385,6 @@ function ZoneDetailEditor({
 
   return (
     <FieldGroup className="gap-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">{zone.slug}</Badge>
-        <Badge variant="secondary">{zone.bodyView}</Badge>
-        <Badge variant="outline">
-          Updated {formatShortDate(zone.updatedAt)}
-        </Badge>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        <CoordinateBadge label="X" value={zone.anchor.x} />
-        <CoordinateBadge label="Y" value={zone.anchor.y} />
-        <CoordinateBadge label="Z" value={zone.anchor.z} />
-      </div>
-
       <Field>
         <FieldLabel htmlFor="zone-name">Zone name</FieldLabel>
         <Input
@@ -455,11 +403,6 @@ function ZoneDetailEditor({
           placeholder="Add guidance for this zone."
         />
       </Field>
-
-      <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
-        Modalities and viewer assets now attach to this zone. Imaging canvas and
-        labeling come next.
-      </div>
 
       <Button
         type="button"

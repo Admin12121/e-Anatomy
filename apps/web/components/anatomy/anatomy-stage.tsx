@@ -1491,7 +1491,7 @@ function ZoneMarker({
       </mesh>
       {selected ? (
         <Html distanceFactor={14} position={[26000, 6000, 0]}>
-          <div className="rounded-sm border border-white/15 bg-black/70 px-2 py-1 text-xs font-medium text-white shadow-lg backdrop-blur">
+          <div className="rounded-sm border border-white/15 bg-black/70 px-2 py-1 text-sm font-medium text-white shadow-lg backdrop-blur">
             {label}
           </div>
         </Html>
