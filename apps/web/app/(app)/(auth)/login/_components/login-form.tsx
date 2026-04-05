@@ -9,7 +9,6 @@ import {
   ArrowLeft,
   BadgeCheck,
   Fingerprint,
-  KeyRound,
   LoaderCircle,
   Mail,
   ShieldCheck,

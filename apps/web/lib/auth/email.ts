@@ -1,6 +1,6 @@
 import "server-only"
 
-import { render, toPlainText } from "@react-email/render"
+import { convert } from "html-to-text"
 import nodemailer from "nodemailer"
 import { createElement } from "react"
 
@@ -92,7 +92,7 @@ export async function sendAuthEmail(payload: AuthEmailPayload) {
   })
 }
 
-export function formatOtpEmail({
+export async function formatOtpEmail({
   email,
   otp,
   type,
@@ -129,10 +129,40 @@ export function formatOtpEmail({
     logoUrl: `${AUTH_BASE_URL}/logo.png`,
     otp,
   })
+  const html = await renderEmailTemplate(template)
 
-  return render(template).then(async (html) => ({
+  return {
     html,
     subject,
-    text: toPlainText(html),
-  }))
+    text: convert(html, {
+      selectors: [
+        {
+          format: "skip",
+          selector: "img",
+        },
+        {
+          format: "skip",
+          selector: "[data-skip-in-text=true]",
+        },
+        {
+          options: {
+            hideLinkHrefIfSameAsText: true,
+            linkBrackets: false,
+          },
+          selector: "a",
+        },
+      ],
+      wordwrap: false,
+    }),
+  }
+}
+
+async function renderEmailTemplate(template: ReturnType<typeof createElement>) {
+  const { renderToStaticMarkup } = await import("react-dom/server")
+  const markup = renderToStaticMarkup(template)
+
+  return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">${markup.replace(
+    /<!DOCTYPE.*?>/,
+    "",
+  )}`
 }

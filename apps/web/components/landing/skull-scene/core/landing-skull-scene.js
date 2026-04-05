@@ -9,7 +9,7 @@ import { WebGPUContext } from "./webgpu-context.js"
 export class LandingSkullScene {
   constructor(container) {
     this.container = container
-    this.clock = new THREE.Clock()
+    this.clock = new THREE.Timer()
     this.frameId = null
     this.resizeObserver = null
 
@@ -20,6 +20,8 @@ export class LandingSkullScene {
   async run() {
     this.context = new WebGPUContext(this.container)
     await this.context.init()
+    this.clock.connect(document)
+    this.clock.reset()
 
     const { height, width } = this.context.getDimensions()
     const pixelWidth = width * this.context.pixelRatio
@@ -59,10 +61,11 @@ export class LandingSkullScene {
     this.fluidSim.onResize(width * this.context.pixelRatio, height * this.context.pixelRatio)
   }
 
-  animate() {
+  animate(timestamp) {
+    this.clock.update(timestamp)
     const delta = this.clock.getDelta()
 
-    this.scene.animate(delta, this.clock.elapsedTime)
+    this.scene.animate(delta, this.clock.getElapsed())
     this.mouseTrail.update(this.scene.cameraRig.mouseNormalized.x, this.scene.cameraRig.mouseNormalized.y)
     this.fluidSim.update(this.context.renderer, this.mouseTrail.texture)
     this.postProcessing.render()
@@ -76,6 +79,7 @@ export class LandingSkullScene {
     }
 
     this.resizeObserver?.disconnect()
+    this.clock?.dispose?.()
     this.postProcessing?.dispose()
     this.fluidSim?.dispose()
     this.mouseTrail?.dispose()

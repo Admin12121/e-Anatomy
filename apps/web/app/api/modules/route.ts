@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { ApiClientError } from "@/lib/api/errors"
+import { buildInternalAdminHeaders } from "@/lib/api/admin"
 import { serverApiFetch } from "@/lib/api/server"
 import { requireApiSession } from "@/lib/auth/session"
 import type { ModuleListResponse } from "@/lib/auth/types"
@@ -36,20 +37,11 @@ export async function GET(request: Request) {
     return jsonError(403, "forbidden", "Your account does not have admin dashboard access.")
   }
 
-  const internalApiKey = process.env.INTERNAL_WEB_API_KEY
-
-  if (!internalApiKey) {
-    return jsonError(500, "internal_error", "INTERNAL_WEB_API_KEY is not configured.")
-  }
-
   try {
     const modules = await serverApiFetch<ModuleListResponse>("/modules", {
       cache: "no-store",
       includeCookie: false,
-      headers: {
-        "x-account-id": accountId,
-        "x-internal-api-key": internalApiKey,
-      },
+      headers: buildInternalAdminHeaders(result.user),
     })
 
     return NextResponse.json(modules)

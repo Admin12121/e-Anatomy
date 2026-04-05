@@ -2,70 +2,33 @@
 
 import * as React from "react";
 import {
-  CalendarIcon,
-  CalendarDaysIcon,
-  ChartColumnIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  Clock3Icon,
-  CircleDotIcon,
   FolderIcon,
   LayoutDashboardIcon,
-  ListChecksIcon,
-  MessageSquareIcon,
-  Settings2Icon,
-  UsersIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { NavUser } from "./nav-user";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import {
-  IconHelp,
-  IconInnerShadowTop,
-  IconSearch,
-  IconSettings,
-} from "@tabler/icons-react";
+import { IconHelp, IconSearch, IconSettings } from "@tabler/icons-react";
 import { NavSecondary } from "./nav-secondary";
 import Image from "next/image";
 
 type SidebarUser = {
   name: string;
   email: string;
-  avatar: string;
-};
-
-type SidebarTask = {
-  id: string;
-  projectId: string;
-  title: string;
-};
-
-type SidebarProject = {
-  id: string;
-  name: string;
-  canOpenChat: boolean;
+  avatar: string | null;
 };
 
 function normalizePathname(pathname: string | null) {

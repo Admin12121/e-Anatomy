@@ -27,7 +27,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
         user={{
           name: user.name,
           email: user.email,
-          avatar: user.image ?? "/images/ns-avatar-1.png",
+          avatar: user.image,
         }}
       />
       <SidebarInset className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
