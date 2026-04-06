@@ -24,6 +24,17 @@ const ENDOSCOPY_HINTS = ["endo", "endoscopy", "fibroscopy"]
 
 const DICOM_EXTENSIONS = [".dcm", ".dicom", ".ima"] as const
 
+export const MAX_DICOM_FILES = 512
+export const MAX_SINGLE_FILE_BYTES = 64 * 1024 * 1024
+export const MAX_TOTAL_UPLOAD_BYTES = 512 * 1024 * 1024
+
+export class ModalityUploadValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "ModalityUploadValidationError"
+  }
+}
+
 export function createClientModalityUploadPreview(
   files: NamedUpload[],
 ): DetectedModalityUpload | null {
@@ -59,6 +70,64 @@ export function createClientModalityUploadPreview(
   }
 
   return null
+}
+
+export async function analyzeModalityUploadFiles(
+  files: File[],
+): Promise<DetectedModalityUpload> {
+  if (files.length === 0) {
+    throw new ModalityUploadValidationError(
+      "Upload one ZIP package or one or more DICOM files.",
+    )
+  }
+
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
+
+  if (totalBytes > MAX_TOTAL_UPLOAD_BYTES) {
+    throw new ModalityUploadValidationError(
+      "Upload is too large for modality intake.",
+    )
+  }
+
+  if (files.some((file) => file.size <= 0)) {
+    throw new ModalityUploadValidationError("Empty files are not allowed.")
+  }
+
+  const sanitizedNames = files.map((file) => sanitizeUploadName(file.name))
+
+  if (files.length === 1 && isZipFilename(sanitizedNames[0] ?? "")) {
+    return inspectZipUpload(files[0], sanitizedNames[0] ?? "")
+  }
+
+  if (files.some((file) => isZipFilename(file.name))) {
+    throw new ModalityUploadValidationError(
+      "ZIP packages must be uploaded by themselves.",
+    )
+  }
+
+  if (files.some((file) => file.size > MAX_SINGLE_FILE_BYTES)) {
+    throw new ModalityUploadValidationError(
+      "One of the selected files is too large.",
+    )
+  }
+
+  if (files.length > MAX_DICOM_FILES) {
+    throw new ModalityUploadValidationError(
+      "Too many DICOM files were selected.",
+    )
+  }
+
+  await validateDicomFiles(files)
+
+  return buildModalityUploadSummary({
+    names: sanitizedNames,
+    sourceFileCount: files.length,
+    sourceKind: "dicom_files",
+    sourceLabel:
+      files.length === 1
+        ? sanitizedNames[0] ?? "1 DICOM file"
+        : `${files.length} DICOM files selected`,
+  })
 }
 
 export function buildModalityUploadSummary({
@@ -112,6 +181,33 @@ export function isLikelyDicomFilename(name: string) {
   return extension === ""
 }
 
+async function inspectZipUpload(file: File, fileName: string) {
+  const normalizedName = sanitizeUploadName(fileName)
+
+  if (!normalizedName || !isZipFilename(normalizedName)) {
+    throw new ModalityUploadValidationError("Upload a valid ZIP package.")
+  }
+
+  const buffer = new Uint8Array(await file.arrayBuffer())
+
+  if (!hasZipSignature(buffer)) {
+    throw new ModalityUploadValidationError("ZIP package signature is invalid.")
+  }
+
+  const entries = listZipEntries(buffer)
+
+  if (entries.length === 0) {
+    throw new ModalityUploadValidationError("ZIP package is empty.")
+  }
+
+  return buildModalityUploadSummary({
+    names: [normalizedName, ...entries],
+    sourceFileCount: entries.length,
+    sourceKind: "zip",
+    sourceLabel: normalizedName,
+  })
+}
+
 function inferModalityTypeFromNames(names: string[]): ModalityType {
   const haystack = names.join(" ").toLowerCase()
 
@@ -163,3 +259,155 @@ function includesAny(haystack: string, needles: readonly string[]) {
   return needles.some((needle) => haystack.includes(needle))
 }
 
+async function validateDicomFiles(files: File[]) {
+  await Promise.all(
+    files.map(async (file) => {
+      const normalizedName = sanitizeUploadName(file.name)
+
+      if (!normalizedName) {
+        throw new ModalityUploadValidationError(
+          "One of the selected files has an invalid name.",
+        )
+      }
+
+      const header = new Uint8Array(await file.slice(0, 264).arrayBuffer())
+
+      if (!isLikelyDicomFile(normalizedName, header)) {
+        throw new ModalityUploadValidationError(
+          "Only DICOM files or one ZIP package are allowed in modality intake.",
+        )
+      }
+    }),
+  )
+}
+
+function isLikelyDicomFile(name: string, header: Uint8Array) {
+  if (hasDicomSignature(header)) {
+    return true
+  }
+
+  return isLikelyDicomFilename(name)
+}
+
+function hasDicomSignature(buffer: Uint8Array) {
+  if (buffer.length < 132) {
+    return false
+  }
+
+  return (
+    buffer[128] === 0x44 &&
+    buffer[129] === 0x49 &&
+    buffer[130] === 0x43 &&
+    buffer[131] === 0x4d
+  )
+}
+
+function hasZipSignature(buffer: Uint8Array) {
+  if (buffer.length < 4) {
+    return false
+  }
+
+  const signature = readUint32LE(buffer, 0)
+  return (
+    signature === 0x04034b50 ||
+    signature === 0x06054b50 ||
+    signature === 0x08074b50
+  )
+}
+
+function listZipEntries(buffer: Uint8Array) {
+  const eocdOffset = findEndOfCentralDirectoryOffset(buffer)
+
+  if (eocdOffset < 0) {
+    throw new ModalityUploadValidationError("ZIP package directory is invalid.")
+  }
+
+  const totalEntries = readUint16LE(buffer, eocdOffset + 10)
+  const centralDirectorySize = readUint32LE(buffer, eocdOffset + 12)
+  const centralDirectoryOffset = readUint32LE(buffer, eocdOffset + 16)
+
+  if (
+    centralDirectoryOffset + centralDirectorySize > buffer.length ||
+    totalEntries <= 0
+  ) {
+    throw new ModalityUploadValidationError("ZIP package directory is invalid.")
+  }
+
+  const decoder = new TextDecoder()
+  const entries: string[] = []
+  let cursor = centralDirectoryOffset
+
+  for (let index = 0; index < totalEntries; index += 1) {
+    if (cursor + 46 > buffer.length || readUint32LE(buffer, cursor) !== 0x02014b50) {
+      throw new ModalityUploadValidationError(
+        "ZIP package directory entry is invalid.",
+      )
+    }
+
+    const fileNameLength = readUint16LE(buffer, cursor + 28)
+    const extraLength = readUint16LE(buffer, cursor + 30)
+    const commentLength = readUint16LE(buffer, cursor + 32)
+    const fileNameStart = cursor + 46
+    const fileNameEnd = fileNameStart + fileNameLength
+
+    if (fileNameEnd > buffer.length) {
+      throw new ModalityUploadValidationError(
+        "ZIP package entry name is invalid.",
+      )
+    }
+
+    const rawName = decoder.decode(buffer.slice(fileNameStart, fileNameEnd))
+    const normalizedName = sanitizeZipEntryName(rawName)
+
+    if (!normalizedName.endsWith("/")) {
+      entries.push(normalizedName)
+    }
+
+    cursor = fileNameEnd + extraLength + commentLength
+  }
+
+  return entries
+}
+
+function sanitizeZipEntryName(name: string) {
+  const normalized = name.replace(/\\/g, "/").trim()
+
+  if (
+    !normalized ||
+    normalized.startsWith("/") ||
+    normalized.includes("../") ||
+    normalized.includes("..\\") ||
+    normalized.includes(":")
+  ) {
+    throw new ModalityUploadValidationError(
+      "ZIP package contains an unsafe file path.",
+    )
+  }
+
+  return normalized
+}
+
+function findEndOfCentralDirectoryOffset(buffer: Uint8Array) {
+  const minOffset = Math.max(0, buffer.length - 65_557)
+
+  for (let offset = buffer.length - 22; offset >= minOffset; offset -= 1) {
+    if (readUint32LE(buffer, offset) === 0x06054b50) {
+      return offset
+    }
+  }
+
+  return -1
+}
+
+function readUint16LE(buffer: Uint8Array, offset: number) {
+  return buffer[offset] | (buffer[offset + 1] << 8)
+}
+
+function readUint32LE(buffer: Uint8Array, offset: number) {
+  return (
+    buffer[offset] |
+    (buffer[offset + 1] << 8) |
+    (buffer[offset + 2] << 16) |
+    (buffer[offset + 3] << 24)
+  ) >>> 0
+}

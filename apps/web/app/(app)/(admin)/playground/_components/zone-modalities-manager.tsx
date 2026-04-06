@@ -1,13 +1,12 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
-  DatabaseZapIcon,
   FileArchiveIcon,
   FileImageIcon,
+  FolderOpenIcon,
   LoaderCircleIcon,
   SaveIcon,
-  ShieldCheckIcon,
   UploadIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -17,36 +16,36 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import {
   Field,
-  FieldDescription,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  createClientModalityUploadPreview,
+  analyzeModalityUploadFiles,
   formatSourceKindLabel,
   type DetectedModalityUpload,
+  ModalityUploadValidationError,
 } from "@/lib/playground/modality-upload-shared"
 import type {
+  CreateZoneModalityInput,
   ModalityType,
   UpdateZoneModalityInput,
   ZoneDetail,
   ZoneModality,
 } from "@/lib/playground/types"
 import {
+  useCreateZoneModalityMutation,
   useGetZoneModalitiesQuery,
   useUpdateZoneModalityMutation,
-  useUploadZoneModalityMutation,
 } from "@/lib/store/services/playground-api"
-import { PlaygroundSelect } from "./playground-select"
 import { ModalityAssetsWorkspace } from "./modality-assets-workspace"
+import { PlaygroundSelect } from "./playground-select"
 
 const EMPTY_MODALITIES: ZoneModality[] = []
 
@@ -64,6 +63,10 @@ const MODALITY_TYPE_OPTIONS: Array<{ label: string; value: ModalityType }> = [
 ]
 
 type EditorMode = "create" | "edit"
+
+type FileWithRelativePath = File & {
+  webkitRelativePath?: string
+}
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -113,6 +116,22 @@ function formatModalitySourceKindLabel(kind: ZoneModality["sourceKind"]) {
   return formatSourceKindLabel(kind)
 }
 
+function getSelectedSourceLabel(files: File[]) {
+  const firstRelativePath = files
+    .map((file) => (file as FileWithRelativePath).webkitRelativePath?.trim())
+    .find((value): value is string => Boolean(value))
+
+  if (firstRelativePath) {
+    const folderName = firstRelativePath.split("/")[0]?.trim()
+
+    if (folderName) {
+      return folderName
+    }
+  }
+
+  return files[0]?.name?.trim() || null
+}
+
 export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   const { data, isFetching } = useGetZoneModalitiesQuery(zone.id)
   const modalities = data?.items ?? EMPTY_MODALITIES
@@ -120,56 +139,54 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   const [activeModalityId, setActiveModalityId] = useState<string | null>(null)
   const [createName, setCreateName] = useState("")
   const [createNotes, setCreateNotes] = useState("")
-  const [createFiles, setCreateFiles] = useState<File[]>([])
   const [createDetectedUpload, setCreateDetectedUpload] =
     useState<DetectedModalityUpload | null>(null)
   const [createModalityTypeOverride, setCreateModalityTypeOverride] =
     useState<ModalityType>("other")
-  const [uploadInputKey, setUploadInputKey] = useState(0)
-  const [uploadModality, { isLoading: isUploading }] =
-    useUploadZoneModalityMutation()
+  const [selectedSourceLabel, setSelectedSourceLabel] = useState<string | null>(null)
+  const [isAnalyzingSource, setIsAnalyzingSource] = useState(false)
+  const [createModality, { isLoading: isCreatingModality }] =
+    useCreateZoneModalityMutation()
   const [updateModality, { isLoading: isUpdating }] =
     useUpdateZoneModalityMutation()
+  const dicomFolderInputRef = useRef<HTMLInputElement | null>(null)
+  const zipPackageInputRef = useRef<HTMLInputElement | null>(null)
   const resolvedActiveModalityId =
     activeModalityId && modalities.some((modality) => modality.id === activeModalityId)
       ? activeModalityId
       : modalities[0]?.id ?? null
   const activeModality =
     modalities.find((modality) => modality.id === resolvedActiveModalityId) ?? null
-  const isPending = isUploading || isUpdating
+  const isPending = isAnalyzingSource || isCreatingModality || isUpdating
 
-  const detectedSummary = useMemo(() => {
-    if (!createDetectedUpload) {
-      return null
+  useEffect(() => {
+    const input = dicomFolderInputRef.current as
+      | (HTMLInputElement & { webkitdirectory?: boolean })
+      | null
+
+    if (!input) {
+      return
     }
 
-    return [
-      {
-        label: "Detected type",
-        value: formatModalityTypeLabel(createDetectedUpload.detectedModalityType),
-      },
-      {
-        label: "Source",
-        value: formatSourceKindLabel(createDetectedUpload.sourceKind),
-      },
-      {
-        label: "Files",
-        value: String(createDetectedUpload.sourceFileCount),
-      },
-      {
-        label: "Suggested name",
-        value: createDetectedUpload.suggestedName,
-      },
-    ]
-  }, [createDetectedUpload])
+    input.setAttribute("webkitdirectory", "")
+    input.setAttribute("directory", "")
+    input.webkitdirectory = true
+  }, [])
 
   function resetCreateState() {
     setCreateName("")
     setCreateNotes("")
-    setCreateFiles([])
     setCreateDetectedUpload(null)
     setCreateModalityTypeOverride("other")
-    setUploadInputKey((current) => current + 1)
+    setSelectedSourceLabel(null)
+
+    if (dicomFolderInputRef.current) {
+      dicomFolderInputRef.current.value = ""
+    }
+
+    if (zipPackageInputRef.current) {
+      zipPackageInputRef.current.value = ""
+    }
   }
 
   function startCreateMode() {
@@ -182,53 +199,65 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
     setEditorMode("edit")
   }
 
-  function handleUploadSelection(nextFiles: FileList | null) {
+  async function handleSourceSelection(nextFiles: FileList | null) {
     const files = Array.from(nextFiles ?? [])
-    setCreateFiles(files)
+    const sourceLabel = getSelectedSourceLabel(files)
+    setSelectedSourceLabel(sourceLabel)
 
-    const preview = createClientModalityUploadPreview(files)
-    setCreateDetectedUpload(preview)
-    setCreateModalityTypeOverride(preview?.detectedModalityType ?? "other")
+    if (files.length === 0) {
+      setCreateDetectedUpload(null)
+      setCreateModalityTypeOverride("other")
+      return
+    }
 
-    if (files.length > 0 && !preview) {
-      toast.error("Upload one ZIP package or one or more DICOM files.")
+    setIsAnalyzingSource(true)
+
+    try {
+      const detectedUpload = await analyzeModalityUploadFiles(files)
+      setCreateDetectedUpload(detectedUpload)
+      setCreateModalityTypeOverride(detectedUpload.detectedModalityType)
+    } catch (error) {
+      setCreateDetectedUpload(null)
+      setCreateModalityTypeOverride("other")
+      toast.error(
+        error instanceof ModalityUploadValidationError
+          ? error.message
+          : "Select one ZIP package or a folder of DICOM files.",
+      )
+    } finally {
+      setIsAnalyzingSource(false)
     }
   }
 
   async function handleCreateModality() {
-    if (createFiles.length === 0) {
-      toast.error("Upload one ZIP package or one or more DICOM files first.")
+    if (!createDetectedUpload) {
+      toast.error("Choose a DICOM folder or one ZIP package first.")
       return
     }
 
-    const formData = new FormData()
-
-    for (const file of createFiles) {
-      formData.append("files", file)
+    const input: CreateZoneModalityInput = {
+      name: createName.trim() || createDetectedUpload.suggestedName,
+      modalityType: createModalityTypeOverride,
+      coverImageUrl: null,
+      notes: createNotes.trim() || null,
+      processingStatus: "uploaded",
+      sourceFileCount: createDetectedUpload.sourceFileCount,
+      sourceKind: createDetectedUpload.sourceKind,
+      sourceLabel: selectedSourceLabel?.trim() || createDetectedUpload.sourceLabel,
     }
-
-    if (createName.trim()) {
-      formData.append("name", createName.trim())
-    }
-
-    if (createNotes.trim()) {
-      formData.append("notes", createNotes.trim())
-    }
-
-    formData.append("modalityTypeOverride", createModalityTypeOverride)
 
     try {
-      const createdModality = await uploadModality({
+      const createdModality = await createModality({
         zoneId: zone.id,
-        formData,
+        input,
       }).unwrap()
 
-      toast.success("Modality created from upload.")
+      toast.success("Modality draft created from the source study.")
       setActiveModalityId(createdModality.id)
       setEditorMode("edit")
       resetCreateState()
     } catch (error) {
-      toast.error(getErrorMessage(error, "Unable to create the modality."))
+      toast.error(getErrorMessage(error, "Unable to create the modality draft."))
     }
   }
 
@@ -256,14 +285,15 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <CardTitle className="text-base">Modalities</CardTitle>
-              <CardDescription>
-                Upload one ZIP package or one or more DICOM files. The server
-                verifies the upload and detects the modality metadata.
-              </CardDescription>
             </div>
-            <Button type="button" size="sm" variant="secondary" onClick={startCreateMode}>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={startCreateMode}
+            >
               <UploadIcon />
-              New upload
+              Attach source
             </Button>
           </div>
         </CardHeader>
@@ -322,8 +352,8 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-5 text-sm text-muted-foreground">
-              No modalities attached to this zone yet. Start with one secure
-              upload below.
+              No modalities are attached to this zone yet. Start by attaching a
+              source study below.
             </div>
           )}
         </CardContent>
@@ -332,22 +362,51 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
       {editorMode === "create" ? (
         <Card className="border border-border/70 bg-muted/10 shadow-none">
           <CardHeader className="border-b border-border/70">
-            <CardTitle className="text-base">Create Modality</CardTitle>
+            <CardTitle className="text-base">Attach Source Study</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5 pt-5">
+            <input
+              ref={dicomFolderInputRef}
+              type="file"
+              multiple
+              className="sr-only"
+              onChange={(event) => {
+                void handleSourceSelection(event.target.files)
+              }}
+            />
+            <input
+              ref={zipPackageInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              className="sr-only"
+              onChange={(event) => {
+                void handleSourceSelection(event.target.files)
+              }}
+            />
+
             <FieldGroup className="gap-4">
               <Field>
-                <FieldLabel htmlFor={`modality-upload-${zone.id}`}>
-                  Upload package or DICOM files
-                </FieldLabel>
-                <Input
-                  key={uploadInputKey}
-                  id={`modality-upload-${zone.id}`}
-                  type="file"
-                  multiple
-                  accept=".zip,.dcm,.dicom,.ima,application/zip,application/dicom"
-                  onChange={(event) => handleUploadSelection(event.target.files)}
-                />
+                <FieldLabel>Choose source study</FieldLabel>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="justify-start"
+                    onClick={() => dicomFolderInputRef.current?.click()}
+                  >
+                    <FolderOpenIcon />
+                    Choose DICOM folder
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="justify-start"
+                    onClick={() => zipPackageInputRef.current?.click()}
+                  >
+                    <FileArchiveIcon />
+                    Choose ZIP package
+                  </Button>
+                </div>
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
@@ -361,7 +420,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                     onChange={(event) => setCreateName(event.target.value)}
                     placeholder={
                       createDetectedUpload?.suggestedName ??
-                      "Leave blank to use the detected name"
+                      "Leave blank to use the detected draft name"
                     }
                   />
                 </Field>
@@ -395,7 +454,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                disabled={createFiles.length === 0 || isPending}
+                disabled={!createDetectedUpload || isPending}
                 onClick={handleCreateModality}
               >
                 {isPending ? (
@@ -403,7 +462,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                 ) : (
                   <FileArchiveIcon />
                 )}
-                Create modality
+                Create modality draft
               </Button>
               <Button
                 type="button"
@@ -442,7 +501,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
               No modality selected
             </p>
             <p className="mt-1 max-w-sm text-sm leading-6 text-muted-foreground">
-              Choose an existing modality above or start a new secure upload for{" "}
+              Choose an existing modality above or attach a new source study for{" "}
               {zone.name}.
             </p>
           </CardContent>
@@ -495,10 +554,6 @@ function ZoneModalityEditorCard({
     <Card className="border border-border/70 bg-muted/10 shadow-none">
       <CardHeader className="border-b border-border/70">
         <CardTitle className="text-base">Edit Modality</CardTitle>
-        <CardDescription>
-          Keep only the editorial fields here. Upload detection stays in the
-          intake flow.
-        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5 pt-5">
         <FieldGroup className="gap-4">
