@@ -5,3 +5,4 @@
 apps/web/.next
 apps/web/node_modules
 services/api/target
+services/api/data

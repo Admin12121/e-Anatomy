@@ -6,6 +6,7 @@ pub struct AppConfig {
     pub database: DatabaseConfig,
     pub auth: AuthConfig,
     pub internal_web_api_key: String,
+    pub storage: StorageConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +29,11 @@ pub struct AuthConfig {
     pub bootstrap_admin_email: String,
     pub bootstrap_admin_password: String,
     pub bootstrap_admin_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StorageConfig {
+    pub root_dir: String,
 }
 
 impl AppConfig {
@@ -54,6 +60,9 @@ impl AppConfig {
                 "INTERNAL_WEB_API_KEY",
                 "anatomy-internal-web-key-dev-only",
             ),
+            storage: StorageConfig {
+                root_dir: env_or("STORAGE_ROOT_DIR", "./data"),
+            },
         })
     }
 }

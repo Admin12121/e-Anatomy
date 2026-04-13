@@ -33,14 +33,12 @@ import {
   ModalityUploadValidationError,
 } from "@/lib/playground/modality-upload-shared"
 import type {
-  CreateZoneModalityInput,
   ModalityType,
   UpdateZoneModalityInput,
   ZoneDetail,
   ZoneModality,
 } from "@/lib/playground/types"
 import {
-  useCreateZoneModalityMutation,
   useGetZoneModalitiesQuery,
   useUpdateZoneModalityMutation,
 } from "@/lib/store/services/playground-api"
@@ -66,6 +64,13 @@ type EditorMode = "create" | "edit"
 
 type FileWithRelativePath = File & {
   webkitRelativePath?: string
+}
+
+type StudyUploadProgressState = {
+  loadedBytes: number
+  phase: "uploading" | "processing"
+  percent: number | null
+  totalBytes: number | null
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -116,6 +121,13 @@ function formatModalitySourceKindLabel(kind: ZoneModality["sourceKind"]) {
   return formatSourceKindLabel(kind)
 }
 
+function hasActiveModalityIngest(modalities: ZoneModality[]) {
+  return modalities.some(
+    (modality) =>
+      modality.processingStatus === "processing" || modality.processingStatus === "uploaded",
+  )
+}
+
 function getSelectedSourceLabel(files: File[]) {
   const firstRelativePath = files
     .map((file) => (file as FileWithRelativePath).webkitRelativePath?.trim())
@@ -132,8 +144,107 @@ function getSelectedSourceLabel(files: File[]) {
   return files[0]?.name?.trim() || null
 }
 
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function getUploadErrorMessage(xhr: XMLHttpRequest, fallback: string) {
+  const rawResponse = xhr.responseText || xhr.response
+
+  if (typeof rawResponse === "string" && rawResponse.trim().length > 0) {
+    try {
+      const payload = JSON.parse(rawResponse) as {
+        error?: {
+          message?: string
+        }
+      }
+
+      if (payload.error?.message) {
+        return payload.error.message
+      }
+    } catch {
+      // Ignore non-JSON error payloads.
+    }
+  }
+
+  return fallback
+}
+
+async function uploadStudyIntakeWithProgress({
+  formData,
+  onProgress,
+  zoneId,
+}: {
+  formData: FormData
+  onProgress: (state: StudyUploadProgressState) => void
+  zoneId: string
+}) {
+  return new Promise<ZoneModality>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    let lastLoadedBytes = 0
+    let lastTotalBytes: number | null = null
+    xhr.open("POST", `/api/playground/zones/${zoneId}/modalities/intake`)
+    xhr.responseType = "text"
+    xhr.withCredentials = true
+    xhr.setRequestHeader("Accept", "application/json")
+
+    xhr.upload.onprogress = (event) => {
+      const totalBytes = event.lengthComputable ? event.total : null
+      const loadedBytes = event.loaded
+      lastLoadedBytes = loadedBytes
+      lastTotalBytes = totalBytes
+      const percent =
+        totalBytes && totalBytes > 0 ? Math.min(100, (loadedBytes / totalBytes) * 100) : null
+
+      onProgress({
+        loadedBytes,
+        percent,
+        phase: "uploading",
+        totalBytes,
+      })
+    }
+
+    xhr.onerror = () => {
+      reject(new Error("Unable to upload the selected study."))
+    }
+
+    xhr.onabort = () => {
+      reject(new Error("Study upload was cancelled."))
+    }
+
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(getUploadErrorMessage(xhr, "Unable to create the modality draft.")))
+        return
+      }
+
+      onProgress({
+        loadedBytes: lastLoadedBytes,
+        percent: 100,
+        phase: "processing",
+        totalBytes: lastTotalBytes,
+      })
+
+      try {
+        const payload = JSON.parse(xhr.responseText || xhr.response) as ZoneModality
+        resolve(payload)
+      } catch {
+        reject(new Error("The server returned an invalid modality response."))
+      }
+    }
+
+    xhr.send(formData)
+  })
+}
+
 export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
-  const { data, isFetching } = useGetZoneModalitiesQuery(zone.id)
+  const [modalitiesPollingInterval, setModalitiesPollingInterval] = useState(0)
+  const { data, isFetching, isLoading, refetch } = useGetZoneModalitiesQuery(zone.id, {
+    pollingInterval: modalitiesPollingInterval,
+    skipPollingIfUnfocused: true,
+  })
   const modalities = data?.items ?? EMPTY_MODALITIES
   const [editorMode, setEditorMode] = useState<EditorMode>("edit")
   const [activeModalityId, setActiveModalityId] = useState<string | null>(null)
@@ -144,9 +255,12 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   const [createModalityTypeOverride, setCreateModalityTypeOverride] =
     useState<ModalityType>("other")
   const [selectedSourceLabel, setSelectedSourceLabel] = useState<string | null>(null)
+  const [selectedSourceFiles, setSelectedSourceFiles] = useState<File[]>([])
   const [isAnalyzingSource, setIsAnalyzingSource] = useState(false)
-  const [createModality, { isLoading: isCreatingModality }] =
-    useCreateZoneModalityMutation()
+  const [isCreatingFromStudy, setIsCreatingFromStudy] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<StudyUploadProgressState | null>(
+    null,
+  )
   const [updateModality, { isLoading: isUpdating }] =
     useUpdateZoneModalityMutation()
   const dicomFolderInputRef = useRef<HTMLInputElement | null>(null)
@@ -157,7 +271,15 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
       : modalities[0]?.id ?? null
   const activeModality =
     modalities.find((modality) => modality.id === resolvedActiveModalityId) ?? null
-  const isPending = isAnalyzingSource || isCreatingModality || isUpdating
+  const isPending = isAnalyzingSource || isCreatingFromStudy || isUpdating
+
+  useEffect(() => {
+    const nextPollingInterval = hasActiveModalityIngest(modalities) ? 4000 : 0
+
+    setModalitiesPollingInterval((current) =>
+      current === nextPollingInterval ? current : nextPollingInterval,
+    )
+  }, [modalities])
 
   useEffect(() => {
     const input = dicomFolderInputRef.current as
@@ -179,6 +301,8 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
     setCreateDetectedUpload(null)
     setCreateModalityTypeOverride("other")
     setSelectedSourceLabel(null)
+    setSelectedSourceFiles([])
+    setUploadProgress(null)
 
     if (dicomFolderInputRef.current) {
       dicomFolderInputRef.current.value = ""
@@ -201,6 +325,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
 
   async function handleSourceSelection(nextFiles: FileList | null) {
     const files = Array.from(nextFiles ?? [])
+    setSelectedSourceFiles(files)
     const sourceLabel = getSelectedSourceLabel(files)
     setSelectedSourceLabel(sourceLabel)
 
@@ -230,34 +355,58 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   }
 
   async function handleCreateModality() {
-    if (!createDetectedUpload) {
+    if (!createDetectedUpload || selectedSourceFiles.length === 0) {
       toast.error("Choose a DICOM folder or one ZIP package first.")
       return
     }
 
-    const input: CreateZoneModalityInput = {
-      name: createName.trim() || createDetectedUpload.suggestedName,
-      modalityType: createModalityTypeOverride,
-      coverImageUrl: null,
-      notes: createNotes.trim() || null,
-      processingStatus: "uploaded",
-      sourceFileCount: createDetectedUpload.sourceFileCount,
-      sourceKind: createDetectedUpload.sourceKind,
-      sourceLabel: selectedSourceLabel?.trim() || createDetectedUpload.sourceLabel,
-    }
-
     try {
-      const createdModality = await createModality({
-        zoneId: zone.id,
-        input,
-      }).unwrap()
+      setIsCreatingFromStudy(true)
+      const formData = new FormData()
+      formData.append("name", createName.trim() || createDetectedUpload.suggestedName)
+      formData.append("modalityType", createModalityTypeOverride)
+      formData.append("notes", createNotes.trim())
+      formData.append("sourceKind", createDetectedUpload.sourceKind)
+      formData.append(
+        "sourceLabel",
+        selectedSourceLabel?.trim() || createDetectedUpload.sourceLabel,
+      )
+      formData.append("sourceFileCount", String(createDetectedUpload.sourceFileCount))
+      formData.append(
+        "relativePathsJson",
+        JSON.stringify(
+          selectedSourceFiles.map(
+            (file) => (file as FileWithRelativePath).webkitRelativePath?.trim() || "",
+          ),
+        ),
+      )
 
-      toast.success("Modality draft created from the source study.")
+      for (const file of selectedSourceFiles) {
+        formData.append("file", file)
+      }
+
+      setUploadProgress({
+        loadedBytes: 0,
+        percent: 0,
+        phase: "uploading",
+        totalBytes: selectedSourceFiles.reduce((total, file) => total + file.size, 0),
+      })
+      const createdModality = await uploadStudyIntakeWithProgress({
+        formData,
+        onProgress: setUploadProgress,
+        zoneId: zone.id,
+      })
+      await refetch()
+
+      toast.success("Upload finished. Study intake is processing in the background.")
       setActiveModalityId(createdModality.id)
       setEditorMode("edit")
       resetCreateState()
     } catch (error) {
+      setUploadProgress(null)
       toast.error(getErrorMessage(error, "Unable to create the modality draft."))
+    } finally {
+      setIsCreatingFromStudy(false)
     }
   }
 
@@ -298,7 +447,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
           </div>
         </CardHeader>
         <CardContent className="space-y-4 pt-5">
-          {isFetching ? (
+          {isLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <LoaderCircleIcon className="size-4 animate-spin" />
               Loading modalities...
@@ -356,6 +505,9 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
               source study below.
             </div>
           )}
+          {isFetching && !isLoading ? (
+            <div className="text-xs text-muted-foreground">Refreshing modalities...</div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -407,6 +559,10 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                     Choose ZIP package
                   </Button>
                 </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  Up to two source studies can be processed at the same time. Large
+                  studies upload first, then continue slice derivation in the background.
+                </p>
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
@@ -462,7 +618,11 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                 ) : (
                   <FileArchiveIcon />
                 )}
-                Create modality draft
+                {uploadProgress?.phase === "uploading"
+                  ? `Uploading ${Math.round(uploadProgress.percent ?? 0)}%`
+                  : uploadProgress?.phase === "processing"
+                    ? "Queueing study..."
+                    : "Create modality draft"}
               </Button>
               <Button
                 type="button"
@@ -476,19 +636,52 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                 Cancel
               </Button>
             </div>
+
+            {uploadProgress ? (
+              <div className="rounded-xl border border-border/70 bg-background/60 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium text-foreground">
+                    {uploadProgress.phase === "uploading"
+                      ? "Uploading source study"
+                      : "Handing off to background processing"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {uploadProgress.phase === "uploading" && uploadProgress.totalBytes
+                      ? `${formatBytes(uploadProgress.loadedBytes)} / ${formatBytes(uploadProgress.totalBytes)}`
+                      : "Preparing ingest job"}
+                  </div>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-[width]"
+                    style={{
+                      width: `${Math.max(
+                        6,
+                        uploadProgress.percent ?? (uploadProgress.phase === "processing" ? 100 : 0),
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                  {uploadProgress.phase === "uploading"
+                    ? "Keep this page open until the upload completes."
+                    : "The modality is being created now. Slice derivation continues after the response returns."}
+                </p>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : activeModality ? (
         <>
           <ZoneModalityEditorCard
-            key={activeModality.id}
+            key={`modality-editor-${activeModality.id}`}
             modality={activeModality}
             pending={isPending}
             onSave={handleSaveModalityChanges}
           />
 
           <ModalityAssetsWorkspace
-            key={activeModality.id}
+            key={`modality-assets-${activeModality.id}`}
             modality={activeModality}
             zoneId={zone.id}
           />

@@ -3,12 +3,22 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react"
 
 import type {
+  CreateViewerAnnotationInput,
+  CreateViewerStructureGroupInput,
+  CreateViewerStructureInput,
   CreateZoneModalityAssetInput,
   CreateZoneModalityInput,
   CreateZoneInput,
+  UpdateViewerAnnotationInput,
+  UpdateViewerStructureGroupInput,
+  UpdateViewerStructureInput,
   UpdateZoneModalityAssetInput,
   UpdateZoneModalityInput,
   UpdateZoneInput,
+  ViewerAnnotation,
+  ViewerStructure,
+  ViewerStructureGroup,
+  ZoneModalityViewerManifest,
   ZoneModalityAsset,
   ZoneModalityAssetListResponse,
   ZoneDetail,
@@ -23,7 +33,7 @@ export const playgroundApi = createApi({
     baseUrl: "/api",
     credentials: "include",
   }),
-  tagTypes: ["Zones", "ZoneModalities", "ZoneModalityAssets"],
+  tagTypes: ["Zones", "ZoneModalities", "ZoneModalityAssets", "ZoneViewer"],
   endpoints: (builder) => ({
     getZones: builder.query<ZoneListResponse, void>({
       providesTags: (result) =>
@@ -167,17 +177,142 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    getZoneModalityViewerManifest: builder.query<
+      ZoneModalityViewerManifest,
+      {
+        zoneId: string
+        modalityId: string
+      }
+    >({
+      providesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId }) =>
+        `/playground/zones/${zoneId}/modalities/${modalityId}/viewer`,
+    }),
+    createViewerStructureGroup: builder.mutation<
+      ViewerStructureGroup,
+      {
+        zoneId: string
+        modalityId: string
+        input: CreateViewerStructureGroupInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structure-groups`,
+        method: "POST",
+        body: input,
+      }),
+    }),
+    updateViewerStructureGroup: builder.mutation<
+      ViewerStructureGroup,
+      {
+        zoneId: string
+        modalityId: string
+        groupId: string
+        input: UpdateViewerStructureGroupInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, groupId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structure-groups/${groupId}`,
+        method: "PATCH",
+        body: input,
+      }),
+    }),
+    createViewerStructure: builder.mutation<
+      ViewerStructure,
+      {
+        zoneId: string
+        modalityId: string
+        input: CreateViewerStructureInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures`,
+        method: "POST",
+        body: input,
+      }),
+    }),
+    updateViewerStructure: builder.mutation<
+      ViewerStructure,
+      {
+        zoneId: string
+        modalityId: string
+        structureId: string
+        input: UpdateViewerStructureInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, structureId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures/${structureId}`,
+        method: "PATCH",
+        body: input,
+      }),
+    }),
+    createViewerAnnotation: builder.mutation<
+      ViewerAnnotation,
+      {
+        zoneId: string
+        modalityId: string
+        input: CreateViewerAnnotationInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/annotations`,
+        method: "POST",
+        body: input,
+      }),
+    }),
+    updateViewerAnnotation: builder.mutation<
+      ViewerAnnotation,
+      {
+        zoneId: string
+        modalityId: string
+        annotationId: string
+        input: UpdateViewerAnnotationInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, annotationId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/annotations/${annotationId}`,
+        method: "PATCH",
+        body: input,
+      }),
+    }),
   }),
 })
 
 export const {
+  useCreateViewerAnnotationMutation,
+  useCreateViewerStructureGroupMutation,
+  useCreateViewerStructureMutation,
   useCreateZoneModalityAssetMutation,
   useCreateZoneMutation,
   useCreateZoneModalityMutation,
+  useGetZoneModalityViewerManifestQuery,
   useGetZoneDetailQuery,
   useGetZoneModalityAssetsQuery,
   useGetZoneModalitiesQuery,
   useGetZonesQuery,
+  useUpdateViewerAnnotationMutation,
+  useUpdateViewerStructureGroupMutation,
+  useUpdateViewerStructureMutation,
   useUpdateZoneMutation,
   useUpdateZoneModalityAssetMutation,
   useUpdateZoneModalityMutation,

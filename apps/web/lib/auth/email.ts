@@ -1,6 +1,6 @@
 import "server-only"
 
-import { convert } from "html-to-text"
+import { render, toPlainText } from "@react-email/render"
 import nodemailer from "nodemailer"
 import { createElement } from "react"
 
@@ -134,7 +134,7 @@ export async function formatOtpEmail({
   return {
     html,
     subject,
-    text: convert(html, {
+    text: toPlainText(html, {
       selectors: [
         {
           format: "skip",
@@ -158,11 +158,5 @@ export async function formatOtpEmail({
 }
 
 async function renderEmailTemplate(template: ReturnType<typeof createElement>) {
-  const { renderToStaticMarkup } = await import("react-dom/server")
-  const markup = renderToStaticMarkup(template)
-
-  return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">${markup.replace(
-    /<!DOCTYPE.*?>/,
-    "",
-  )}`
+  return render(template)
 }

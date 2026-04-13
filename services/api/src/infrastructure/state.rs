@@ -23,7 +23,8 @@ impl AppState {
     pub fn new(pool: PgPool, config: AppConfig) -> Self {
         let auth_service = AuthService::new(pool.clone(), config.auth.clone());
         let module_service = ModuleService::new(pool.clone());
-        let playground_service = PlaygroundService::new(pool.clone());
+        let playground_service =
+            PlaygroundService::new(pool.clone(), config.storage.root_dir.clone());
 
         Self {
             config: Arc::new(config),
