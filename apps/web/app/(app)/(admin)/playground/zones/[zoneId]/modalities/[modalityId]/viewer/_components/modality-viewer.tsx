@@ -1,29 +1,34 @@
 "use client";
 
-import Link from "next/link";
 import {
+  useCallback,
   startTransition,
   useDeferredValue,
   useEffect,
-  useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type MutableRefObject,
   type ReactNode,
 } from "react";
+import gsap from "gsap";
 import {
-  ArrowLeftIcon,
+  ArrowLeft,
+  ArrowRight,
   CameraIcon,
   CircleIcon,
   CrosshairIcon,
   EyeIcon,
   EyeOffIcon,
   Layers2Icon,
+  LayoutGrid,
   LoaderCircleIcon,
   PinIcon,
+  RotateCcwIcon,
   SearchIcon,
   SparklesIcon,
+  Undo2Icon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -55,6 +60,7 @@ import {
   useUpdateViewerStructureMutation,
 } from "@/lib/store/services/playground-api";
 import { cn } from "@/lib/utils";
+import NextImage from "next/image";
 
 type ViewerCanvasMode =
   | "browse"
@@ -102,6 +108,7 @@ type AnnotationFormState = {
 };
 
 type NavigationSource = "button" | "click" | "search" | "weighting" | "wheel";
+type PreloadPriority = "high" | "low";
 
 const ACTIVE_INGEST_STATUSES = new Set([
   "queued",
@@ -119,12 +126,15 @@ const TERMINAL_INGEST_STATUSES = new Set([
 
 const DEFAULT_GROUP_COLOR = "#40d6ff";
 const DEFAULT_ANNOTATION_COLOR = "#94f8ff";
-const IMAGE_PRELOAD_RADIUS = 8;
-const FILMSTRIP_ITEM_WIDTH = 96;
-const FILMSTRIP_OVERSCAN = 10;
-const STACK_PRELOAD_CONCURRENCY = 6;
+const IMAGE_PRELOAD_RADIUS = 16;
+const IMMEDIATE_PRELOAD_BURST = 10;
+const STACK_PRELOAD_CONCURRENCY = 12;
+const FILMSTRIP_SCROLL_DURATION_SECONDS = 0.26;
+const LOADING_INDICATOR_DELAY_MS = 260;
+const WHEEL_LOADING_INDICATOR_DELAY_MS = 700;
 const WHEEL_DELTA_THRESHOLD = 40;
 const WHEEL_NAVIGATION_COOLDOWN_MS = 18;
+const BRUSH_POINT_STEP = 0.01;
 const EMPTY_GROUP_FORM: GroupFormState = {
   colorHex: DEFAULT_GROUP_COLOR,
   description: "",
@@ -168,19 +178,18 @@ export function DraftModalityViewer({
 }) {
   const [viewerPollingIntervalMs, setViewerPollingIntervalMs] = useState(2500);
 
-  const { data, error, isFetching, isLoading } =
-    useGetZoneModalityViewerManifestQuery(
-      {
-        zoneId,
-        modalityId,
-      },
-      {
-        pollingInterval: viewerPollingIntervalMs,
-        refetchOnFocus: true,
-        refetchOnMountOrArgChange: true,
-        refetchOnReconnect: true,
-      },
-    );
+  const { data, error, isLoading } = useGetZoneModalityViewerManifestQuery(
+    {
+      zoneId,
+      modalityId,
+    },
+    {
+      pollingInterval: viewerPollingIntervalMs,
+      refetchOnFocus: true,
+      refetchOnMountOrArgChange: true,
+      refetchOnReconnect: true,
+    },
+  );
   const [createGroup, { isLoading: isCreatingGroup }] =
     useCreateViewerStructureGroupMutation();
   const [updateGroup, { isLoading: isUpdatingGroup }] =
@@ -196,6 +205,7 @@ export function DraftModalityViewer({
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
   const [currentAssetId, setCurrentAssetId] = useState<string | null>(null);
+  const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
   const [selectedStructureId, setSelectedStructureId] = useState<string | null>(
     null,
   );
@@ -232,22 +242,30 @@ export function DraftModalityViewer({
   const [loadingIndicatorAssetId, setLoadingIndicatorAssetId] = useState<
     string | null
   >(null);
-  const [filmstripMetrics, setFilmstripMetrics] = useState({
-    clientWidth: 0,
-    scrollLeft: 0,
-  });
+  const [currentImageElement, setCurrentImageElement] =
+    useState<HTMLImageElement | null>(null);
+  const [showBlockView, setShowBlockView] = useState(false);
+  const [viewerMode, setViewerMode] = useState<"learner" | "authoring">(
+    "authoring",
+  );
+  const [showStructureAdvanced, setShowStructureAdvanced] = useState(false);
+  const [showStudyPanel, setShowStudyPanel] = useState(true);
+  const [showControlPanel, setShowControlPanel] = useState(true);
+  const [pinControlPanel, setPinControlPanel] = useState(false);
 
+  const filmstripScrollerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<SVGSVGElement | null>(null);
-  const filmstripRef = useRef<HTMLDivElement | null>(null);
-  const filmstripFrameRef = useRef<number | null>(null);
   const wheelDeltaRef = useRef(0);
   const wheelCooldownRef = useRef<number | null>(null);
-  const imagePreloadCacheRef = useRef<Set<string>>(new Set());
+  const lastNavigationDirectionRef = useRef<-1 | 0 | 1>(0);
+  const readyAssetIdCacheRef = useRef<Set<string>>(new Set());
+  const imageElementCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const pendingImagePreloadCacheRef = useRef<Set<string>>(new Set());
   const imagePreloadPromiseCacheRef = useRef<Map<string, Promise<void>>>(
     new Map(),
   );
+  const navigationRequestIdRef = useRef(0);
   const lastNavigationSourceRef = useRef<NavigationSource>("button");
 
   const assets = useMemo(() => data?.assets ?? [], [data?.assets]);
@@ -333,18 +351,22 @@ export function DraftModalityViewer({
   const referenceAssets = useMemo(() => {
     return assets.filter((asset) => !isSliceAsset(asset));
   }, [assets]);
+  const triViewAssets = useMemo(
+    () => referenceAssets.slice(0, 3),
+    [referenceAssets],
+  );
 
   const currentAsset = useMemo(() => {
-    if (currentAssetId) {
-      const exact = activeAssets.find((asset) => asset.id === currentAssetId);
-
-      if (exact) {
-        return exact;
-      }
+    if (!currentAssetId) {
+      return null;
     }
 
-    return activeAssets[0] ?? null;
-  }, [activeAssets, currentAssetId]);
+    return (
+      activeAssets.find((asset) => asset.id === currentAssetId) ??
+      assets.find((asset) => asset.id === currentAssetId) ??
+      null
+    );
+  }, [activeAssets, assets, currentAssetId]);
   const currentAssetIndex = useMemo(
     () =>
       currentAsset
@@ -352,76 +374,25 @@ export function DraftModalityViewer({
         : -1,
     [activeAssets, currentAsset],
   );
-  const filmstripWindow = useMemo(() => {
-    if (activeAssets.length === 0) {
-      return {
-        endIndex: -1,
-        leftSpacerWidth: 0,
-        rightSpacerWidth: 0,
-        startIndex: 0,
-      };
-    }
+  const pendingAsset = pendingAssetId
+    ? (assets.find((asset) => asset.id === pendingAssetId) ?? null)
+    : null;
+  const navigationAssetIndex = useMemo(() => {
+    const asset = pendingAsset ?? currentAsset;
 
-    const maxIndex = activeAssets.length - 1;
-    const fallbackWidth = FILMSTRIP_ITEM_WIDTH * 8;
-    const viewportWidth = filmstripMetrics.clientWidth || fallbackWidth;
-    const visibleCount = Math.max(
-      1,
-      Math.ceil(viewportWidth / FILMSTRIP_ITEM_WIDTH),
-    );
-    const viewportStartIndex = clamp(
-      Math.floor(filmstripMetrics.scrollLeft / FILMSTRIP_ITEM_WIDTH),
-      0,
-      maxIndex,
-    );
-    const viewportEndIndex = clamp(
-      viewportStartIndex + visibleCount - 1,
-      0,
-      maxIndex,
-    );
-    const isCurrentOutsideViewport =
-      currentAssetIndex >= 0 &&
-      (currentAssetIndex < viewportStartIndex - FILMSTRIP_OVERSCAN ||
-        currentAssetIndex > viewportEndIndex + FILMSTRIP_OVERSCAN);
-    const anchorStartIndex = isCurrentOutsideViewport
-      ? clamp(currentAssetIndex - Math.floor(visibleCount / 2), 0, maxIndex)
-      : viewportStartIndex;
-    const startIndex = clamp(
-      anchorStartIndex - FILMSTRIP_OVERSCAN,
-      0,
-      maxIndex,
-    );
-    const endIndex = clamp(
-      anchorStartIndex + visibleCount + FILMSTRIP_OVERSCAN - 1,
-      startIndex,
-      maxIndex,
-    );
-
-    return {
-      endIndex,
-      leftSpacerWidth: startIndex * FILMSTRIP_ITEM_WIDTH,
-      rightSpacerWidth:
-        Math.max(0, activeAssets.length - endIndex - 1) * FILMSTRIP_ITEM_WIDTH,
-      startIndex,
-    };
-  }, [
-    activeAssets.length,
-    currentAssetIndex,
-    filmstripMetrics.clientWidth,
-    filmstripMetrics.scrollLeft,
-  ]);
-  const visibleFilmstripAssets = useMemo(() => {
-    if (filmstripWindow.endIndex < filmstripWindow.startIndex) {
-      return [];
-    }
-
-    return activeAssets
-      .slice(filmstripWindow.startIndex, filmstripWindow.endIndex + 1)
-      .map((asset, offset) => ({
+    return asset
+      ? activeAssets.findIndex((activeAsset) => activeAsset.id === asset.id)
+      : -1;
+  }, [activeAssets, currentAsset, pendingAsset]);
+  const activeViewerAssetId = pendingAsset?.id ?? currentAsset?.id ?? null;
+  const filmstripAssets = useMemo(
+    () =>
+      activeAssets.map((asset, assetIndex) => ({
         asset,
-        assetIndex: filmstripWindow.startIndex + offset,
-      }));
-  }, [activeAssets, filmstripWindow.endIndex, filmstripWindow.startIndex]);
+        assetIndex,
+      })),
+    [activeAssets],
+  );
   const currentAnnotations = useMemo(
     () =>
       currentAsset
@@ -432,74 +403,149 @@ export function DraftModalityViewer({
     [annotations, currentAsset],
   );
 
-  const markAssetReady = useEffectEvent((asset: ZoneModalityAsset) => {
-    imagePreloadCacheRef.current.add(asset.imageUrl);
-    pendingImagePreloadCacheRef.current.delete(asset.imageUrl);
-    imagePreloadPromiseCacheRef.current.delete(asset.imageUrl);
-    setReadyAssetIds((current) => {
-      if (current.has(asset.id)) {
-        return current;
+  const markAssetReady = useCallback(
+    (asset: ZoneModalityAsset, imageElement?: HTMLImageElement) => {
+      if (imageElement) {
+        imageElementCacheRef.current.set(asset.id, imageElement);
       }
 
-      const next = new Set(current);
-      next.add(asset.id);
-      return next;
-    });
-  });
+      readyAssetIdCacheRef.current.add(asset.id);
+      pendingImagePreloadCacheRef.current.delete(asset.id);
+      imagePreloadPromiseCacheRef.current.delete(asset.id);
+      setReadyAssetIds((current) => {
+        if (current.has(asset.id)) {
+          return current;
+        }
 
-  const preloadAsset = useEffectEvent((asset: ZoneModalityAsset) => {
-    if (imagePreloadCacheRef.current.has(asset.imageUrl)) {
-      markAssetReady(asset);
-      return Promise.resolve();
-    }
+        const next = new Set(current);
+        next.add(asset.id);
+        return next;
+      });
+    },
+    [],
+  );
 
-    const existingPromise = imagePreloadPromiseCacheRef.current.get(
-      asset.imageUrl,
-    );
-
-    if (existingPromise) {
-      return existingPromise;
-    }
-
-    const promise = new Promise<void>((resolve) => {
-      if (typeof window === "undefined") {
-        resolve();
-        return;
-      }
-
-      const image = new window.Image();
-      image.decoding = "async";
-      pendingImagePreloadCacheRef.current.add(asset.imageUrl);
-
-      const finalizeReady = () => {
+  const preloadAsset = useCallback(
+    (asset: ZoneModalityAsset, priority: PreloadPriority = "low") => {
+      if (
+        readyAssetIdCacheRef.current.has(asset.id) &&
+        imageElementCacheRef.current.has(asset.id)
+      ) {
         markAssetReady(asset);
-        resolve();
-      };
+        return Promise.resolve();
+      }
 
-      image.onload = () => {
-        if (typeof image.decode === "function") {
-          void image
-            .decode()
-            .catch(() => undefined)
-            .finally(finalizeReady);
+      const existingPromise = imagePreloadPromiseCacheRef.current.get(asset.id);
+
+      if (existingPromise) {
+        return existingPromise;
+      }
+
+      const promise = new Promise<void>((resolve) => {
+        if (typeof window === "undefined") {
+          resolve();
           return;
         }
 
-        finalizeReady();
-      };
+        const image = new window.Image();
+        image.decoding = "async";
+        image.fetchPriority = priority;
+        pendingImagePreloadCacheRef.current.add(asset.id);
 
-      image.onerror = () => {
-        pendingImagePreloadCacheRef.current.delete(asset.imageUrl);
-        imagePreloadPromiseCacheRef.current.delete(asset.imageUrl);
-        resolve();
-      };
+        const finalizeReady = () => {
+          markAssetReady(asset, image);
+          resolve();
+        };
 
-      image.src = asset.imageUrl;
-    });
+        image.onload = () => {
+          if (typeof image.decode === "function") {
+            void image
+              .decode()
+              .catch(() => undefined)
+              .finally(finalizeReady);
+            return;
+          }
 
-    imagePreloadPromiseCacheRef.current.set(asset.imageUrl, promise);
-    return promise;
-  });
+          finalizeReady();
+        };
+
+        image.onerror = () => {
+          pendingImagePreloadCacheRef.current.delete(asset.id);
+          imagePreloadPromiseCacheRef.current.delete(asset.id);
+          resolve();
+        };
+
+        image.src = asset.imageUrl;
+      });
+
+      imagePreloadPromiseCacheRef.current.set(asset.id, promise);
+      return promise;
+    },
+    [markAssetReady],
+  );
+
+  const requestAssetNavigation = useCallback(
+    (asset: ZoneModalityAsset, source: NavigationSource) => {
+      if (pendingAssetId === asset.id) {
+        return;
+      }
+
+      if (currentAsset?.id === asset.id) {
+        navigationRequestIdRef.current += 1;
+        setPendingAssetId(null);
+        return;
+      }
+
+      lastNavigationSourceRef.current = source;
+
+      if (readyAssetIdCacheRef.current.has(asset.id)) {
+        const cachedImage = imageElementCacheRef.current.get(asset.id) ?? null;
+        navigationRequestIdRef.current += 1;
+        setPendingAssetId(null);
+        setCurrentAssetId(asset.id);
+        setCurrentImageElement(cachedImage);
+        return;
+      }
+
+      const requestId = navigationRequestIdRef.current + 1;
+      navigationRequestIdRef.current = requestId;
+      setPendingAssetId(asset.id);
+
+      const targetIndex = activeAssets.findIndex(
+        (activeAsset) => activeAsset.id === asset.id,
+      );
+
+      if (targetIndex >= 0) {
+        const burstAssets = buildImmediatePreloadOrder(
+          activeAssets,
+          targetIndex,
+          lastNavigationDirectionRef.current,
+          IMMEDIATE_PRELOAD_BURST,
+        );
+
+        void Promise.all(
+          burstAssets.map((burstAsset) => preloadAsset(burstAsset, "high")),
+        );
+      }
+
+      void preloadAsset(asset, "high").then(() => {
+        if (navigationRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        if (!readyAssetIdCacheRef.current.has(asset.id)) {
+          setPendingAssetId(null);
+          return;
+        }
+
+        const cachedImage = imageElementCacheRef.current.get(asset.id) ?? null;
+        setCurrentAssetId(asset.id);
+        setCurrentImageElement(cachedImage);
+        setPendingAssetId(null);
+      });
+    },
+    [activeAssets, currentAsset?.id, pendingAssetId, preloadAsset],
+  );
 
   const selectedStructure = selectedStructureId
     ? (structuresById.get(selectedStructureId) ?? null)
@@ -559,9 +605,15 @@ export function DraftModalityViewer({
   useEffect(() => {
     const nextInterval = shouldPollViewerData ? 2500 : 0;
 
-    setViewerPollingIntervalMs((current) =>
-      current === nextInterval ? current : nextInterval,
-    );
+    const timeoutId = window.setTimeout(() => {
+      setViewerPollingIntervalMs((current) =>
+        current === nextInterval ? current : nextInterval,
+      );
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [shouldPollViewerData]);
 
   useEffect(() => {
@@ -587,11 +639,48 @@ export function DraftModalityViewer({
   }, [activeWeighting, weightings]);
 
   useEffect(() => {
-    if (!currentAsset && activeAssets[0]) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCurrentAssetId(activeAssets[0].id);
+    if (activeAssets.length === 0) {
+      return;
     }
-  }, [activeAssets, currentAsset]);
+
+    const selectedAsset = currentAssetId
+      ? (assets.find((asset) => asset.id === currentAssetId) ?? null)
+      : null;
+
+    if (selectedAsset && !isSliceAsset(selectedAsset)) {
+      return;
+    }
+
+    if (
+      selectedAsset &&
+      activeAssets.some((asset) => asset.id === selectedAsset.id)
+    ) {
+      return;
+    }
+
+    const fallbackAsset = activeAssets[0];
+
+    if (!fallbackAsset) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void requestAssetNavigation(
+        fallbackAsset,
+        lastNavigationSourceRef.current,
+      );
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    activeAssets,
+    assets,
+    currentAssetId,
+    pendingAssetId,
+    requestAssetNavigation,
+  ]);
 
   useEffect(() => {
     if (!selectedGroup) {
@@ -660,7 +749,7 @@ export function DraftModalityViewer({
   }, [selectedAnnotation]);
 
   useEffect(() => {
-    if (!selectedStructureId || !currentAsset) {
+    if (!selectedStructureId || !currentAsset || pendingAsset) {
       return;
     }
 
@@ -672,62 +761,45 @@ export function DraftModalityViewer({
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedAnnotationId(matchingAnnotation?.id ?? null);
-  }, [annotations, currentAsset, selectedStructureId]);
+  }, [annotations, currentAsset, pendingAsset, selectedStructureId]);
 
   useEffect(() => {
-    if (!currentAssetId) {
+    if (typeof window === "undefined" || navigationAssetIndex < 0) {
       return;
     }
 
-    const nextThumbnail = filmstripRef.current?.querySelector<HTMLElement>(
-      `[data-asset-id="${currentAssetId}"]`,
+    const immediateAssets = buildImmediatePreloadOrder(
+      activeAssets,
+      navigationAssetIndex,
+      lastNavigationDirectionRef.current,
+      Math.max(IMAGE_PRELOAD_RADIUS, IMMEDIATE_PRELOAD_BURST),
     );
-    nextThumbnail?.scrollIntoView({
-      behavior:
-        lastNavigationSourceRef.current === "wheel" || activeAssets.length > 72
-          ? "auto"
-          : "smooth",
-      block: "nearest",
-      inline: "center",
-    });
-  }, [activeAssets.length, currentAssetId]);
+
+    const timeoutId = window.setTimeout(() => {
+      void Promise.all(
+        immediateAssets.map((asset) => preloadAsset(asset, "high")),
+      );
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeAssets, navigationAssetIndex, preloadAsset]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || currentAssetIndex < 0) {
-      return;
-    }
-
-    const startIndex = clamp(
-      currentAssetIndex - IMAGE_PRELOAD_RADIUS,
-      0,
-      activeAssets.length - 1,
-    );
-    const endIndex = clamp(
-      currentAssetIndex + IMAGE_PRELOAD_RADIUS,
-      0,
-      activeAssets.length - 1,
-    );
-
-    for (let index = startIndex; index <= endIndex; index += 1) {
-      const asset = activeAssets[index];
-
-      if (!asset) {
-        continue;
-      }
-
-      void preloadAsset(asset);
-    }
-  }, [activeAssets, currentAssetIndex]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || activeAssets.length === 0) {
+    if (
+      typeof window === "undefined" ||
+      activeAssets.length === 0 ||
+      pendingAsset
+    ) {
       return;
     }
 
     let cancelled = false;
     const warmupOrder = buildStackWarmupOrder(
       activeAssets,
-      Math.max(currentAssetIndex, 0),
+      Math.max(navigationAssetIndex, 0),
+      lastNavigationDirectionRef.current,
     );
     let cursor = 0;
 
@@ -751,52 +823,12 @@ export function DraftModalityViewer({
     return () => {
       cancelled = true;
     };
-  }, [activeAssets, currentAssetIndex]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const filmstripElement = filmstripRef.current;
-
-    if (!filmstripElement) {
-      return;
-    }
-
-    const syncMetrics = () => {
-      const nextClientWidth = filmstripElement.clientWidth;
-      const nextScrollLeft = filmstripElement.scrollLeft;
-
-      setFilmstripMetrics((current) =>
-        current.clientWidth === nextClientWidth &&
-        current.scrollLeft === nextScrollLeft
-          ? current
-          : {
-              clientWidth: nextClientWidth,
-              scrollLeft: nextScrollLeft,
-            },
-      );
-    };
-
-    syncMetrics();
-
-    const resizeObserver = new window.ResizeObserver(syncMetrics);
-    resizeObserver.observe(filmstripElement);
-
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, [activeAssets.length]);
+  }, [activeAssets, navigationAssetIndex, pendingAsset, preloadAsset]);
 
   useEffect(() => {
     return () => {
       if (wheelCooldownRef.current !== null) {
         window.clearTimeout(wheelCooldownRef.current);
-      }
-
-      if (filmstripFrameRef.current !== null) {
-        window.cancelAnimationFrame(filmstripFrameRef.current);
       }
     };
   }, []);
@@ -882,36 +914,131 @@ export function DraftModalityViewer({
     isUpdatingAnnotation ||
     isUpdatingGroup ||
     isUpdatingStructure;
-  const ingestStatusLabel = data?.ingestJob?.status
-    ? formatIngestStatusLabel(data.ingestJob.status)
-    : data?.modality.processingStatus === "processing" && !hasSliceAssets
-      ? "Processing"
+  const hasSelectedStructure = Boolean(selectedStructure);
+  const canEditPinArea = hasSelectedStructure;
+  const canEditAnnotationDetails =
+    Boolean(selectedAnnotation) ||
+    annotationForm.polygonPoints.length > 0 ||
+    canvasMode !== "browse";
+  const isAuthoringMode = viewerMode === "authoring";
+  const lockedPreviewStructure =
+    selectedStructure?.accessLevel === "subscription"
+      ? selectedStructure
       : null;
-  const isCurrentImageLoaded = currentAsset
-    ? readyAssetIds.has(currentAsset.id)
+  const shellGridClass = cn(
+    "grid max-h-[calc(100vh-101px)] flex-1 gap-2",
+    showStudyPanel &&
+      showControlPanel &&
+      "xl:grid-cols-[16rem_minmax(0,1fr)_22rem]",
+    showStudyPanel && !showControlPanel && "xl:grid-cols-[16rem_minmax(0,1fr)]",
+    !showStudyPanel && showControlPanel && "xl:grid-cols-[minmax(0,1fr)_22rem]",
+    !showStudyPanel && !showControlPanel && "xl:grid-cols-[minmax(0,1fr)]",
+  );
+  const viewerTitle = useMemo(() => {
+    if (!showOrientation) {
+      return "Viewer";
+    }
+
+    const modalityName = data?.modality.name?.trim() || "Viewer";
+    const modalityType = formatModalityTypeLabel(data?.modality.modalityType);
+    const orientation = formatOrientationLabel(currentAsset?.orientationCode);
+    const base = modalityType
+      ? `${modalityName} - ${modalityType}`
+      : modalityName;
+
+    return orientation ? `${base} (${orientation})` : base;
+  }, [
+    currentAsset?.orientationCode,
+    data?.modality.modalityType,
+    data?.modality.name,
+    showOrientation,
+  ]);
+  const showLoadingIndicator = pendingAsset
+    ? !readyAssetIds.has(pendingAsset.id) &&
+      loadingIndicatorAssetId === pendingAsset.id
     : false;
-  const showLoadingIndicator = currentAsset
-    ? !isCurrentImageLoaded && loadingIndicatorAssetId === currentAsset.id
-    : false;
+  const isPreparingInitialAsset = activeAssets.length > 0 && !currentAsset;
 
   useEffect(() => {
-    if (
-      typeof window === "undefined" ||
-      !currentAsset ||
-      isCurrentImageLoaded
-    ) {
+    if (!currentAsset) {
+      const timeoutId = window.setTimeout(() => {
+        setCurrentImageElement(null);
+      }, 0);
+
+      return () => {
+        window.clearTimeout(timeoutId);
+      };
+    }
+  }, [currentAsset]);
+
+  useEffect(() => {
+    if (pinControlPanel && !showControlPanel) {
+      setShowControlPanel(true);
+    }
+  }, [pinControlPanel, showControlPanel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !pendingAsset) {
       return;
     }
 
-    const assetId = currentAsset.id;
+    if (readyAssetIds.has(pendingAsset.id)) {
+      return;
+    }
+
+    const assetId = pendingAsset.id;
+    const delayMs =
+      lastNavigationSourceRef.current === "wheel"
+        ? WHEEL_LOADING_INDICATOR_DELAY_MS
+        : LOADING_INDICATOR_DELAY_MS;
     const timeoutId = window.setTimeout(() => {
       setLoadingIndicatorAssetId(assetId);
-    }, 140);
+    }, delayMs);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [currentAsset, isCurrentImageLoaded]);
+  }, [pendingAsset, readyAssetIds]);
+
+  useEffect(() => {
+    const scroller = filmstripScrollerRef.current;
+
+    if (!scroller || !activeViewerAssetId) {
+      return;
+    }
+
+    const activeButton = scroller.querySelector<HTMLElement>(
+      `[data-asset-id="${activeViewerAssetId}"]`,
+    );
+
+    if (!activeButton) {
+      return;
+    }
+
+    const maxScrollLeft = Math.max(
+      0,
+      scroller.scrollWidth - scroller.clientWidth,
+    );
+    const targetScrollLeft = clamp(
+      activeButton.offsetLeft -
+        scroller.clientWidth / 2 +
+        activeButton.clientWidth / 2,
+      0,
+      maxScrollLeft,
+    );
+
+    gsap.killTweensOf(scroller);
+    gsap.to(scroller, {
+      duration: FILMSTRIP_SCROLL_DURATION_SECONDS,
+      ease: "power3.out",
+      overwrite: "auto",
+      scrollLeft: targetScrollLeft,
+    });
+
+    return () => {
+      gsap.killTweensOf(scroller);
+    };
+  }, [activeViewerAssetId, filmstripAssets.length]);
 
   function updateGroupVisibility(groupId: string, nextVisible: boolean) {
     setVisibleGroupIds((current) => {
@@ -937,10 +1064,12 @@ export function DraftModalityViewer({
       return;
     }
 
-    lastNavigationSourceRef.current = source;
-    startTransition(() => {
-      setCurrentAssetId(nextAsset.id);
-    });
+    lastNavigationDirectionRef.current = clamp(
+      Math.sign(nextIndex - Math.max(navigationAssetIndex, 0)),
+      -1,
+      1,
+    ) as -1 | 0 | 1;
+    void requestAssetNavigation(nextAsset, source);
   }
 
   function navigateToAssetId(
@@ -954,10 +1083,13 @@ export function DraftModalityViewer({
       return;
     }
 
-    lastNavigationSourceRef.current = source;
-    startTransition(() => {
-      setCurrentAssetId(assetId);
-    });
+    const nextAsset = assets.find((asset) => asset.id === assetId);
+
+    if (!nextAsset) {
+      return;
+    }
+
+    void requestAssetNavigation(nextAsset, source);
   }
 
   function updateAnnotationForm<Key extends keyof AnnotationFormState>(
@@ -988,6 +1120,22 @@ export function DraftModalityViewer({
       ...current,
       [key]: value,
     }));
+  }
+
+  function resetAuthoringDraft() {
+    setCanvasMode("browse");
+    setAnnotationForm(EMPTY_ANNOTATION_FORM);
+  }
+
+  function clearPolygonDraft() {
+    updateAnnotationForm("polygonPoints", []);
+  }
+
+  function removeLastPolygonPoint() {
+    updateAnnotationForm(
+      "polygonPoints",
+      annotationForm.polygonPoints.slice(0, -1),
+    );
   }
 
   async function handleSaveStructure() {
@@ -1138,16 +1286,16 @@ export function DraftModalityViewer({
 
     startTransition(() => {
       setSelectedAnnotationId(nextAnnotation.id);
-      setCurrentAssetId(nextAsset.id);
       setActiveWeighting(nextAsset.weightingCode ?? "all");
     });
-    lastNavigationSourceRef.current = "search";
+    lastNavigationDirectionRef.current = 0;
+    void requestAssetNavigation(nextAsset, "search");
   }
 
   function handleWeightingChange(nextWeighting: string) {
     lastNavigationSourceRef.current = "weighting";
+    lastNavigationDirectionRef.current = 0;
     setActiveWeighting(nextWeighting);
-    setCurrentAssetId(null);
   }
 
   function handleCanvasClick(point: ViewerAnnotationPoint) {
@@ -1251,7 +1399,7 @@ export function DraftModalityViewer({
     }
 
     const nextIndex = clamp(
-      currentAssetIndex + direction * stepCount,
+      navigationAssetIndex + direction * stepCount,
       0,
       activeAssets.length - 1,
     );
@@ -1259,35 +1407,6 @@ export function DraftModalityViewer({
     wheelCooldownRef.current = window.setTimeout(() => {
       wheelCooldownRef.current = null;
     }, WHEEL_NAVIGATION_COOLDOWN_MS);
-  }
-
-  function handleFilmstripScroll() {
-    if (typeof window === "undefined" || filmstripFrameRef.current !== null) {
-      return;
-    }
-
-    filmstripFrameRef.current = window.requestAnimationFrame(() => {
-      filmstripFrameRef.current = null;
-
-      const filmstripElement = filmstripRef.current;
-
-      if (!filmstripElement) {
-        return;
-      }
-
-      const nextClientWidth = filmstripElement.clientWidth;
-      const nextScrollLeft = filmstripElement.scrollLeft;
-
-      setFilmstripMetrics((current) =>
-        current.clientWidth === nextClientWidth &&
-        current.scrollLeft === nextScrollLeft
-          ? current
-          : {
-              clientWidth: nextClientWidth,
-              scrollLeft: nextScrollLeft,
-            },
-      );
-    });
   }
 
   async function handleCaptureSnapshot() {
@@ -1319,7 +1438,7 @@ export function DraftModalityViewer({
 
   if (isLoading && !data) {
     return (
-      <div className="flex min-h-[70vh] items-center justify-center rounded-3xl bg-[#05070a] text-white">
+      <div className="flex min-h-[70vh] h-full items-center justify-center rounded-3xl bg-[#05070a] text-white">
         <div className="flex items-center gap-3 text-sm text-white/80">
           <LoaderCircleIcon className="size-5 animate-spin" />
           Loading draft viewer...
@@ -1333,93 +1452,103 @@ export function DraftModalityViewer({
       <div className="rounded-3xl border border-white/10 bg-[#05070a] p-8 text-white">
         <div className="text-lg font-semibold">Viewer unavailable</div>
         <p className="mt-2 max-w-xl text-sm leading-6 text-white/65">
-          This modality does not have a derived study stack yet. Finish the
-          study intake first, then return here to configure groups, structures,
-          labels, and overlay regions.
+          This study is not ready for teaching review yet. Finish preparing the
+          slices first, then return here to add groups, topics, pins, and
+          teaching areas.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="grid max-h-[calc(100vh-110px)] flex-1 gap-2 xl:grid-cols-[16rem_minmax(0,1fr)_22rem]">
-      <aside className="space-y-4 overflow-y-auto p-2">
-        <div className="space-y-2">
-          <div className="relative">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/40" />
-            <Input
-              className="border-white/10 bg-black/30 pl-9 text-white placeholder:text-white/35"
-              placeholder="Search in this module"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
+    <div className={shellGridClass}>
+      {showStudyPanel ? (
+        <aside className="space-y-4 overflow-y-auto p-2">
+          <div className="space-y-2">
+            <div className="relative">
+              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/40" />
+              <Input
+                className="border-white/10 bg-black/30 pl-9 text-white placeholder:text-white/35"
+                placeholder="Search in this module"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+            </div>
+            {searchHits.length > 0 ? (
+              <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
+                {searchHits.map(({ asset, structure }) => (
+                  <button
+                    key={structure.id}
+                    type="button"
+                    className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-white/6"
+                    onClick={() => jumpToStructure(structure.id)}
+                  >
+                    <span>{structure.title}</span>
+                    {asset ? (
+                      <span className="text-xs text-white/45">
+                        {asset.label}
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
-          {searchHits.length > 0 ? (
-            <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-              {searchHits.map(({ asset, structure }) => (
-                <button
-                  key={structure.id}
-                  type="button"
-                  className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-white/6"
-                  onClick={() => jumpToStructure(structure.id)}
-                >
-                  <span>{structure.title}</span>
-                  {asset ? (
-                    <span className="text-xs text-white/45">{asset.label}</span>
-                  ) : null}
-                </button>
+
+          {referenceAssets.length > 0 ? (
+            <div className="space-y-3">
+              <TriViewStudyPanel
+                activeAssetId={activeViewerAssetId}
+                assets={triViewAssets}
+                onSelectAsset={(assetId) => navigateToAssetId(assetId, "click")}
+              />
+
+              {referenceAssets.slice(3).map((asset, index) => (
+                <ReferenceCard
+                  key={asset.id}
+                  active={asset.id === activeViewerAssetId}
+                  asset={asset}
+                  index={index + 3}
+                  onSelect={() => navigateToAssetId(asset.id, "click")}
+                />
               ))}
             </div>
-          ) : null}
-        </div>
+          ) : (
+            <div className="rounded-2xl border border-white/8 bg-black/20 p-4 text-sm text-white/55">
+              Review the teaching slice set here. Use the tools on the right to
+              add pins, teaching areas, and learner-friendly notes.
+            </div>
+          )}
 
-        {referenceAssets.length > 0 ? (
-          <div className="space-y-3">
-            {referenceAssets.map((asset, index) => (
-              <ReferenceCard
-                key={asset.id}
-                active={asset.id === currentAsset?.id}
-                asset={asset}
-                index={index}
-                onSelect={() => navigateToAssetId(asset.id, "click")}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-white/8 bg-black/20 p-4 text-sm text-white/55">
-            The viewer is using the derived study stack directly. Uploading
-            manual reference slices is no longer required for normal intake.
-          </div>
-        )}
+          {selectedStructure ? (
+            <StructureDrawer
+              darkMode={darkMode}
+              relatedAssets={relatedAssets}
+              selectedAnnotation={selectedAnnotation}
+              selectedStructure={selectedStructure}
+              onJumpToAsset={(assetId) => navigateToAssetId(assetId, "click")}
+            />
+          ) : (
+            <div className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-white/55">
+              Select a topic on the image to review its summary, full teaching
+              notes, and related slices.
+            </div>
+          )}
+        </aside>
+      ) : null}
 
-        {selectedStructure ? (
-          <StructureDrawer
-            darkMode={darkMode}
-            relatedAssets={relatedAssets}
-            selectedAnnotation={selectedAnnotation}
-            selectedStructure={selectedStructure}
-            onJumpToAsset={(assetId) => navigateToAssetId(assetId, "click")}
-          />
-        ) : (
-          <div className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-white/55">
-            Select a label to inspect quick facts, detailed explanations, and
-            related slices from this uploaded study.
-          </div>
-        )}
-      </aside>
-
-      <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+      <main className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
         <ViewerCanvas
           annotationForm={annotationForm}
           canvasMode={canvasMode}
           currentAsset={currentAsset}
-          currentAssetIndex={currentAssetIndex}
+          currentImageElement={currentImageElement}
           darkMode={darkMode}
           fontScaleMode={fontScaleMode}
           hoveredAnnotationId={hoveredAnnotationId}
           ingestFailureMessage={ingestFailureMessage}
           isIngesting={shouldPollViewerData && !hasSliceAssets}
-          isCurrentImageLoaded={isCurrentImageLoaded}
+          isPreparingInitialAsset={isPreparingInitialAsset}
           showLoadingIndicator={showLoadingIndicator}
           overlayOpacity={overlayOpacity}
           overlayRef={overlayRef}
@@ -1430,6 +1559,7 @@ export function DraftModalityViewer({
           showCrossReferences={showCrossReferences}
           showOrientation={showOrientation}
           showLabels={showLabels}
+          viewerTitle={viewerTitle}
           stageRef={stageRef}
           structuresById={structuresById}
           visibleAnnotations={visibleAnnotations}
@@ -1440,463 +1570,933 @@ export function DraftModalityViewer({
           }}
           onCanvasClick={handleCanvasClick}
           onCanvasDoubleClick={handleCanvasDoubleClick}
-          onCurrentImageLoad={() => {
-            if (currentAsset?.imageUrl) {
-              imagePreloadCacheRef.current.add(currentAsset.imageUrl);
-            }
-
-            if (currentAsset?.id) {
-              setReadyAssetIds((current) => {
-                if (current.has(currentAsset.id)) {
-                  return current;
-                }
-
-                const next = new Set(current);
-                next.add(currentAsset.id);
-                return next;
-              });
-            }
-          }}
           onWheelNavigate={handleWheelNavigation}
         />
 
-        <div
-          ref={filmstripRef}
-          className="flex gap-1 absolute bottom-0 left-0 overflow-x-auto bg-white/[0.03] p-1"
-          onScroll={handleFilmstripScroll}
-        >
-          {filmstripWindow.leftSpacerWidth > 0 ? (
-            <div
-              aria-hidden="true"
-              className="shrink-0"
-              style={{ width: `${filmstripWindow.leftSpacerWidth}px` }}
-            />
-          ) : null}
-          {visibleFilmstripAssets.map(({ asset, assetIndex }) => (
-            <button
-              key={asset.id}
-              data-asset-id={asset.id}
-              type="button"
-              className={cn(
-                "group w-[3rem] shrink-0 overflow-hidden rounded-sm border text-left transition",
-                asset.id === currentAsset?.id
-                  ? "border-cyan-400/80 bg-cyan-500/10"
-                  : "bg-black/20 hover:bg-white/6",
-              )}
-              onClick={() => navigateToAsset(assetIndex, "click")}
-            >
-              <div className="aspect-square bg-black/40">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  alt={asset.label}
-                  className="h-full w-full object-cover"
-                  decoding="async"
-                  fetchPriority="low"
-                  loading="lazy"
-                  src={asset.thumbnailUrl || asset.imageUrl}
-                />
-              </div>
-            </button>
-          ))}
-          {filmstripWindow.rightSpacerWidth > 0 ? (
-            <div
-              aria-hidden="true"
-              className="shrink-0"
-              style={{ width: `${filmstripWindow.rightSpacerWidth}px` }}
-            />
-          ) : null}
+        <div className="absolute right-3 top-3 z-30 flex items-center gap-1 rounded-lg border border-white/10 bg-black/45 p-1 backdrop-blur">
+          <button
+            type="button"
+            className={cn(
+              "rounded-md border border-white/10 p-2 transition",
+              showStudyPanel
+                ? "text-white/80 hover:bg-white/10"
+                : "bg-cyan-500/20 text-cyan-200",
+            )}
+            title={showStudyPanel ? "Hide study panel" : "Show study panel"}
+            onClick={() => setShowStudyPanel((current) => !current)}
+          >
+            {showStudyPanel ? (
+              <ArrowLeft className="size-4" />
+            ) : (
+              <ArrowRight className="size-4" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="rounded-md border border-white/10 p-2 text-white/80 transition hover:bg-white/10"
+            title="Open block view"
+            onClick={() => setShowBlockView(true)}
+          >
+            <LayoutGrid className="size-4" />
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-md border border-white/10 p-2 transition",
+              showCrossReferences
+                ? "bg-cyan-500/20 text-cyan-200"
+                : "text-white/70 hover:bg-white/10",
+            )}
+            title="Toggle guide lines"
+            onClick={() => setShowCrossReferences((current) => !current)}
+          >
+            <CrosshairIcon className="size-4" />
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-md border border-white/10 p-2 transition",
+              showLabels
+                ? "bg-cyan-500/20 text-cyan-200"
+                : "text-white/70 hover:bg-white/10",
+            )}
+            title="Toggle labels"
+            onClick={() => setShowLabels((current) => !current)}
+          >
+            <Layers2Icon className="size-4" />
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-md border border-white/10 p-2 transition",
+              pinControlPanel
+                ? "bg-lime-500/20 text-lime-100"
+                : "text-white/70 hover:bg-white/10",
+            )}
+            title={pinControlPanel ? "Unpin menu panel" : "Pin menu panel"}
+            onClick={() => setPinControlPanel((current) => !current)}
+          >
+            <PinIcon className="size-4" />
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-md border border-white/10 p-2 transition",
+              showControlPanel
+                ? "text-white/80 hover:bg-white/10"
+                : "bg-cyan-500/20 text-cyan-200",
+            )}
+            title={showControlPanel ? "Hide menu panel" : "Show menu panel"}
+            onClick={() =>
+              setShowControlPanel((current) =>
+                pinControlPanel ? true : !current,
+              )
+            }
+          >
+            {showControlPanel ? (
+              <ArrowRight className="size-4" />
+            ) : (
+              <ArrowLeft className="size-4" />
+            )}
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-md border border-white/10 p-2 transition",
+              isAuthoringMode
+                ? "bg-lime-500/15 text-lime-200"
+                : "text-white/70 hover:bg-white/10",
+            )}
+            title={
+              isAuthoringMode
+                ? "Switch to learner mode"
+                : "Switch to authoring mode"
+            }
+            onClick={() =>
+              setViewerMode((current) =>
+                current === "authoring" ? "learner" : "authoring",
+              )
+            }
+          >
+            <SparklesIcon className="size-4" />
+          </button>
         </div>
-      </main>
 
-      <aside className="min-h-0 overflow-y-auto p-2">
-        <ViewerSidebarSection title="Weightings">
-          <div className="grid grid-cols-3 gap-2">
-            {weightings.map((weighting) => (
-              <button
-                key={weighting}
-                type="button"
-                className={cn(
-                  "rounded-xl border px-3 py-2 text-sm transition",
-                  weighting === activeWeighting
-                    ? "border-cyan-400 bg-cyan-500/10 text-white"
-                    : "border-white/10 text-white/65 hover:bg-white/6",
-                )}
-                onClick={() => handleWeightingChange(weighting)}
-              >
-                {formatWeightingLabel(weighting)}
-              </button>
-            ))}
-          </div>
-        </ViewerSidebarSection>
+        {!showStudyPanel ? (
+          <button
+            type="button"
+            className="absolute left-3 top-3 z-30 rounded-md border border-white/15 bg-black/45 px-2 py-1 text-xs text-white/80 backdrop-blur transition hover:bg-white/10"
+            onClick={() => setShowStudyPanel(true)}
+          >
+            Show study panel
+          </button>
+        ) : null}
 
-        <ViewerSidebarSection title="Anatomical Parts">
-          <div className="space-y-2">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between rounded-xl border border-white/10 px-3 py-2 text-sm"
-              onClick={() =>
-                setVisibleGroupIds(
-                  visibleGroupIds.length === groups.length
-                    ? []
-                    : groups.map((group) => group.id),
-                )
-              }
-            >
-              <span>Select all</span>
-              <span className="text-xs text-white/45">
-                {visibleGroupIds.length}/{groups.length}
+        {!showControlPanel ? (
+          <button
+            type="button"
+            className="absolute right-3 top-14 z-30 rounded-md border border-white/15 bg-black/45 px-2 py-1 text-xs text-white/80 backdrop-blur transition hover:bg-white/10"
+            onClick={() => setShowControlPanel(true)}
+          >
+            Show menu
+          </button>
+        ) : null}
+
+        {lockedPreviewStructure ? (
+          <div className="absolute right-4 top-20 z-30 w-72 rounded-xl border border-lime-300/55 bg-[#20242b]/95 p-3 shadow-xl backdrop-blur">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="truncate text-sm font-semibold text-lime-100">
+                {lockedPreviewStructure.title}
+              </div>
+              <span className="rounded bg-lime-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-lime-200">
+                Locked
               </span>
-            </button>
-            {groups.map((group) => (
-              <button
-                key={group.id}
+            </div>
+            <p className="text-xs text-lime-200/80">
+              Learners need a subscription to open this lesson card in full
+              mode.
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <Button
+                size="sm"
                 type="button"
-                className="flex w-full items-center justify-between rounded-xl border border-white/8 px-3 py-2 text-left text-sm"
                 onClick={() =>
-                  updateGroupVisibility(
-                    group.id,
-                    !visibleGroupIds.includes(group.id),
+                  toast.info("Subscription preview card shown in admin mode.")
+                }
+              >
+                Subscribe
+              </Button>
+              <button
+                type="button"
+                className="text-xs text-cyan-200 underline underline-offset-2"
+                onClick={() =>
+                  toast.info(
+                    "Learner sign-in flow is handled in the learner app.",
                   )
                 }
               >
-                <span className="flex items-center gap-2">
-                  <span
-                    className="size-2.5 rounded-full"
-                    style={{ backgroundColor: group.colorHex }}
-                  />
-                  {group.title}
-                </span>
-                {visibleGroupIds.includes(group.id) ? (
-                  <EyeIcon className="size-4 text-white/60" />
-                ) : (
-                  <EyeOffIcon className="size-4 text-white/35" />
-                )}
+                Already subscribed? Sign in
               </button>
-            ))}
-          </div>
-        </ViewerSidebarSection>
-
-        <ViewerSidebarSection title="Transformations">
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() =>
-                navigateToAsset(
-                  clamp(currentAssetIndex - 1, 0, activeAssets.length - 1),
-                  "button",
-                )
-              }
-            >
-              Previous
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() =>
-                navigateToAsset(
-                  clamp(currentAssetIndex + 1, 0, activeAssets.length - 1),
-                  "button",
-                )
-              }
-            >
-              Next
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                setCanvasMode("browse");
-                setAnnotationForm(EMPTY_ANNOTATION_FORM);
-              }}
-            >
-              Reset
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={handleCaptureSnapshot}
-            >
-              <CameraIcon className="size-4" />
-              Snapshot
-            </Button>
-          </div>
-        </ViewerSidebarSection>
-
-        <ViewerSidebarSection title="Labeling">
-          <div className="grid grid-cols-2 gap-2">
-            <TogglePill
-              active={practiceMode}
-              label="Practice"
-              onToggle={setPracticeMode}
-            />
-            <TogglePill active={pinsOnly} label="Pins" onToggle={setPinsOnly} />
-            <TogglePill
-              active={targetedLabeling}
-              label="Targeted"
-              onToggle={setTargetedLabeling}
-            />
-            <TogglePill
-              active={showLabels}
-              label="Labels"
-              onToggle={setShowLabels}
-            />
-          </div>
-          <div className="mt-3 flex gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setFontScaleMode("auto")}
-            >
-              Auto
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setFontScaleMode("large")}
-            >
-              Large
-            </Button>
-          </div>
-        </ViewerSidebarSection>
-
-        <ViewerSidebarSection title="Display">
-          <div className="space-y-2">
-            <ToggleRow
-              active={showOrientation}
-              label="Orientation"
-              onToggle={setShowOrientation}
-            />
-            <ToggleRow
-              active={showCrossReferences}
-              label="Cross references"
-              onToggle={setShowCrossReferences}
-            />
-            <ToggleRow
-              active={darkMode}
-              label="Dark mode"
-              onToggle={setDarkMode}
-            />
-            <ToggleRow
-              active={reverseScroll}
-              label="Reverse scroll"
-              onToggle={setReverseScroll}
-            />
-            <ToggleRow
-              active={pointAnimation}
-              label="Point animation"
-              onToggle={setPointAnimation}
-            />
-          </div>
-          <div className="mt-3 space-y-2">
-            <div className="text-xs uppercase tracking-[0.18em] text-white/40">
-              Overlay opacity
             </div>
-            <input
-              className="w-full accent-cyan-400"
-              max={1}
-              min={0.1}
-              step={0.05}
-              type="range"
-              value={overlayOpacity}
-              onChange={(event) =>
-                setOverlayOpacity(Number(event.target.value))
-              }
-            />
           </div>
-        </ViewerSidebarSection>
+        ) : null}
 
-        <ViewerSidebarSection title="Authoring">
-          <div className="space-y-5">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium">Group</div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setGroupForm(EMPTY_GROUP_FORM)}
-                >
-                  New
-                </Button>
+        {showBlockView ? (
+          <div className="absolute inset-0 z-40 bg-black/80 p-4 backdrop-blur-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-base font-semibold text-white">
+                All series - {activeAssets.length} images
               </div>
-              <Input
-                placeholder="Group title"
-                value={groupForm.title}
-                onChange={(event) =>
-                  updateGroupForm("title", event.target.value)
-                }
-              />
-              <Input
-                placeholder="Color hex"
-                value={groupForm.colorHex}
-                onChange={(event) =>
-                  updateGroupForm("colorHex", event.target.value)
-                }
-              />
-              <Textarea
-                placeholder="Group description"
-                value={groupForm.description}
-                onChange={(event) =>
-                  updateGroupForm("description", event.target.value)
-                }
-              />
               <Button
-                disabled={busy}
                 type="button"
                 variant="secondary"
-                onClick={handleSaveGroup}
+                onClick={() => setShowBlockView(false)}
               >
-                {busy ? (
-                  <LoaderCircleIcon className="size-4 animate-spin" />
-                ) : (
-                  <Layers2Icon className="size-4" />
-                )}
-                Save group
+                Close
               </Button>
             </div>
+            <div className="grid max-h-[calc(100vh-49px)] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
+              {activeAssets.map((asset, assetIndex) => (
+                <button
+                  key={`block-${asset.id}`}
+                  type="button"
+                  className={cn(
+                    "overflow-hidden rounded-sm border bg-black/40 transition",
+                    asset.id === activeViewerAssetId
+                      ? "border-cyan-300 ring-1 ring-cyan-300/70"
+                      : "border-white/10 hover:border-white/30",
+                  )}
+                  onClick={() => {
+                    navigateToAsset(assetIndex, "click");
+                    setShowBlockView(false);
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt={asset.label}
+                    className="aspect-square w-full object-cover"
+                    decoding="async"
+                    fetchPriority="low"
+                    loading="lazy"
+                    src={asset.thumbnailUrl || asset.imageUrl}
+                  />
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </main>
+      <div className="absolute px-2 bottom-0 w-full left-0 bg-white/[0.03]">
+        <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-sm  p-1">
+          <div className="flex size-6 items-center justify-center rounded-md">
+            <NextImage src="/logo.png" alt="Anatomy" height={24} width={24} />
+          </div>
 
+          <div className="relative min-w-0">
+            <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-cyan-300/95 shadow-[0_0_10px_rgba(34,211,238,0.85)]" />
+            <div
+              ref={filmstripScrollerRef}
+              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-white/[0.03] p-1"
+            >
+              <div className="flex w-max items-end gap-1">
+                {filmstripAssets.map(({ asset, assetIndex }) => (
+                  <button
+                    key={asset.id}
+                    data-asset-id={asset.id}
+                    type="button"
+                    className={cn(
+                      "group relative w-9 shrink-0 overflow-hidden rounded-sm border border-transparent text-left transition",
+                      asset.id === activeViewerAssetId
+                        ? "bg-cyan-500/20 opacity-100"
+                        : "bg-black/20 opacity-60 hover:bg-white/6 hover:opacity-100",
+                    )}
+                    onClick={() => navigateToAsset(assetIndex, "click")}
+                  >
+                    <div className="aspect-square bg-black/40">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        alt={asset.label}
+                        className="h-full w-full object-cover"
+                        decoding="async"
+                        fetchPriority="low"
+                        loading="lazy"
+                        src={asset.thumbnailUrl || asset.imageUrl}
+                      />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 items-center">
+            <Button size={"icon"} onClick={() => setShowBlockView(true)}>
+              <LayoutGrid />
+            </Button>
+            <Button
+              size={"icon"}
+              onClick={() =>
+                navigateToAsset(
+                  clamp(navigationAssetIndex - 1, 0, activeAssets.length - 1),
+                  "button",
+                )
+              }
+            >
+              <ArrowLeft />
+            </Button>
+            <p className="pr-1 text-sm font-semibold tabular-nums text-white/85 w-24 text-center">
+              {navigationAssetIndex >= 0
+                ? `${navigationAssetIndex + 1}/${activeAssets.length}`
+                : `0/${activeAssets.length}`}
+            </p>
+            <Button
+              size={"icon"}
+              onClick={() =>
+                navigateToAsset(
+                  clamp(navigationAssetIndex + 1, 0, activeAssets.length - 1),
+                  "button",
+                )
+              }
+            >
+              <ArrowRight />
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {showControlPanel ? (
+        <aside className="min-h-0 overflow-y-auto p-2">
+          <div className="mb-3 flex items-center justify-between rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+            <div className="text-sm font-semibold text-white">
+              {isAuthoringMode ? "Authoring Menu" : "Learner Menu"}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className={cn(
+                  "rounded-md border border-white/10 p-1.5 transition",
+                  pinControlPanel
+                    ? "bg-lime-500/20 text-lime-100"
+                    : "text-white/70 hover:bg-white/10",
+                )}
+                title={pinControlPanel ? "Unpin menu panel" : "Pin menu panel"}
+                onClick={() => setPinControlPanel((current) => !current)}
+              >
+                <PinIcon className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-white/10 px-2 py-1 text-xs text-white/70 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={pinControlPanel}
+                title={
+                  pinControlPanel ? "Unpin to hide panel" : "Hide menu panel"
+                }
+                onClick={() => setShowControlPanel(false)}
+              >
+                Hide
+              </button>
+            </div>
+          </div>
+
+          <ViewerSidebarSection title="Weightings">
+            <div className="grid grid-cols-3 gap-2">
+              {weightings.map((weighting) => (
+                <button
+                  key={weighting}
+                  type="button"
+                  className={cn(
+                    "rounded-xl border px-3 py-2 text-sm transition",
+                    weighting === activeWeighting
+                      ? "border-cyan-400 bg-cyan-500/10 text-white"
+                      : "border-white/10 text-white/65 hover:bg-white/6",
+                  )}
+                  onClick={() => handleWeightingChange(weighting)}
+                >
+                  {formatWeightingLabel(weighting)}
+                </button>
+              ))}
+            </div>
+          </ViewerSidebarSection>
+
+          <ViewerSidebarSection title="Anatomical Parts">
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium">Structure</div>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-xl border border-white/10 px-3 py-2 text-sm"
+                onClick={() =>
+                  setVisibleGroupIds(
+                    visibleGroupIds.length === groups.length
+                      ? []
+                      : groups.map((group) => group.id),
+                  )
+                }
+              >
+                <span>Select all</span>
+                <span className="text-xs text-white/45">
+                  {visibleGroupIds.length}/{groups.length}
+                </span>
+              </button>
+              <div className="grid grid-cols-3 gap-2">
                 <Button
                   type="button"
                   size="sm"
                   variant="secondary"
-                  onClick={() => {
-                    setSelectedStructureId(null);
-                    setSelectedAnnotationId(null);
-                  }}
+                  onClick={() =>
+                    setVisibleGroupIds(groups.map((group) => group.id))
+                  }
                 >
-                  New
+                  Show all
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setVisibleGroupIds([])}
+                >
+                  Hide all
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setVisibleGroupIds(
+                      groups
+                        .filter((group) => group.isDefaultVisible)
+                        .map((group) => group.id),
+                    )
+                  }
+                >
+                  Defaults
                 </Button>
               </div>
-              <Input
-                placeholder="Structure title"
-                value={structureForm.title}
-                onChange={(event) =>
-                  updateStructureForm("title", event.target.value)
-                }
-              />
-              <Input
-                placeholder="Latin name"
-                value={structureForm.latinName}
-                onChange={(event) =>
-                  updateStructureForm("latinName", event.target.value)
-                }
-              />
-              <select
-                className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
-                value={structureForm.groupId}
-                onChange={(event) =>
-                  updateStructureForm("groupId", event.target.value)
-                }
-              >
-                <option value="">Ungrouped</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
+              {groups.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  className="flex w-full items-center justify-between rounded-xl border border-white/8 px-3 py-2 text-left text-sm"
+                  onClick={() =>
+                    updateGroupVisibility(
+                      group.id,
+                      !visibleGroupIds.includes(group.id),
+                    )
+                  }
+                >
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="size-2.5 rounded-full"
+                      style={{ backgroundColor: group.colorHex }}
+                    />
                     {group.title}
-                  </option>
-                ))}
-              </select>
-              <Textarea
-                placeholder="Quick info"
-                value={structureForm.shortDescription}
-                onChange={(event) =>
-                  updateStructureForm("shortDescription", event.target.value)
-                }
-              />
-              <Textarea
-                placeholder="Detailed explanation"
-                value={structureForm.longDescription}
-                onChange={(event) =>
-                  updateStructureForm("longDescription", event.target.value)
-                }
-              />
-              <Button
-                disabled={busy}
-                type="button"
-                onClick={handleSaveStructure}
-              >
-                {busy ? (
-                  <LoaderCircleIcon className="size-4 animate-spin" />
-                ) : (
-                  <SparklesIcon className="size-4" />
-                )}
-                Save structure
-              </Button>
+                  </span>
+                  {visibleGroupIds.includes(group.id) ? (
+                    <EyeIcon className="size-4 text-white/60" />
+                  ) : (
+                    <EyeOffIcon className="size-4 text-white/35" />
+                  )}
+                </button>
+              ))}
             </div>
+          </ViewerSidebarSection>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium">Annotation</div>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setCanvasMode("create-label")}
-                  >
-                    <PinIcon className="size-4" />
-                    New
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setCanvasMode("draw-region")}
-                  >
-                    <CrosshairIcon className="size-4" />
-                    Region
-                  </Button>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => setCanvasMode("set-anchor")}
-                >
-                  Set anchor
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => setCanvasMode("set-label")}
-                >
-                  Set label
-                </Button>
-              </div>
-              <Input
-                placeholder="Label override"
-                value={annotationForm.titleOverride}
-                onChange={(event) =>
-                  updateAnnotationForm("titleOverride", event.target.value)
-                }
-              />
-              <Textarea
-                placeholder="Annotation note"
-                value={annotationForm.note}
-                onChange={(event) =>
-                  updateAnnotationForm("note", event.target.value)
-                }
-              />
+          <ViewerSidebarSection title="Transformations">
+            <div className="grid grid-cols-2 gap-2">
               <Button
-                disabled={busy || !selectedStructure}
                 type="button"
-                onClick={handleSaveAnnotation}
+                variant="secondary"
+                onClick={() =>
+                  navigateToAsset(
+                    clamp(navigationAssetIndex - 1, 0, activeAssets.length - 1),
+                    "button",
+                  )
+                }
               >
-                {busy ? (
-                  <LoaderCircleIcon className="size-4 animate-spin" />
-                ) : (
-                  <CircleIcon className="size-4" />
-                )}
-                Save annotation
+                Previous
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() =>
+                  navigateToAsset(
+                    clamp(navigationAssetIndex + 1, 0, activeAssets.length - 1),
+                    "button",
+                  )
+                }
+              >
+                Next
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={resetAuthoringDraft}
+              >
+                <RotateCcwIcon className="size-4" />
+                Reset
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleCaptureSnapshot}
+              >
+                <CameraIcon className="size-4" />
+                Screenshot
               </Button>
             </div>
-          </div>
-        </ViewerSidebarSection>
-      </aside>
+          </ViewerSidebarSection>
+
+          {isAuthoringMode ? (
+            <>
+              <ViewerSidebarSection title="Labeling">
+                <div className="grid grid-cols-2 gap-2">
+                  <TogglePill
+                    active={practiceMode}
+                    label="Practice mode"
+                    onToggle={setPracticeMode}
+                  />
+                  <TogglePill
+                    active={pinsOnly}
+                    label="Pins only"
+                    onToggle={setPinsOnly}
+                  />
+                  <TogglePill
+                    active={targetedLabeling}
+                    label="Focus topic"
+                    onToggle={setTargetedLabeling}
+                  />
+                  <TogglePill
+                    active={showLabels}
+                    label="Show names"
+                    onToggle={setShowLabels}
+                  />
+                </div>
+                <div className="mt-3">
+                  <div className="mb-2 text-sm text-white/70">Text size</div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setFontScaleMode("auto")}
+                    >
+                      Auto
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setFontScaleMode("large")}
+                    >
+                      Large
+                    </Button>
+                  </div>
+                </div>
+              </ViewerSidebarSection>
+
+              <ViewerSidebarSection title="Display mode">
+                <div className="space-y-2">
+                  <ToggleRow
+                    active={showOrientation}
+                    label="Orientation title"
+                    onToggle={setShowOrientation}
+                  />
+                  <ToggleRow
+                    active={showCrossReferences}
+                    label="Guide lines"
+                    onToggle={setShowCrossReferences}
+                  />
+                  <ToggleRow
+                    active={darkMode}
+                    label="Dark background"
+                    onToggle={setDarkMode}
+                  />
+                </div>
+                <div className="mt-3 space-y-2">
+                  <div className="text-sm text-white/70">Overlay strength</div>
+                  <input
+                    className="w-full accent-cyan-400"
+                    max={1}
+                    min={0.1}
+                    step={0.05}
+                    type="range"
+                    value={overlayOpacity}
+                    onChange={(event) =>
+                      setOverlayOpacity(Number(event.target.value))
+                    }
+                  />
+                </div>
+              </ViewerSidebarSection>
+
+              <ViewerSidebarSection title="Advanced settings">
+                <div className="space-y-2">
+                  <ToggleRow
+                    active={reverseScroll}
+                    label="Reverse scroll"
+                    onToggle={setReverseScroll}
+                  />
+                  <ToggleRow
+                    active={pointAnimation}
+                    label="Pulse markers"
+                    onToggle={setPointAnimation}
+                  />
+                </div>
+              </ViewerSidebarSection>
+            </>
+          ) : (
+            <ViewerSidebarSection title="Study controls">
+              <div className="grid grid-cols-2 gap-2">
+                <TogglePill
+                  active={showLabels}
+                  label="Show names"
+                  onToggle={setShowLabels}
+                />
+                <TogglePill
+                  active={pinsOnly}
+                  label="Pins only"
+                  onToggle={setPinsOnly}
+                />
+                <TogglePill
+                  active={practiceMode}
+                  label="Practice"
+                  onToggle={setPracticeMode}
+                />
+                <TogglePill
+                  active={darkMode}
+                  label="Dark mode"
+                  onToggle={setDarkMode}
+                />
+              </div>
+              <div className="mt-3 space-y-2">
+                <ToggleRow
+                  active={showOrientation}
+                  label="Orientation title"
+                  onToggle={setShowOrientation}
+                />
+                <ToggleRow
+                  active={showCrossReferences}
+                  label="Guide lines"
+                  onToggle={setShowCrossReferences}
+                />
+              </div>
+              <div className="mt-3 space-y-2">
+                <div className="text-sm text-white/70">Overlay strength</div>
+                <input
+                  className="w-full accent-cyan-400"
+                  max={1}
+                  min={0.1}
+                  step={0.05}
+                  type="range"
+                  value={overlayOpacity}
+                  onChange={(event) =>
+                    setOverlayOpacity(Number(event.target.value))
+                  }
+                />
+              </div>
+            </ViewerSidebarSection>
+          )}
+
+          {isAuthoringMode ? (
+            <>
+              <ViewerSidebarSection title="Workflow status">
+                <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3 text-sm text-white/70">
+                  Follow this order: group, then topic, then pin/area.
+                  Controls only
+                  appear when the previous step is ready.
+                </div>
+                <div className="mt-3 rounded-2xl border border-white/8 bg-black/20 p-3 text-sm text-white/70">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Selected topic</span>
+                    <span className="text-right text-white">
+                      {selectedStructure?.title ?? "No topic selected yet"}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span>Current tool</span>
+                    <span className="text-right text-white">
+                      {getCanvasModeLabel(canvasMode)}
+                    </span>
+                  </div>
+                </div>
+              </ViewerSidebarSection>
+
+              <ViewerSidebarSection title="Authoring workflow">
+                <div className="space-y-4">
+                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-medium text-white">
+                        Step 1: Group
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setGroupForm(EMPTY_GROUP_FORM)}
+                      >
+                        New
+                      </Button>
+                    </div>
+                    <Input
+                      placeholder="Group title"
+                      value={groupForm.title}
+                      onChange={(event) =>
+                        updateGroupForm("title", event.target.value)
+                      }
+                    />
+                    <Input
+                      placeholder="Color hex"
+                      value={groupForm.colorHex}
+                      onChange={(event) =>
+                        updateGroupForm("colorHex", event.target.value)
+                      }
+                    />
+                    <Button
+                      disabled={busy}
+                      type="button"
+                      variant="secondary"
+                      onClick={handleSaveGroup}
+                    >
+                      {busy ? (
+                        <LoaderCircleIcon className="size-4 animate-spin" />
+                      ) : (
+                        <Layers2Icon className="size-4" />
+                      )}
+                      Save group
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-medium text-white">
+                        Step 2: Topic
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setSelectedStructureId(null);
+                          setSelectedAnnotationId(null);
+                        }}
+                      >
+                        New
+                      </Button>
+                    </div>
+                    <Input
+                      placeholder="Topic title"
+                      value={structureForm.title}
+                      onChange={(event) =>
+                        updateStructureForm("title", event.target.value)
+                      }
+                    />
+                    <select
+                      className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
+                      value={structureForm.groupId}
+                      onChange={(event) =>
+                        updateStructureForm("groupId", event.target.value)
+                      }
+                    >
+                      <option value="">No group yet</option>
+                      {groups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.title}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
+                      value={structureForm.accessLevel}
+                      onChange={(event) =>
+                        updateStructureForm(
+                          "accessLevel",
+                          event.target.value as ViewerAccessLevel,
+                        )
+                      }
+                    >
+                      <option value="free">Open to all learners</option>
+                      <option value="subscription">Subscriber lesson</option>
+                    </select>
+                    <Textarea
+                      placeholder="Short explanation shown first"
+                      value={structureForm.shortDescription}
+                      onChange={(event) =>
+                        updateStructureForm("shortDescription", event.target.value)
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="text-left text-xs text-cyan-300 underline underline-offset-2"
+                      onClick={() =>
+                        setShowStructureAdvanced((current) => !current)
+                      }
+                    >
+                      {showStructureAdvanced
+                        ? "Hide advanced topic fields"
+                        : "Show advanced topic fields"}
+                    </button>
+                    {showStructureAdvanced ? (
+                      <>
+                        <Input
+                          placeholder="Latin name"
+                          value={structureForm.latinName}
+                          onChange={(event) =>
+                            updateStructureForm("latinName", event.target.value)
+                          }
+                        />
+                        <Textarea
+                          placeholder="Detailed teaching explanation"
+                          value={structureForm.longDescription}
+                          onChange={(event) =>
+                            updateStructureForm("longDescription", event.target.value)
+                          }
+                        />
+                        <Textarea
+                          placeholder="Key learning points, one line per point"
+                          value={structureForm.learningPoints}
+                          onChange={(event) =>
+                            updateStructureForm("learningPoints", event.target.value)
+                          }
+                        />
+                        <Textarea
+                          placeholder="Other names, separated by commas"
+                          value={structureForm.synonyms}
+                          onChange={(event) =>
+                            updateStructureForm("synonyms", event.target.value)
+                          }
+                        />
+                      </>
+                    ) : null}
+                    <Button
+                      disabled={busy}
+                      type="button"
+                      onClick={handleSaveStructure}
+                    >
+                      {busy ? (
+                        <LoaderCircleIcon className="size-4 animate-spin" />
+                      ) : (
+                        <SparklesIcon className="size-4" />
+                      )}
+                      Save topic
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
+                    <div className="text-sm font-medium text-white">
+                      Step 3: Pin and area
+                    </div>
+                    {!canEditPinArea ? (
+                      <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
+                        Save or select a topic first. Pin and area tools unlock
+                        automatically after that.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setCanvasMode("create-label")}
+                          >
+                            <PinIcon className="size-4" />
+                            Place pin
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setCanvasMode("draw-region")}
+                          >
+                            <CrosshairIcon className="size-4" />
+                            Brush area
+                          </Button>
+                        </div>
+                        <div className="rounded-xl border border-white/8 bg-black/25 p-3 text-sm text-white/70">
+                          {getCanvasModeDescription(canvasMode)}
+                        </div>
+
+                        {canEditAnnotationDetails ? (
+                          <>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => setCanvasMode("set-anchor")}
+                              >
+                                Move pin
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => setCanvasMode("set-label")}
+                              >
+                                Move name
+                              </Button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Button
+                                disabled={annotationForm.polygonPoints.length === 0}
+                                type="button"
+                                variant="secondary"
+                                onClick={removeLastPolygonPoint}
+                              >
+                                <Undo2Icon className="size-4" />
+                                Undo point
+                              </Button>
+                              <Button
+                                disabled={annotationForm.polygonPoints.length === 0}
+                                type="button"
+                                variant="secondary"
+                                onClick={clearPolygonDraft}
+                              >
+                                <RotateCcwIcon className="size-4" />
+                                Clear area
+                              </Button>
+                            </div>
+                            <Input
+                              placeholder="Name shown on the image"
+                              value={annotationForm.titleOverride}
+                              onChange={(event) =>
+                                updateAnnotationForm("titleOverride", event.target.value)
+                              }
+                            />
+                            <Textarea
+                              placeholder="Teaching note"
+                              value={annotationForm.note}
+                              onChange={(event) =>
+                                updateAnnotationForm("note", event.target.value)
+                              }
+                            />
+                            <Button
+                              disabled={busy || !selectedStructure}
+                              type="button"
+                              onClick={handleSaveAnnotation}
+                            >
+                              {busy ? (
+                                <LoaderCircleIcon className="size-4 animate-spin" />
+                              ) : (
+                                <CircleIcon className="size-4" />
+                              )}
+                              Save annotation
+                            </Button>
+                          </>
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
+                            Place one pin or start brushing an area to unlock
+                            annotation details.
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </ViewerSidebarSection>
+            </>
+          ) : (
+            <ViewerSidebarSection title="Learner preview">
+              <div className="rounded-2xl border border-cyan-300/30 bg-cyan-500/10 p-3 text-sm text-cyan-100">
+                Learner mode keeps only study controls and topic exploration.
+                Authoring steps are hidden to avoid accidental editing.
+              </div>
+            </ViewerSidebarSection>
+          )}
+        </aside>
+      ) : null}
     </div>
   );
 }
@@ -2051,6 +2651,56 @@ function ReferenceCard({
   );
 }
 
+function TriViewStudyPanel({
+  activeAssetId,
+  assets,
+  onSelectAsset,
+}: {
+  activeAssetId: string | null;
+  assets: ZoneModalityAsset[];
+  onSelectAsset: (assetId: string) => void;
+}) {
+  const labels = ["SAGITTAL", "CORONAL", "3D"];
+
+  if (assets.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-white/8 bg-black/25 p-3">
+      {assets.map((asset, index) => (
+        <button
+          key={`tri-${asset.id}`}
+          type="button"
+          className={cn(
+            "w-full rounded-xl border p-2 text-left transition",
+            asset.id === activeAssetId
+              ? "border-cyan-300/70 bg-cyan-500/10"
+              : "border-white/8 bg-black/20 hover:bg-white/5",
+          )}
+          onClick={() => onSelectAsset(asset.id)}
+        >
+          <div className="mb-2 text-xs font-semibold tracking-[0.18em] text-cyan-300">
+            {labels[index] ?? `REF ${index + 1}`}
+          </div>
+          <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/35">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt={asset.label}
+              className="h-28 w-full object-cover"
+              decoding="async"
+              fetchPriority="low"
+              loading="lazy"
+              src={asset.thumbnailUrl || asset.imageUrl}
+            />
+            <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-cyan-300/75" />
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function StructureDrawer({
   darkMode,
   relatedAssets,
@@ -2090,7 +2740,7 @@ function StructureDrawer({
           ) : null}
         </div>
         <Badge variant={isLocked ? "outline" : "secondary"}>
-          {isLocked ? "Subscription" : "Free"}
+          {isLocked ? "Subscriber lesson" : "Open lesson"}
         </Badge>
       </div>
 
@@ -2102,9 +2752,8 @@ function StructureDrawer({
 
       {isLocked ? (
         <div className="mt-4 rounded-2xl border border-lime-400/40 bg-lime-400/8 p-4 text-sm">
-          Full detailed explanation is gated in student mode. The admin preview
-          keeps the access state visible so premium structures can be reviewed
-          before publish.
+          Learners will only see the subscriber version of this topic until you
+          publish broader access.
         </div>
       ) : selectedStructure.longDescription ? (
         <div className="mt-4 space-y-3 text-sm leading-6 text-white/72">
@@ -2176,23 +2825,24 @@ function ViewerCanvas({
   annotationForm,
   canvasMode,
   currentAsset,
-  currentAssetIndex,
+  currentImageElement,
   darkMode,
   fontScaleMode,
   hoveredAnnotationId,
   ingestFailureMessage,
   isIngesting,
+  isPreparingInitialAsset,
   overlayOpacity,
   overlayRef,
   pinsOnly,
   pointAnimation,
   practiceMode,
   selectedAnnotationId,
-  isCurrentImageLoaded,
   showLoadingIndicator,
   showCrossReferences,
   showOrientation,
   showLabels,
+  viewerTitle,
   stageRef,
   structuresById,
   visibleAnnotations,
@@ -2200,29 +2850,29 @@ function ViewerCanvas({
   onAnnotationSelect,
   onCanvasClick,
   onCanvasDoubleClick,
-  onCurrentImageLoad,
   onWheelNavigate,
 }: {
   annotationForm: AnnotationFormState;
   canvasMode: ViewerCanvasMode;
   currentAsset: ZoneModalityAsset | null;
-  currentAssetIndex: number;
+  currentImageElement: HTMLImageElement | null;
   darkMode: boolean;
   fontScaleMode: FontScaleMode;
   hoveredAnnotationId: string | null;
   ingestFailureMessage: string | null;
   isIngesting: boolean;
+  isPreparingInitialAsset: boolean;
   overlayOpacity: number;
   overlayRef: MutableRefObject<SVGSVGElement | null>;
   pinsOnly: boolean;
   pointAnimation: boolean;
   practiceMode: boolean;
   selectedAnnotationId: string | null;
-  isCurrentImageLoaded: boolean;
   showLoadingIndicator: boolean;
   showCrossReferences: boolean;
   showOrientation: boolean;
   showLabels: boolean;
+  viewerTitle: string;
   stageRef: MutableRefObject<HTMLDivElement | null>;
   structuresById: Map<string, ViewerStructure>;
   visibleAnnotations: ViewerAnnotation[];
@@ -2230,10 +2880,98 @@ function ViewerCanvas({
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   onCanvasClick: (point: ViewerAnnotationPoint) => void;
   onCanvasDoubleClick: () => void;
-  onCurrentImageLoad: () => void;
   onWheelNavigate: (deltaY: number) => void;
 }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const brushingRef = useRef(false);
+  const lastBrushPointRef = useRef<ViewerAnnotationPoint | null>(null);
+
+  const resolvePointerPoint = useCallback(
+    (event: {
+      clientX: number;
+      clientY: number;
+      currentTarget: SVGSVGElement;
+    }) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+
+      return {
+        x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+        y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+      };
+    },
+    [],
+  );
+
+  const commitBrushPoint = useCallback(
+    (point: ViewerAnnotationPoint, force = false) => {
+      const previousPoint = lastBrushPointRef.current;
+
+      if (!force && previousPoint) {
+        const deltaX = point.x - previousPoint.x;
+        const deltaY = point.y - previousPoint.y;
+
+        if (Math.hypot(deltaX, deltaY) < BRUSH_POINT_STEP) {
+          return;
+        }
+      }
+
+      lastBrushPointRef.current = point;
+      onCanvasClick(point);
+    },
+    [onCanvasClick],
+  );
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+
+    if (!canvas || !currentImageElement) {
+      return;
+    }
+
+    const width =
+      currentAsset?.width ??
+      currentImageElement.naturalWidth ??
+      currentImageElement.width;
+    const height =
+      currentAsset?.height ??
+      currentImageElement.naturalHeight ??
+      currentImageElement.height;
+    const context = canvas.getContext("2d");
+
+    if (!context || width <= 0 || height <= 0) {
+      return;
+    }
+
+    if (canvas.width !== width) {
+      canvas.width = width;
+    }
+
+    if (canvas.height !== height) {
+      canvas.height = height;
+    }
+
+    context.clearRect(0, 0, width, height);
+    context.drawImage(currentImageElement, 0, 0, width, height);
+  }, [
+    currentAsset?.height,
+    currentAsset?.id,
+    currentAsset?.width,
+    currentImageElement,
+  ]);
+
   if (!currentAsset) {
+    if (isPreparingInitialAsset) {
+      return (
+        <div className="flex min-h-[40rem] flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 px-6 text-center text-white/70">
+          <LoaderCircleIcon className="size-5 animate-spin" />
+          <p className="mt-3 max-w-lg text-sm leading-6">
+            Preparing the study stack. The first decoded slice appears as soon
+            as it is ready to render without a flash.
+          </p>
+        </div>
+      );
+    }
+
     if (isIngesting) {
       return (
         <div className="flex min-h-[40rem] flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 px-6 text-center text-white/70">
@@ -2265,11 +3003,6 @@ function ViewerCanvas({
     canvasMode !== "browse"
       ? annotationForm.polygonPoints.map(pointToPercentPair).join(" ")
       : null;
-  const previewImageUrl =
-    currentAsset.thumbnailUrl &&
-    currentAsset.thumbnailUrl !== currentAsset.imageUrl
-      ? currentAsset.thumbnailUrl
-      : null;
 
   return (
     <div
@@ -2279,7 +3012,7 @@ function ViewerCanvas({
       )}
     >
       <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center px-6 py-4 text-sm">
-        {showOrientation ? "Brain - MRI (Axial)" : "Viewer"}
+        {showOrientation ? viewerTitle : "Viewer"}
       </div>
 
       <div
@@ -2291,53 +3024,64 @@ function ViewerCanvas({
           onWheelNavigate(event.deltaY);
         }}
       >
-        <div className="relative inline-block max-h-[78vh] max-w-full">
-          {previewImageUrl ? (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                alt=""
-                aria-hidden="true"
-                className="block max-h-[78vh] max-w-full"
-                decoding="async"
-                fetchPriority="high"
-                loading="eager"
-                src={previewImageUrl}
-              />
-            </>
-          ) : null}
+        <div className="relative inline-block max-w-full">
           {showLoadingIndicator ? (
             <div className="absolute right-3 top-3 z-20 flex items-center rounded-full border border-white/12 bg-black/60 px-3 py-1.5 text-xs text-white/75 shadow-lg">
               <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
               Loading slice...
             </div>
           ) : null}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            key={currentAsset.id}
-            alt={currentAsset.label}
-            className={cn(
-              previewImageUrl
-                ? "absolute inset-0 h-full w-full object-contain transition-opacity duration-100"
-                : "block max-h-[78vh] max-w-full transition-opacity duration-100",
-              isCurrentImageLoaded ? "opacity-100" : "opacity-0",
-            )}
-            decoding="async"
-            fetchPriority="high"
-            loading="eager"
-            src={currentAsset.imageUrl}
-            onLoad={onCurrentImageLoad}
+          <canvas
+            ref={canvasRef}
+            aria-label={currentAsset.label}
+            className="block max-h-[84vh] w-[min(82vh,82vw)] max-w-full object-contain"
           />
           <svg
             ref={overlayRef}
             className="absolute inset-0 h-full w-full"
             viewBox="0 0 1000 1000"
             onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              onCanvasClick({
-                x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
-                y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
-              });
+              if (canvasMode === "draw-region") {
+                return;
+              }
+
+              onCanvasClick(resolvePointerPoint(event));
+            }}
+            onPointerDown={(event) => {
+              if (canvasMode !== "draw-region") {
+                return;
+              }
+
+              brushingRef.current = true;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              commitBrushPoint(resolvePointerPoint(event), true);
+            }}
+            onPointerMove={(event) => {
+              if (canvasMode !== "draw-region" || !brushingRef.current) {
+                return;
+              }
+
+              commitBrushPoint(resolvePointerPoint(event));
+            }}
+            onPointerUp={(event) => {
+              if (canvasMode !== "draw-region") {
+                return;
+              }
+
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+
+              brushingRef.current = false;
+              lastBrushPointRef.current = null;
+            }}
+            onPointerLeave={() => {
+              if (canvasMode !== "draw-region") {
+                return;
+              }
+
+              brushingRef.current = false;
+              lastBrushPointRef.current = null;
             }}
           >
             {visibleAnnotations.map((annotation) => {
@@ -2467,26 +3211,41 @@ function isSliceAsset(asset: ZoneModalityAsset) {
   return asset.assetKind === "slice" || asset.assetKind === "derived_slice";
 }
 
-function formatIngestStatusLabel(status: string) {
-  switch (status) {
-    case "queued":
-      return "Queued";
-    case "uploaded":
-      return "Uploaded";
-    case "validating":
-      return "Validating";
-    case "needs_review":
-      return "Needs review";
-    case "deriving":
-      return "Deriving";
-    case "ready_for_edit":
-      return "Ready";
-    case "failed":
-      return "Failed";
-    case "cancelled":
-      return "Cancelled";
+function formatModalityTypeLabel(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  switch (value.toLowerCase()) {
+    case "mri":
+      return "MRI";
+    case "ct":
+      return "CT";
+    case "mra":
+      return "MRA";
+    case "mrv":
+      return "MRV";
+    case "cbct":
+      return "CBCT";
     default:
-      return status;
+      return value.toUpperCase();
+  }
+}
+
+function formatOrientationLabel(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  switch (value.toLowerCase()) {
+    case "axial":
+      return "Axial";
+    case "sagittal":
+      return "Sagittal";
+    case "coronal":
+      return "Coronal";
+    default:
+      return value.charAt(0).toUpperCase() + value.slice(1);
   }
 }
 
@@ -2500,6 +3259,38 @@ function formatWeightingLabel(value: string) {
       return "T2*";
     default:
       return value.toUpperCase();
+  }
+}
+
+function getCanvasModeLabel(mode: ViewerCanvasMode) {
+  switch (mode) {
+    case "create-label":
+      return "Place pin";
+    case "set-anchor":
+      return "Move pin";
+    case "set-label":
+      return "Move name";
+    case "draw-region":
+      return "Draw area";
+    case "browse":
+    default:
+      return "Browse";
+  }
+}
+
+function getCanvasModeDescription(mode: ViewerCanvasMode) {
+  switch (mode) {
+    case "create-label":
+      return "Click once on the image to place a new teaching pin.";
+    case "set-anchor":
+      return "Click the image to move the pin to a better teaching point.";
+    case "set-label":
+      return "Click the image to move the visible name to a clearer position.";
+    case "draw-region":
+      return "Click around the structure to outline the teaching area. Double-click the image when the shape is complete.";
+    case "browse":
+    default:
+      return "Browse the study, select a topic, or start a new pin or area.";
   }
 }
 
@@ -2522,6 +3313,7 @@ function clamp(value: number, minimum: number, maximum: number) {
 function buildStackWarmupOrder(
   assets: ZoneModalityAsset[],
   centerIndex: number,
+  preferredDirection: -1 | 0 | 1 = 0,
 ) {
   if (assets.length === 0) {
     return [];
@@ -2534,16 +3326,47 @@ function buildStackWarmupOrder(
     const nextIndex = safeCenterIndex + offset;
     const previousIndex = safeCenterIndex - offset;
 
-    if (nextIndex < assets.length) {
-      orderedIndices.push(nextIndex);
-    }
+    const directionalIndices =
+      preferredDirection >= 0
+        ? [nextIndex, previousIndex]
+        : [previousIndex, nextIndex];
 
-    if (previousIndex >= 0) {
-      orderedIndices.push(previousIndex);
+    for (const index of directionalIndices) {
+      if (index >= 0 && index < assets.length) {
+        orderedIndices.push(index);
+      }
     }
   }
 
   return orderedIndices.map((index) => assets[index]!).filter(Boolean);
+}
+
+function buildImmediatePreloadOrder(
+  assets: ZoneModalityAsset[],
+  centerIndex: number,
+  preferredDirection: -1 | 0 | 1,
+  radius: number,
+) {
+  if (assets.length === 0) {
+    return [];
+  }
+
+  const safeCenterIndex = clamp(centerIndex, 0, assets.length - 1);
+  const orderedAssets: ZoneModalityAsset[] = [];
+
+  for (const asset of buildStackWarmupOrder(
+    assets,
+    safeCenterIndex,
+    preferredDirection,
+  )) {
+    if (orderedAssets.length >= radius) {
+      break;
+    }
+
+    orderedAssets.push(asset);
+  }
+
+  return orderedAssets;
 }
 
 function createDefaultLabelX(anchorX: number) {
@@ -2686,7 +3509,7 @@ function applyAlpha(color: string, alpha: number) {
 
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new Image();
+    const image = new window.Image();
     image.crossOrigin = "anonymous";
     image.onload = () => resolve(image);
     image.onerror = reject;

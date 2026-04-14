@@ -4,7 +4,6 @@ import { buildInternalAdminHeaders } from "@/lib/api/admin"
 import { ApiClientError } from "@/lib/api/errors"
 import { serverApiFetch } from "@/lib/api/server"
 import { requireAdminApiSession } from "@/lib/auth/session"
-import { createDerivedAssetSearchParams } from "@/lib/playground/derived-asset-token"
 import type { ZoneModalityViewerManifest } from "@/lib/playground/types"
 
 export const dynamic = "force-dynamic"
@@ -31,28 +30,13 @@ type RouteContext = {
 function rewriteDerivedAssetUrl(
   url: string | null | undefined,
   assetId: string,
-  user: {
-    apiAccountId: string | null
-    id: string
-  },
 ) {
   if (!url?.includes("/playground/derived-assets/")) {
     return url ?? null
   }
 
-  if (!user.apiAccountId) {
-    return url ?? null
-  }
-
   const variant = url.endsWith("/thumbnail") ? "thumbnail" : "image"
-  const searchParams = createDerivedAssetSearchParams({
-    accountId: user.apiAccountId,
-    assetId,
-    userId: user.id,
-    variant,
-  })
-
-  return `/api/playground/derived-assets/${assetId}/${variant}?${searchParams.toString()}`
+  return `/api/playground/derived-assets/${assetId}/${variant}`
 }
 
 export async function GET(request: Request, context: RouteContext) {
@@ -78,9 +62,8 @@ export async function GET(request: Request, context: RouteContext) {
       ...viewer,
       assets: viewer.assets.map((asset) => ({
         ...asset,
-        imageUrl:
-          rewriteDerivedAssetUrl(asset.imageUrl, asset.id, result.user) ?? asset.imageUrl,
-        thumbnailUrl: rewriteDerivedAssetUrl(asset.thumbnailUrl, asset.id, result.user),
+        imageUrl: rewriteDerivedAssetUrl(asset.imageUrl, asset.id) ?? asset.imageUrl,
+        thumbnailUrl: rewriteDerivedAssetUrl(asset.thumbnailUrl, asset.id),
       })),
       modality: {
         ...viewer.modality,
