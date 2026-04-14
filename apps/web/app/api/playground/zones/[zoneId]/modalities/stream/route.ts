@@ -3,7 +3,6 @@ import { NextResponse } from "next/server"
 import { buildInternalAdminHeaders } from "@/lib/api/admin"
 import { INTERNAL_API_BASE_URL, buildApiUrl } from "@/lib/api/config"
 import { ApiClientError, parseApiError } from "@/lib/api/errors"
-import { ensureMultipartMutationRequest } from "@/lib/api/request-guard"
 import { requireAdminApiSession } from "@/lib/auth/session"
 
 export const dynamic = "force-dynamic"
@@ -27,13 +26,7 @@ type RouteContext = {
   }>
 }
 
-export async function POST(request: Request, context: RouteContext) {
-  const requestGuardError = ensureMultipartMutationRequest(request)
-
-  if (requestGuardError) {
-    return requestGuardError
-  }
-
+export async function GET(request: Request, context: RouteContext) {
   const result = await requireAdminApiSession(request.headers)
 
   if (!result) {
@@ -43,32 +36,21 @@ export async function POST(request: Request, context: RouteContext) {
   const { zoneId } = await context.params
 
   try {
-    if (!request.body) {
-      return jsonError(400, "bad_request", "Upload body is required.")
-    }
-
-    const contentType = request.headers.get("content-type")
-
-    if (!contentType) {
-      return jsonError(400, "bad_request", "Multipart content type is required.")
-    }
-
     const response = await fetch(
       buildApiUrl(
         INTERNAL_API_BASE_URL,
-        `/playground/zones/${zoneId}/modalities/intake`,
+        `/playground/zones/${zoneId}/modalities/stream`,
       ),
       {
-        method: "POST",
+        method: "GET",
         headers: {
           ...buildInternalAdminHeaders(result.user),
-          Accept: "application/json",
-          "content-type": contentType,
+          Accept: "text/event-stream",
+          "Cache-Control": "no-cache",
         },
-        body: request.body,
         cache: "no-store",
-        duplex: "half",
-      } as RequestInit & { duplex: "half" },
+        signal: request.signal,
+      },
     )
 
     if (!response.ok) {
@@ -78,7 +60,11 @@ export async function POST(request: Request, context: RouteContext) {
     return new NextResponse(response.body, {
       status: response.status,
       headers: {
-        "content-type": response.headers.get("content-type") ?? "application/json",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "Content-Type":
+          response.headers.get("content-type") ?? "text/event-stream; charset=utf-8",
+        "X-Accel-Buffering": "no",
       },
     })
   } catch (error) {
@@ -88,8 +74,8 @@ export async function POST(request: Request, context: RouteContext) {
 
     return jsonError(
       500,
-      "intake_proxy_error",
-      error instanceof Error ? error.message : "Unable to proxy modality intake.",
+      "stream_proxy_error",
+      error instanceof Error ? error.message : "Unable to stream modality updates.",
     )
   }
 }

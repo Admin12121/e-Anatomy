@@ -1,4 +1,4 @@
-import { DraftModalityViewer } from "./_components/draft-modality-viewer"
+import { DraftModalityViewer } from "./_components/modality-viewer"
 
 type ViewerPageProps = {
   params: Promise<{

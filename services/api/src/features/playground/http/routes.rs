@@ -1,3 +1,6 @@
+use std::convert::Infallible;
+
+use async_stream::stream;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Multipart, Path, State},
@@ -5,7 +8,10 @@ use axum::{
         HeaderMap, StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE},
     },
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::get,
 };
 use axum_extra::extract::cookie::CookieJar;
@@ -36,6 +42,10 @@ pub fn routes() -> Router<AppState> {
         .route("/zones", get(list_zones).post(create_zone))
         .route("/zones/{zone_id}", get(get_zone).patch(update_zone))
         .route(
+            "/zones/{zone_id}/modalities/stream",
+            get(stream_zone_modalities),
+        )
+        .route(
             "/zones/{zone_id}/modalities",
             get(list_zone_modalities).post(create_zone_modality),
         )
@@ -46,7 +56,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}",
-            axum::routing::patch(update_zone_modality),
+            axum::routing::patch(update_zone_modality).delete(delete_zone_modality),
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/assets",
@@ -166,6 +176,71 @@ async fn list_zone_modalities(
     Ok((StatusCode::OK, Json(response)))
 }
 
+async fn stream_zone_modalities(
+    State(state): State<AppState>,
+    Path(zone_id): Path<Uuid>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, AppError> {
+    let account_id = resolve_admin_account_id(&state, &jar, &headers).await?;
+    let service = state.playground_service.clone();
+    let initial_payload = service.list_zone_modalities(account_id, zone_id).await?;
+    let mut receiver = service.subscribe_zone_modality_events();
+
+    let event_stream = stream! {
+        yield Ok(sse_json_event("modalities", &initial_payload));
+
+        if !has_active_modality_ingest(&initial_payload) {
+            yield Ok(sse_json_event("done", &serde_json::json!({ "active": false })));
+            return;
+        }
+
+        loop {
+            match receiver.recv().await {
+                Ok(event) => {
+                    if event.account_id != account_id || event.zone_id != zone_id {
+                        continue;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Fall through and emit the current snapshot.
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    yield Ok(sse_json_event(
+                        "error",
+                        &serde_json::json!({
+                            "message": "Modality update stream closed unexpectedly.",
+                        }),
+                    ));
+                    break;
+                }
+            }
+
+            match service.list_zone_modalities(account_id, zone_id).await {
+                Ok(payload) => {
+                    yield Ok(sse_json_event("modalities", &payload));
+
+                    if !has_active_modality_ingest(&payload) {
+                        yield Ok(sse_json_event("done", &serde_json::json!({ "active": false })));
+                        break;
+                    }
+                }
+                Err(error) => {
+                    yield Ok(sse_json_event(
+                        "error",
+                        &serde_json::json!({
+                            "message": error.to_string(),
+                        }),
+                    ));
+                    break;
+                }
+            }
+        }
+    };
+
+    Ok(Sse::new(event_stream).keep_alive(KeepAlive::default()))
+}
+
 async fn create_zone_modality(
     State(state): State<AppState>,
     Path(zone_id): Path<Uuid>,
@@ -228,6 +303,21 @@ async fn update_zone_modality(
         .await?;
 
     Ok((StatusCode::OK, Json(modality)))
+}
+
+async fn delete_zone_modality(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    state
+        .playground_service
+        .delete_zone_modality(actor.account_id, zone_id, modality_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_zone_modality_assets(
@@ -675,4 +765,18 @@ fn format_error_chain(error: &dyn std::error::Error) -> String {
     }
 
     chain.join(" | caused by: ")
+}
+
+fn has_active_modality_ingest(
+    response: &crate::features::playground::domain::models::ZoneModalityListResponse,
+) -> bool {
+    response.items.iter().any(|modality| {
+        modality.processing_status == "processing" || modality.processing_status == "uploaded"
+    })
+}
+
+fn sse_json_event<T: serde::Serialize>(event_name: &str, payload: &T) -> Event {
+    let data = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
+
+    Event::default().event(event_name).data(data)
 }

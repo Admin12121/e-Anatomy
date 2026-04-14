@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { ApiClientError } from "@/lib/api/errors"
 import { buildInternalAdminHeaders } from "@/lib/api/admin"
+import { ensureJsonMutationRequest } from "@/lib/api/request-guard"
 import { serverApiFetch } from "@/lib/api/server"
 import { requireAdminApiSession } from "@/lib/auth/session"
 import type { UpdateZoneInput, ZoneDetail } from "@/lib/playground/types"
@@ -53,6 +54,12 @@ export async function GET(request: Request, context: RouteContext) {
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
+  const requestGuardError = ensureJsonMutationRequest(request)
+
+  if (requestGuardError) {
+    return requestGuardError
+  }
+
   const result = await requireAdminApiSession(request.headers)
 
   if (!result) {

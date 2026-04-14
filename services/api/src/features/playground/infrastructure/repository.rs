@@ -387,6 +387,61 @@ impl PlaygroundRepository {
         Ok(row.map(Into::into))
     }
 
+    pub async fn list_modality_ingest_job_ids(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+    ) -> Result<Vec<Uuid>, sqlx::Error> {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT job.id
+            FROM anatomy_modality_ingest_jobs AS job
+            INNER JOIN anatomy_zone_modalities AS modality ON modality.id = job.modality_id
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE
+                zone.account_id = $1
+                AND modality.zone_id = $2
+                AND modality.id = $3
+            ORDER BY job.created_at DESC
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .fetch_all(pool)
+        .await
+    }
+
+    pub async fn delete_zone_modality(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let deleted_rows = sqlx::query(
+            r#"
+            DELETE FROM anatomy_zone_modalities AS modality
+            USING anatomy_zones AS zone
+            WHERE
+                modality.id = $3
+                AND modality.zone_id = $2
+                AND zone.id = modality.zone_id
+                AND zone.account_id = $1
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        Ok(deleted_rows > 0)
+    }
+
     pub async fn modality_exists_for_account(
         &self,
         pool: &PgPool,

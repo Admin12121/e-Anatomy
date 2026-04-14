@@ -44,7 +44,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://anatomy:anatomy@postgres:5432/anatomy}
       DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn,dicom_object::meta=error}
       AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-anatomy_session}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-168}

@@ -3,7 +3,6 @@
 import dynamic from "next/dynamic";
 import { skipToken } from "@reduxjs/toolkit/query";
 import {
-  CrosshairIcon,
   LoaderCircleIcon,
   MapPinnedIcon,
   SaveIcon,
@@ -251,26 +250,6 @@ export function AnatomyPlayground() {
           <FramePanel>
             {mode === "create" ? (
               <FieldGroup className="gap-5">
-                <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="mt-0.5 rounded-full bg-primary/10 p-2 text-primary">
-                      <CrosshairIcon className="size-4" />
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-foreground">
-                        {draftAnchor
-                          ? "Anchor captured"
-                          : "Waiting for anchor placement"}
-                      </p>
-                      <p className="text-xs leading-5 text-muted-foreground">
-                        {draftAnchor
-                          ? "You can save now or click a different position to replace the anchor."
-                          : "Click anywhere on the body shell in the viewport to create a zone anchor."}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
                 <Field>
                   <FieldLabel htmlFor="draft-zone-name">Zone name</FieldLabel>
                   <Input
@@ -329,7 +308,7 @@ export function AnatomyPlayground() {
                 onSave={handleSaveZoneChanges}
               />
             ) : (
-              <div className="flex h-full min-h-[16rem] flex-col items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/20 px-6 text-center">
+              <div className="flex h-full min-h-[16rem] flex-col items-center justify-center px-6 text-center">
                 {isZoneLoading ? (
                   <LoaderCircleIcon className="size-5 animate-spin text-muted-foreground" />
                 ) : (
@@ -346,6 +325,8 @@ export function AnatomyPlayground() {
             )}
           </FramePanel>
         </Frame>
+
+        {selectedZone && <ZoneModalitiesManager zone={selectedZone} />}
       </aside>
     </div>
   );
@@ -412,8 +393,6 @@ function ZoneDetailEditor({
         {pending ? <LoaderCircleIcon className="animate-spin" /> : <SaveIcon />}
         Save changes
       </Button>
-
-      <ZoneModalitiesManager zone={zone} />
     </FieldGroup>
   );
 }

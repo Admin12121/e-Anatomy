@@ -1,51 +1,60 @@
-"use client"
+"use client";
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react";
 import {
   FileArchiveIcon,
-  FileImageIcon,
   FolderOpenIcon,
   LoaderCircleIcon,
   SaveIcon,
+  Trash2Icon,
   UploadIcon,
-} from "lucide-react"
-import { toast } from "sonner"
+} from "lucide-react";
+import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   analyzeModalityUploadFiles,
   formatSourceKindLabel,
   type DetectedModalityUpload,
   ModalityUploadValidationError,
-} from "@/lib/playground/modality-upload-shared"
+} from "@/lib/playground/modality-upload-shared";
 import type {
   ModalityType,
   UpdateZoneModalityInput,
   ZoneDetail,
   ZoneModality,
-} from "@/lib/playground/types"
+  ZoneModalityListResponse,
+} from "@/lib/playground/types";
+import { useAppDispatch } from "@/lib/store/hooks";
 import {
+  playgroundApi,
+  useDeleteZoneModalityMutation,
   useGetZoneModalitiesQuery,
   useUpdateZoneModalityMutation,
-} from "@/lib/store/services/playground-api"
-import { ModalityAssetsWorkspace } from "./modality-assets-workspace"
-import { PlaygroundSelect } from "./playground-select"
+} from "@/lib/store/services/playground-api";
+import { PlaygroundSelect } from "./playground-select";
+import {
+  Frame,
+  FrameHeader,
+  FramePanel,
+  FrameTitle,
+} from "@/components/ui/frame";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import Link from "next/link";
 
-const EMPTY_MODALITIES: ZoneModality[] = []
+const EMPTY_MODALITIES: ZoneModality[] = [];
 
 const MODALITY_TYPE_OPTIONS: Array<{ label: string; value: ModalityType }> = [
   { label: "MRI", value: "mri" },
@@ -58,20 +67,20 @@ const MODALITY_TYPE_OPTIONS: Array<{ label: string; value: ModalityType }> = [
   { label: "Photography", value: "photography" },
   { label: "Endoscopy", value: "endoscopy" },
   { label: "Other", value: "other" },
-]
+];
 
-type EditorMode = "create" | "edit"
+type EditorMode = "create" | "edit";
 
 type FileWithRelativePath = File & {
-  webkitRelativePath?: string
-}
+  webkitRelativePath?: string;
+};
 
 type StudyUploadProgressState = {
-  loadedBytes: number
-  phase: "uploading" | "processing"
-  percent: number | null
-  totalBytes: number | null
-}
+  loadedBytes: number;
+  phase: "uploading" | "processing";
+  percent: number | null;
+  totalBytes: number | null;
+};
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -85,91 +94,75 @@ function getErrorMessage(error: unknown, fallback: string) {
       "message" in error.data.error &&
       error.data.error.message
     ) {
-      return String(error.data.error.message)
+      return String(error.data.error.message);
     }
 
     if ("message" in error && error.message) {
-      return String(error.message)
+      return String(error.message);
     }
   }
 
-  return fallback
-}
-
-function formatModalityTypeLabel(value: ModalityType) {
-  switch (value) {
-    case "mri":
-      return "MRI"
-    case "ct":
-      return "CT"
-    case "mra":
-      return "MRA"
-    case "mrv":
-      return "MRV"
-    case "cbct":
-      return "CBCT"
-    default:
-      return value.charAt(0).toUpperCase() + value.slice(1)
-  }
+  return fallback;
 }
 
 function formatModalitySourceKindLabel(kind: ZoneModality["sourceKind"]) {
   if (kind === "manual") {
-    return "Manual metadata"
+    return "Manual metadata";
   }
 
-  return formatSourceKindLabel(kind)
+  return formatSourceKindLabel(kind);
 }
 
 function hasActiveModalityIngest(modalities: ZoneModality[]) {
   return modalities.some(
     (modality) =>
-      modality.processingStatus === "processing" || modality.processingStatus === "uploaded",
-  )
+      modality.processingStatus === "processing" ||
+      modality.processingStatus === "uploaded",
+  );
 }
 
 function getSelectedSourceLabel(files: File[]) {
   const firstRelativePath = files
     .map((file) => (file as FileWithRelativePath).webkitRelativePath?.trim())
-    .find((value): value is string => Boolean(value))
+    .find((value): value is string => Boolean(value));
 
   if (firstRelativePath) {
-    const folderName = firstRelativePath.split("/")[0]?.trim()
+    const folderName = firstRelativePath.split("/")[0]?.trim();
 
     if (folderName) {
-      return folderName
+      return folderName;
     }
   }
 
-  return files[0]?.name?.trim() || null
+  return files[0]?.name?.trim() || null;
 }
 
 function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getUploadErrorMessage(xhr: XMLHttpRequest, fallback: string) {
-  const rawResponse = xhr.responseText || xhr.response
+  const rawResponse = xhr.responseText || xhr.response;
 
   if (typeof rawResponse === "string" && rawResponse.trim().length > 0) {
     try {
       const payload = JSON.parse(rawResponse) as {
         error?: {
-          message?: string
-        }
-      }
+          message?: string;
+        };
+      };
 
       if (payload.error?.message) {
-        return payload.error.message
+        return payload.error.message;
       }
     } catch {
       // Ignore non-JSON error payloads.
     }
   }
 
-  return fallback
+  return fallback;
 }
 
 async function uploadStudyIntakeWithProgress({
@@ -177,47 +170,53 @@ async function uploadStudyIntakeWithProgress({
   onProgress,
   zoneId,
 }: {
-  formData: FormData
-  onProgress: (state: StudyUploadProgressState) => void
-  zoneId: string
+  formData: FormData;
+  onProgress: (state: StudyUploadProgressState) => void;
+  zoneId: string;
 }) {
   return new Promise<ZoneModality>((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    let lastLoadedBytes = 0
-    let lastTotalBytes: number | null = null
-    xhr.open("POST", `/api/playground/zones/${zoneId}/modalities/intake`)
-    xhr.responseType = "text"
-    xhr.withCredentials = true
-    xhr.setRequestHeader("Accept", "application/json")
+    const xhr = new XMLHttpRequest();
+    let lastLoadedBytes = 0;
+    let lastTotalBytes: number | null = null;
+    xhr.open("POST", `/api/playground/zones/${zoneId}/modalities/intake`);
+    xhr.responseType = "text";
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("Accept", "application/json");
 
     xhr.upload.onprogress = (event) => {
-      const totalBytes = event.lengthComputable ? event.total : null
-      const loadedBytes = event.loaded
-      lastLoadedBytes = loadedBytes
-      lastTotalBytes = totalBytes
+      const totalBytes = event.lengthComputable ? event.total : null;
+      const loadedBytes = event.loaded;
+      lastLoadedBytes = loadedBytes;
+      lastTotalBytes = totalBytes;
       const percent =
-        totalBytes && totalBytes > 0 ? Math.min(100, (loadedBytes / totalBytes) * 100) : null
+        totalBytes && totalBytes > 0
+          ? Math.min(100, (loadedBytes / totalBytes) * 100)
+          : null;
 
       onProgress({
         loadedBytes,
         percent,
         phase: "uploading",
         totalBytes,
-      })
-    }
+      });
+    };
 
     xhr.onerror = () => {
-      reject(new Error("Unable to upload the selected study."))
-    }
+      reject(new Error("Unable to upload the selected study."));
+    };
 
     xhr.onabort = () => {
-      reject(new Error("Study upload was cancelled."))
-    }
+      reject(new Error("Study upload was cancelled."));
+    };
 
     xhr.onload = () => {
       if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(getUploadErrorMessage(xhr, "Unable to create the modality draft.")))
-        return
+        reject(
+          new Error(
+            getUploadErrorMessage(xhr, "Unable to create the modality draft."),
+          ),
+        );
+        return;
       }
 
       onProgress({
@@ -225,188 +224,263 @@ async function uploadStudyIntakeWithProgress({
         percent: 100,
         phase: "processing",
         totalBytes: lastTotalBytes,
-      })
+      });
 
       try {
-        const payload = JSON.parse(xhr.responseText || xhr.response) as ZoneModality
-        resolve(payload)
+        const payload = JSON.parse(
+          xhr.responseText || xhr.response,
+        ) as ZoneModality;
+        resolve(payload);
       } catch {
-        reject(new Error("The server returned an invalid modality response."))
+        reject(new Error("The server returned an invalid modality response."));
       }
-    }
+    };
 
-    xhr.send(formData)
-  })
+    xhr.send(formData);
+  });
 }
 
 export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
-  const [modalitiesPollingInterval, setModalitiesPollingInterval] = useState(0)
-  const { data, isFetching, isLoading, refetch } = useGetZoneModalitiesQuery(zone.id, {
-    pollingInterval: modalitiesPollingInterval,
-    skipPollingIfUnfocused: true,
-  })
-  const modalities = data?.items ?? EMPTY_MODALITIES
-  const [editorMode, setEditorMode] = useState<EditorMode>("edit")
-  const [activeModalityId, setActiveModalityId] = useState<string | null>(null)
-  const [createName, setCreateName] = useState("")
-  const [createNotes, setCreateNotes] = useState("")
+  const dispatch = useAppDispatch();
+  const { data, isLoading } = useGetZoneModalitiesQuery(zone.id);
+  const modalities = data?.items ?? EMPTY_MODALITIES;
+  const [editorMode, setEditorMode] = useState<EditorMode>("edit");
+  const [activeModalityId, setActiveModalityId] = useState<string | null>(null);
+  const [createName, setCreateName] = useState("");
+  const [createNotes, setCreateNotes] = useState("");
   const [createDetectedUpload, setCreateDetectedUpload] =
-    useState<DetectedModalityUpload | null>(null)
+    useState<DetectedModalityUpload | null>(null);
   const [createModalityTypeOverride, setCreateModalityTypeOverride] =
-    useState<ModalityType>("other")
-  const [selectedSourceLabel, setSelectedSourceLabel] = useState<string | null>(null)
-  const [selectedSourceFiles, setSelectedSourceFiles] = useState<File[]>([])
-  const [isAnalyzingSource, setIsAnalyzingSource] = useState(false)
-  const [isCreatingFromStudy, setIsCreatingFromStudy] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState<StudyUploadProgressState | null>(
+    useState<ModalityType>("other");
+  const [selectedSourceLabel, setSelectedSourceLabel] = useState<string | null>(
     null,
-  )
+  );
+  const [selectedSourceFiles, setSelectedSourceFiles] = useState<File[]>([]);
+  const [isAnalyzingSource, setIsAnalyzingSource] = useState(false);
+  const [isCreatingFromStudy, setIsCreatingFromStudy] = useState(false);
+  const [uploadProgress, setUploadProgress] =
+    useState<StudyUploadProgressState | null>(null);
   const [updateModality, { isLoading: isUpdating }] =
-    useUpdateZoneModalityMutation()
-  const dicomFolderInputRef = useRef<HTMLInputElement | null>(null)
-  const zipPackageInputRef = useRef<HTMLInputElement | null>(null)
+    useUpdateZoneModalityMutation();
+  const [deleteModality, { isLoading: isDeleting }] =
+    useDeleteZoneModalityMutation();
+  const dicomFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const zipPackageInputRef = useRef<HTMLInputElement | null>(null);
   const resolvedActiveModalityId =
-    activeModalityId && modalities.some((modality) => modality.id === activeModalityId)
+    activeModalityId &&
+    modalities.some((modality) => modality.id === activeModalityId)
       ? activeModalityId
-      : modalities[0]?.id ?? null
-  const activeModality =
-    modalities.find((modality) => modality.id === resolvedActiveModalityId) ?? null
-  const isPending = isAnalyzingSource || isCreatingFromStudy || isUpdating
+      : null;
+  const activeModality = resolvedActiveModalityId
+    ? (modalities.find(
+        (modality) => modality.id === resolvedActiveModalityId,
+      ) ?? null)
+    : null;
+  const isPending =
+    isAnalyzingSource || isCreatingFromStudy || isUpdating || isDeleting;
+  const hasActiveIngest = hasActiveModalityIngest(modalities);
 
   useEffect(() => {
-    const nextPollingInterval = hasActiveModalityIngest(modalities) ? 4000 : 0
+    if (!hasActiveIngest) {
+      return;
+    }
 
-    setModalitiesPollingInterval((current) =>
-      current === nextPollingInterval ? current : nextPollingInterval,
-    )
-  }, [modalities])
+    const stream = new EventSource(
+      `/api/playground/zones/${zone.id}/modalities/stream`,
+    );
+
+    function handleModalitiesEvent(event: MessageEvent<string>) {
+      try {
+        const payload = JSON.parse(event.data) as ZoneModalityListResponse;
+        dispatch(
+          playgroundApi.util.updateQueryData(
+            "getZoneModalities",
+            zone.id,
+            (draft) => {
+              draft.total = payload.total;
+              draft.items.splice(0, draft.items.length, ...payload.items);
+            },
+          ),
+        );
+      } catch {
+        // Ignore malformed stream payloads and wait for the next event.
+      }
+    }
+
+    function handleDoneEvent() {
+      stream.close();
+    }
+
+    stream.addEventListener(
+      "modalities",
+      handleModalitiesEvent as EventListener,
+    );
+    stream.addEventListener("done", handleDoneEvent as EventListener);
+
+    return () => {
+      stream.removeEventListener(
+        "modalities",
+        handleModalitiesEvent as EventListener,
+      );
+      stream.removeEventListener("done", handleDoneEvent as EventListener);
+      stream.close();
+    };
+  }, [dispatch, hasActiveIngest, zone.id]);
 
   useEffect(() => {
     const input = dicomFolderInputRef.current as
       | (HTMLInputElement & { webkitdirectory?: boolean })
-      | null
+      | null;
 
     if (!input) {
-      return
+      return;
     }
 
-    input.setAttribute("webkitdirectory", "")
-    input.setAttribute("directory", "")
-    input.webkitdirectory = true
-  }, [])
+    input.setAttribute("webkitdirectory", "");
+    input.setAttribute("directory", "");
+    input.webkitdirectory = true;
+  }, []);
 
   function resetCreateState() {
-    setCreateName("")
-    setCreateNotes("")
-    setCreateDetectedUpload(null)
-    setCreateModalityTypeOverride("other")
-    setSelectedSourceLabel(null)
-    setSelectedSourceFiles([])
-    setUploadProgress(null)
+    setCreateName("");
+    setCreateNotes("");
+    setCreateDetectedUpload(null);
+    setCreateModalityTypeOverride("other");
+    setSelectedSourceLabel(null);
+    setSelectedSourceFiles([]);
+    setUploadProgress(null);
 
     if (dicomFolderInputRef.current) {
-      dicomFolderInputRef.current.value = ""
+      dicomFolderInputRef.current.value = "";
     }
 
     if (zipPackageInputRef.current) {
-      zipPackageInputRef.current.value = ""
+      zipPackageInputRef.current.value = "";
     }
   }
 
   function startCreateMode() {
-    setEditorMode("create")
-    resetCreateState()
+    setEditorMode("create");
+    resetCreateState();
   }
 
   function selectModality(modalityId: string) {
-    setActiveModalityId(modalityId)
-    setEditorMode("edit")
+    setActiveModalityId(modalityId);
+    setEditorMode("edit");
   }
 
   async function handleSourceSelection(nextFiles: FileList | null) {
-    const files = Array.from(nextFiles ?? [])
-    setSelectedSourceFiles(files)
-    const sourceLabel = getSelectedSourceLabel(files)
-    setSelectedSourceLabel(sourceLabel)
+    const files = Array.from(nextFiles ?? []);
+    setSelectedSourceFiles(files);
+    const sourceLabel = getSelectedSourceLabel(files);
+    setSelectedSourceLabel(sourceLabel);
 
     if (files.length === 0) {
-      setCreateDetectedUpload(null)
-      setCreateModalityTypeOverride("other")
-      return
+      setCreateDetectedUpload(null);
+      setCreateModalityTypeOverride("other");
+      return;
     }
 
-    setIsAnalyzingSource(true)
+    setIsAnalyzingSource(true);
 
     try {
-      const detectedUpload = await analyzeModalityUploadFiles(files)
-      setCreateDetectedUpload(detectedUpload)
-      setCreateModalityTypeOverride(detectedUpload.detectedModalityType)
+      const detectedUpload = await analyzeModalityUploadFiles(files);
+      setCreateDetectedUpload(detectedUpload);
+      setCreateModalityTypeOverride(detectedUpload.detectedModalityType);
     } catch (error) {
-      setCreateDetectedUpload(null)
-      setCreateModalityTypeOverride("other")
+      setCreateDetectedUpload(null);
+      setCreateModalityTypeOverride("other");
       toast.error(
         error instanceof ModalityUploadValidationError
           ? error.message
           : "Select one ZIP package or a folder of DICOM files.",
-      )
+      );
     } finally {
-      setIsAnalyzingSource(false)
+      setIsAnalyzingSource(false);
     }
   }
 
   async function handleCreateModality() {
     if (!createDetectedUpload || selectedSourceFiles.length === 0) {
-      toast.error("Choose a DICOM folder or one ZIP package first.")
-      return
+      toast.error("Choose a DICOM folder or one ZIP package first.");
+      return;
     }
 
     try {
-      setIsCreatingFromStudy(true)
-      const formData = new FormData()
-      formData.append("name", createName.trim() || createDetectedUpload.suggestedName)
-      formData.append("modalityType", createModalityTypeOverride)
-      formData.append("notes", createNotes.trim())
-      formData.append("sourceKind", createDetectedUpload.sourceKind)
+      setIsCreatingFromStudy(true);
+      const formData = new FormData();
+      formData.append(
+        "name",
+        createName.trim() || createDetectedUpload.suggestedName,
+      );
+      formData.append("modalityType", createModalityTypeOverride);
+      formData.append("notes", createNotes.trim());
+      formData.append("sourceKind", createDetectedUpload.sourceKind);
       formData.append(
         "sourceLabel",
         selectedSourceLabel?.trim() || createDetectedUpload.sourceLabel,
-      )
-      formData.append("sourceFileCount", String(createDetectedUpload.sourceFileCount))
+      );
+      formData.append(
+        "sourceFileCount",
+        String(createDetectedUpload.sourceFileCount),
+      );
       formData.append(
         "relativePathsJson",
         JSON.stringify(
           selectedSourceFiles.map(
-            (file) => (file as FileWithRelativePath).webkitRelativePath?.trim() || "",
+            (file) =>
+              (file as FileWithRelativePath).webkitRelativePath?.trim() || "",
           ),
         ),
-      )
+      );
 
       for (const file of selectedSourceFiles) {
-        formData.append("file", file)
+        formData.append("file", file);
       }
 
       setUploadProgress({
         loadedBytes: 0,
         percent: 0,
         phase: "uploading",
-        totalBytes: selectedSourceFiles.reduce((total, file) => total + file.size, 0),
-      })
+        totalBytes: selectedSourceFiles.reduce(
+          (total, file) => total + file.size,
+          0,
+        ),
+      });
       const createdModality = await uploadStudyIntakeWithProgress({
         formData,
         onProgress: setUploadProgress,
         zoneId: zone.id,
-      })
-      await refetch()
+      });
+      dispatch(
+        playgroundApi.util.updateQueryData("getZoneModalities", zone.id, (draft) => {
+          const existingIndex = draft.items.findIndex(
+            (item) => item.id === createdModality.id,
+          );
 
-      toast.success("Upload finished. Study intake is processing in the background.")
-      setActiveModalityId(createdModality.id)
-      setEditorMode("edit")
-      resetCreateState()
+          if (existingIndex >= 0) {
+            draft.items[existingIndex] = createdModality;
+            return;
+          }
+
+          draft.items.unshift(createdModality);
+          draft.total += 1;
+        }),
+      );
+
+      toast.success(
+        "Upload finished. Study intake is processing in the background.",
+      );
+      setActiveModalityId(createdModality.id);
+      setEditorMode("edit");
+      resetCreateState();
     } catch (error) {
-      setUploadProgress(null)
-      toast.error(getErrorMessage(error, "Unable to create the modality draft."))
+      setUploadProgress(null);
+      toast.error(
+        getErrorMessage(error, "Unable to create the modality draft."),
+      );
     } finally {
-      setIsCreatingFromStudy(false)
+      setIsCreatingFromStudy(false);
     }
   }
 
@@ -419,111 +493,127 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
         zoneId: zone.id,
         modalityId: modality.id,
         input,
-      }).unwrap()
+      }).unwrap();
 
-      toast.success("Modality updated.")
+      toast.success("Modality updated.");
     } catch (error) {
-      toast.error(getErrorMessage(error, "Unable to update the modality."))
+      toast.error(getErrorMessage(error, "Unable to update the modality."));
+    }
+  }
+
+  async function handleDeleteModality(modality: ZoneModality) {
+    try {
+      await deleteModality({
+        zoneId: zone.id,
+        modalityId: modality.id,
+      }).unwrap();
+
+      if (activeModalityId === modality.id) {
+        setActiveModalityId(null);
+      }
+
+      toast.success("Modality deleted.");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Unable to delete the modality."));
+      throw error;
     }
   }
 
   return (
     <div className="space-y-5">
-      <Card className="border border-border/70 bg-muted/10 shadow-none">
-        <CardHeader className="border-b border-border/70">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-base">Modalities</CardTitle>
-            </div>
+      <div className="p-1">
+        <Frame className="shrink-0 outline-offset-2 outline outline-border/50">
+          <FrameHeader className="p-2 flex items-center justify-between flex-row">
+            <FrameTitle>Modalities</FrameTitle>
             <Button
               type="button"
               size="sm"
-              variant="secondary"
+              variant="link"
               onClick={startCreateMode}
             >
               <UploadIcon />
               Attach source
             </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4 pt-5">
-          {isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircleIcon className="size-4 animate-spin" />
-              Loading modalities...
-            </div>
-          ) : modalities.length > 0 ? (
-            <div className="grid gap-2">
-              {modalities.map((modality) => {
+          </FrameHeader>
+        </Frame>
+      </div>
+      <Frame className="shrink-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Modality</TableHead>
+              <TableHead>Source</TableHead>
+              <TableHead className="text-right">Files</TableHead>
+              <TableHead>Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={4} className="h-24">
+                  <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                    <LoaderCircleIcon className="size-4 animate-spin" />
+                    Loading modalities...
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : modalities.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={4}
+                  className="h-24 text-center text-sm text-muted-foreground"
+                >
+                  No modalities are attached to this zone yet.
+                </TableCell>
+              </TableRow>
+            ) : (
+              modalities.map((modality) => {
                 const isActive =
-                  editorMode === "edit" && resolvedActiveModalityId === modality.id
+                  editorMode === "edit" &&
+                  resolvedActiveModalityId === modality.id;
 
                 return (
-                  <button
+                  <TableRow
                     key={modality.id}
-                    type="button"
-                    className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                      isActive
-                        ? "border-primary/60 bg-primary/10"
-                        : "border-border/70 bg-background/70 hover:bg-muted/35"
-                    }`}
+                    className="cursor-pointer"
+                    data-state={isActive ? "selected" : undefined}
                     onClick={() => selectModality(modality.id)}
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1.5">
-                        <div className="font-medium text-foreground">
-                          {modality.name}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Badge variant="secondary">
-                            {formatModalityTypeLabel(modality.modalityType)}
-                          </Badge>
-                          <Badge variant="outline">
-                            {formatModalitySourceKindLabel(modality.sourceKind)}
-                          </Badge>
-                        </div>
-                      </div>
-                      <div className="text-right text-xs text-muted-foreground">
-                        <div>
-                          {modality.sourceFileCount} file
-                          {modality.sourceFileCount === 1 ? "" : "s"}
-                        </div>
-                        {modality.sourceLabel ? (
-                          <div className="mt-1 max-w-[12rem] truncate">
-                            {modality.sourceLabel}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-border/70 bg-background/40 px-4 py-5 text-sm text-muted-foreground">
-              No modalities are attached to this zone yet. Start by attaching a
-              source study below.
-            </div>
-          )}
-          {isFetching && !isLoading ? (
-            <div className="text-xs text-muted-foreground">Refreshing modalities...</div>
-          ) : null}
-        </CardContent>
-      </Card>
+                    <TableCell className="font-medium text-foreground">
+                      {modality.name}
+                    </TableCell>
+                    <TableCell>
+                      <Badge>
+                        {formatModalitySourceKindLabel(modality.sourceKind)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right text-muted-foreground">
+                      {modality.sourceFileCount}
+                    </TableCell>
+                    <TableCell className="capitalize text-muted-foreground">
+                      {modality.processingStatus.replaceAll("_", " ")}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </Frame>
 
       {editorMode === "create" ? (
-        <Card className="border border-border/70 bg-muted/10 shadow-none">
-          <CardHeader className="border-b border-border/70">
-            <CardTitle className="text-base">Attach Source Study</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-5 pt-5">
+        <Frame>
+          <FrameHeader className="p-2">
+            <FrameTitle className="text-base">Attach Source Study</FrameTitle>
+          </FrameHeader>
+          <FramePanel>
             <input
               ref={dicomFolderInputRef}
               type="file"
               multiple
               className="sr-only"
               onChange={(event) => {
-                void handleSourceSelection(event.target.files)
+                void handleSourceSelection(event.target.files);
               }}
             />
             <input
@@ -532,7 +622,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
               accept=".zip,application/zip"
               className="sr-only"
               onChange={(event) => {
-                void handleSourceSelection(event.target.files)
+                void handleSourceSelection(event.target.files);
               }}
             />
 
@@ -559,10 +649,6 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                     Choose ZIP package
                   </Button>
                 </div>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  Up to two source studies can be processed at the same time. Large
-                  studies upload first, then continue slice derivation in the background.
-                </p>
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
@@ -607,7 +693,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
               </Field>
             </FieldGroup>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 mt-4">
               <Button
                 type="button"
                 disabled={!createDetectedUpload || isPending}
@@ -629,8 +715,8 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                 variant="secondary"
                 disabled={isPending}
                 onClick={() => {
-                  resetCreateState()
-                  setEditorMode("edit")
+                  resetCreateState();
+                  setEditorMode("edit");
                 }}
               >
                 Cancel
@@ -646,7 +732,8 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                       : "Handing off to background processing"}
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    {uploadProgress.phase === "uploading" && uploadProgress.totalBytes
+                    {uploadProgress.phase === "uploading" &&
+                    uploadProgress.totalBytes
                       ? `${formatBytes(uploadProgress.loadedBytes)} / ${formatBytes(uploadProgress.totalBytes)}`
                       : "Preparing ingest job"}
                   </div>
@@ -657,7 +744,8 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                     style={{
                       width: `${Math.max(
                         6,
-                        uploadProgress.percent ?? (uploadProgress.phase === "processing" ? 100 : 0),
+                        uploadProgress.percent ??
+                          (uploadProgress.phase === "processing" ? 100 : 0),
                       )}%`,
                     }}
                   />
@@ -669,66 +757,65 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                 </p>
               </div>
             ) : null}
-          </CardContent>
-        </Card>
-      ) : activeModality ? (
-        <>
+          </FramePanel>
+        </Frame>
+      ) : isLoading ? (
+        <Frame>
+          <FramePanel className="flex min-h-[14rem] items-center justify-center px-6 py-10">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <LoaderCircleIcon className="size-4 animate-spin" />
+              Loading modality details...
+            </div>
+          </FramePanel>
+        </Frame>
+      ) : (
+        activeModality && (
           <ZoneModalityEditorCard
             key={`modality-editor-${activeModality.id}`}
             modality={activeModality}
+            onDelete={handleDeleteModality}
             pending={isPending}
+            zoneId={zone.id}
             onSave={handleSaveModalityChanges}
           />
-
-          <ModalityAssetsWorkspace
-            key={`modality-assets-${activeModality.id}`}
-            modality={activeModality}
-            zoneId={zone.id}
-          />
-        </>
-      ) : (
-        <Card className="border border-border/70 bg-muted/10 shadow-none">
-          <CardContent className="flex min-h-[14rem] flex-col items-center justify-center px-6 py-10 text-center">
-            <FileImageIcon className="size-8 text-muted-foreground" />
-            <p className="mt-4 text-sm font-medium text-foreground">
-              No modality selected
-            </p>
-            <p className="mt-1 max-w-sm text-sm leading-6 text-muted-foreground">
-              Choose an existing modality above or attach a new source study for{" "}
-              {zone.name}.
-            </p>
-          </CardContent>
-        </Card>
+        )
       )}
     </div>
-  )
+  );
 }
 
 function ZoneModalityEditorCard({
   modality,
+  onDelete,
   onSave,
   pending,
+  zoneId,
 }: {
-  modality: ZoneModality
-  onSave: (modality: ZoneModality, input: UpdateZoneModalityInput) => Promise<void>
-  pending: boolean
+  modality: ZoneModality;
+  onDelete: (modality: ZoneModality) => Promise<void>;
+  onSave: (
+    modality: ZoneModality,
+    input: UpdateZoneModalityInput,
+  ) => Promise<void>;
+  pending: boolean;
+  zoneId: string;
 }) {
-  const [name, setName] = useState(modality.name)
+  const [name, setName] = useState(modality.name);
   const [modalityType, setModalityType] = useState<ModalityType>(
     modality.modalityType,
-  )
-  const [notes, setNotes] = useState(modality.notes ?? "")
+  );
+  const [notes, setNotes] = useState(modality.notes ?? "");
   const hasChanges =
     name.trim() !== modality.name ||
     modalityType !== modality.modalityType ||
-    notes.trim() !== (modality.notes ?? "")
+    notes.trim() !== (modality.notes ?? "");
 
   async function handleSave() {
-    const nextName = name.trim()
+    const nextName = name.trim();
 
     if (!nextName) {
-      toast.error("Modality name is required.")
-      return
+      toast.error("Modality name is required.");
+      return;
     }
 
     await onSave(modality, {
@@ -740,15 +827,22 @@ function ZoneModalityEditorCard({
       sourceFileCount: modality.sourceFileCount,
       sourceKind: modality.sourceKind,
       sourceLabel: modality.sourceLabel,
-    })
+    });
   }
 
   return (
-    <Card className="border border-border/70 bg-muted/10 shadow-none">
-      <CardHeader className="border-b border-border/70">
-        <CardTitle className="text-base">Edit Modality</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-5 pt-5">
+    <Frame>
+      <FrameHeader className="p-2 flex flex-row justify-between items-center">
+        <FrameTitle className="text-base">Edit Modality</FrameTitle>
+        <Button asChild size="sm" variant="link">
+          <Link
+            href={`/playground/zones/${zoneId}/modalities/${modality.id}/viewer`}
+          >
+            Open viewer
+          </Link>
+        </Button>
+      </FrameHeader>
+      <FramePanel>
         <FieldGroup className="gap-4">
           <div className="grid gap-3 md:grid-cols-2">
             <Field>
@@ -788,39 +882,37 @@ function ZoneModalityEditorCard({
           </Field>
         </FieldGroup>
 
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded-lg border border-border/70 bg-background/70 px-4 py-3">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              Source
-            </div>
-            <div className="mt-1 text-sm text-foreground">
-              {formatModalitySourceKindLabel(modality.sourceKind)}
-            </div>
-          </div>
-          <div className="rounded-lg border border-border/70 bg-background/70 px-4 py-3">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              Source label
-            </div>
-            <div className="mt-1 text-sm text-foreground">
-              {modality.sourceLabel || "Auto-detected"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-border/70 bg-background/70 px-4 py-3">
-            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              Files
-            </div>
-            <div className="mt-1 text-sm text-foreground">
-              {modality.sourceFileCount} file
-              {modality.sourceFileCount === 1 ? "" : "s"}
-            </div>
-          </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            disabled={!hasChanges || pending}
+            onClick={handleSave}
+          >
+            {pending ? (
+              <LoaderCircleIcon className="animate-spin" />
+            ) : (
+              <SaveIcon />
+            )}
+            Save modality
+          </Button>
+          <DeleteConfirmationDialog
+            confirmationLabel="modality name"
+            confirmationValue={modality.name}
+            disabled={pending}
+            pending={pending}
+            placeholder="Type the modality name"
+            title="Delete modality"
+            descriptionPrefix="This will permanently remove the modality and its derived study data. To confirm, enter the"
+            onConfirm={() => onDelete(modality)}
+            trigger={
+              <Button type="button" variant="destructive-outline">
+                <Trash2Icon />
+                Delete modality
+              </Button>
+            }
+          />
         </div>
-
-        <Button type="button" disabled={!hasChanges || pending} onClick={handleSave}>
-          {pending ? <LoaderCircleIcon className="animate-spin" /> : <SaveIcon />}
-          Save modality
-        </Button>
-      </CardContent>
-    </Card>
-  )
+      </FramePanel>
+    </Frame>
+  );
 }

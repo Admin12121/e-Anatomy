@@ -144,7 +144,12 @@ export type UpdateZoneModalityInput = {
   notes?: string | null
 }
 
-export type ModalityAssetKind = "slice" | "cover" | "overview" | "reference"
+export type ModalityAssetKind =
+  | "slice"
+  | "derived_slice"
+  | "cover"
+  | "overview"
+  | "reference"
 
 export type ModalityWeightingCode =
   | "t1"

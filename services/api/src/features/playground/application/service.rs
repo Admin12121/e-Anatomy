@@ -3,6 +3,7 @@ use std::{
     ffi::OsStr,
     io::Cursor,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::Context;
@@ -16,6 +17,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::{
     fs,
+    sync::broadcast,
 };
 use tracing::error;
 use uuid::Uuid;
@@ -40,6 +42,28 @@ pub struct PlaygroundService {
     pool: PgPool,
     repo: PlaygroundRepository,
     storage_root: PathBuf,
+    events: Arc<PlaygroundEventHub>,
+}
+
+#[derive(Debug)]
+struct PlaygroundEventHub {
+    zone_modality_events: broadcast::Sender<ZoneModalityListChangedEvent>,
+}
+
+impl PlaygroundEventHub {
+    fn new() -> Self {
+        let (zone_modality_events, _) = broadcast::channel(128);
+
+        Self {
+            zone_modality_events,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ZoneModalityListChangedEvent {
+    pub account_id: Uuid,
+    pub zone_id: Uuid,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +124,12 @@ impl PlaygroundService {
             pool,
             repo: PlaygroundRepository::default(),
             storage_root: PathBuf::from(storage_root.into()),
+            events: Arc::new(PlaygroundEventHub::new()),
         }
+    }
+
+    pub fn subscribe_zone_modality_events(&self) -> broadcast::Receiver<ZoneModalityListChangedEvent> {
+        self.events.zone_modality_events.subscribe()
     }
 
     pub async fn list_zones_for_account(
@@ -210,6 +239,16 @@ impl PlaygroundService {
         })
     }
 
+    pub fn notify_zone_modality_list_changed(&self, account_id: Uuid, zone_id: Uuid) {
+        let _ = self
+            .events
+            .zone_modality_events
+            .send(ZoneModalityListChangedEvent {
+                account_id,
+                zone_id,
+            });
+    }
+
     pub async fn create_zone_modality(
         &self,
         account_id: Uuid,
@@ -228,7 +267,8 @@ impl PlaygroundService {
         let processing_status = normalize_processing_status(input.processing_status)?;
         let notes = normalize_optional_text(input.notes);
 
-        self.repo
+        let modality = self
+            .repo
             .create_zone_modality(
                 &self.pool,
                 zone_id,
@@ -242,8 +282,11 @@ impl PlaygroundService {
                 &processing_status,
                 notes.as_deref(),
             )
-            .await
-            .map_err(Into::into)
+            .await?;
+
+        self.notify_zone_modality_list_changed(account_id, zone_id);
+
+        Ok(modality)
     }
 
     pub async fn create_zone_modality_from_study_upload(
@@ -327,13 +370,19 @@ impl PlaygroundService {
             )
             .await?;
 
+        self.notify_zone_modality_list_changed(account_id, zone_id);
+
         let background_service = self.clone();
+        let background_account_id = account_id;
+        let background_zone_id = zone_id;
         let background_user_id = user_id.to_string();
         let background_source_kind = source_kind.clone();
         let background_files = input.files;
         tokio::spawn(async move {
             if let Err(pipeline_error) = background_service
                 .run_study_ingest_pipeline(
+                    background_account_id,
+                    background_zone_id,
                     modality_id,
                     ingest_job_id,
                     background_user_id,
@@ -374,6 +423,8 @@ impl PlaygroundService {
 
     async fn run_study_ingest_pipeline(
         &self,
+        account_id: Uuid,
+        zone_id: Uuid,
         modality_id: Uuid,
         ingest_job_id: Uuid,
         user_id: String,
@@ -514,6 +565,8 @@ impl PlaygroundService {
                 )
                 .await?;
 
+            self.notify_zone_modality_list_changed(account_id, zone_id);
+
             self.repo
                 .update_modality_ingest_job(
                     &self.pool,
@@ -548,6 +601,7 @@ impl PlaygroundService {
                         None,
                     )
                     .await;
+                self.notify_zone_modality_list_changed(account_id, zone_id);
                 let _ = self
                     .repo
                     .update_modality_ingest_job(
@@ -587,7 +641,8 @@ impl PlaygroundService {
         let processing_status = normalize_processing_status(input.processing_status)?;
         let notes = normalize_optional_text(input.notes);
 
-        self.repo
+        let modality = self
+            .repo
             .update_zone_modality(
                 &self.pool,
                 account_id,
@@ -604,7 +659,43 @@ impl PlaygroundService {
                 notes.as_deref(),
             )
             .await?
-            .ok_or_else(|| AppError::not_found("Modality was not found"))
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
+
+        self.notify_zone_modality_list_changed(account_id, zone_id);
+
+        Ok(modality)
+    }
+
+    pub async fn delete_zone_modality(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+    ) -> Result<(), AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        let ingest_job_ids = self
+            .repo
+            .list_modality_ingest_job_ids(&self.pool, account_id, zone_id, modality_id)
+            .await?;
+
+        let deleted = self
+            .repo
+            .delete_zone_modality(&self.pool, account_id, zone_id, modality_id)
+            .await?;
+
+        if !deleted {
+            return Err(AppError::not_found("Modality was not found"));
+        }
+
+        for ingest_job_id in ingest_job_ids {
+            self.cleanup_ingest_storage(ingest_job_id).await;
+        }
+
+        self.notify_zone_modality_list_changed(account_id, zone_id);
+
+        Ok(())
     }
 
     pub async fn list_zone_modality_assets(
@@ -1323,6 +1414,29 @@ impl PlaygroundService {
                 })?;
                 let _ = fs::remove_file(from).await;
                 Ok(())
+            }
+        }
+    }
+
+    async fn cleanup_ingest_storage(&self, ingest_job_id: Uuid) {
+        for directory in ["source", "expanded", "derived"] {
+            let path = self
+                .storage_root
+                .join("playground")
+                .join(directory)
+                .join(ingest_job_id.to_string());
+
+            match fs::remove_dir_all(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    error!(
+                        %ingest_job_id,
+                        directory,
+                        %error,
+                        "unable to remove modality ingest storage"
+                    );
+                }
             }
         }
     }

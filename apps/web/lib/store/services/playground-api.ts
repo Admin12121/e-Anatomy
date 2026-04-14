@@ -121,6 +121,24 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    deleteZoneModality: builder.mutation<
+      void,
+      {
+        zoneId: string
+        modalityId: string
+      }
+    >({
+      invalidatesTags: (_result, _error, { zoneId, modalityId }) => [
+        { type: "ZoneModalities", id: `LIST:${zoneId}` },
+        { type: "ZoneModalities", id: modalityId },
+        { type: "ZoneModalityAssets", id: `LIST:${modalityId}` },
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}`,
+        method: "DELETE",
+      }),
+    }),
     getZoneModalityAssets: builder.query<
       ZoneModalityAssetListResponse,
       {
@@ -305,6 +323,7 @@ export const {
   useCreateZoneModalityAssetMutation,
   useCreateZoneMutation,
   useCreateZoneModalityMutation,
+  useDeleteZoneModalityMutation,
   useGetZoneModalityViewerManifestQuery,
   useGetZoneDetailQuery,
   useGetZoneModalityAssetsQuery,
