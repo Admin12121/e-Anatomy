@@ -810,10 +810,6 @@ export function DraftModalityViewer({
         return false;
       }
 
-      if (!showLabels && !pinsOnly) {
-        return false;
-      }
-
       if (
         targetedLabeling &&
         selectedStructureId &&
@@ -1760,15 +1756,6 @@ export function DraftModalityViewer({
             <CrosshairIcon className="size-4" />
           </Button>
           <Button
-            aria-label={showLabels ? "Hide labels" : "Show labels"}
-            type="button"
-            size="icon-lg"
-            variant={!showLabels ? "secondary" : "default"}
-            onClick={() => setShowLabels((current) => !current)}
-          >
-            <Layers2Icon className="size-4" />
-          </Button>
-          <Button
             aria-label={
               pinControlPanel ? "Unpin control panel" : "Pin control panel"
             }
@@ -2632,6 +2619,7 @@ function ViewerCanvas({
               const isHovered = annotation.id === hoveredAnnotationId;
               const color = annotation.colorHex || DEFAULT_ANNOTATION_COLOR;
               const label = annotation.titleOverride || structure.title;
+              const markerVisible = showLabels || pinsOnly;
               const textVisible =
                 showLabels &&
                 !pinsOnly &&
@@ -2660,20 +2648,24 @@ function ViewerCanvas({
                       strokeWidth={isSelected ? 3 : 2}
                     />
                   ) : null}
-                  <line
-                    stroke={annotation.leaderColorHex || color}
-                    strokeWidth={isSelected ? 3 : 2}
-                    x1={annotation.anchorX * 1000}
-                    x2={annotation.labelX * 1000}
-                    y1={annotation.anchorY * 1000}
-                    y2={annotation.labelY * 1000}
-                  />
-                  <circle
-                    cx={annotation.anchorX * 1000}
-                    cy={annotation.anchorY * 1000}
-                    fill={color}
-                    r={isSelected ? 8 : 6}
-                  />
+                  {markerVisible ? (
+                    <>
+                      <line
+                        stroke={annotation.leaderColorHex || color}
+                        strokeWidth={isSelected ? 3 : 2}
+                        x1={annotation.anchorX * 1000}
+                        x2={annotation.labelX * 1000}
+                        y1={annotation.anchorY * 1000}
+                        y2={annotation.labelY * 1000}
+                      />
+                      <circle
+                        cx={annotation.anchorX * 1000}
+                        cy={annotation.anchorY * 1000}
+                        fill={color}
+                        r={isSelected ? 8 : 6}
+                      />
+                    </>
+                  ) : null}
                   {textVisible ? (
                     <text
                       fill={color}
