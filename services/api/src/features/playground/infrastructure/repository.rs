@@ -670,6 +670,37 @@ impl PlaygroundRepository {
         Ok(row.map(Into::into))
     }
 
+    pub async fn delete_zone_modality_asset(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        asset_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let deleted_rows = sqlx::query(
+            r#"
+            DELETE FROM anatomy_zone_modality_assets AS asset
+            USING anatomy_zone_modalities AS modality
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE
+                zone.account_id = $1
+                AND modality.zone_id = $2
+                AND modality.id = $3
+                AND asset.id = $4
+                AND asset.modality_id = modality.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .bind(asset_id)
+        .execute(pool)
+        .await?;
+
+        Ok(deleted_rows.rows_affected() > 0)
+    }
+
     pub async fn get_zone_modality_detail(
         &self,
         pool: &PgPool,
@@ -1333,6 +1364,37 @@ impl PlaygroundRepository {
         Ok(row.map(Into::into))
     }
 
+    pub async fn delete_viewer_structure_group(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        group_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let deleted_rows = sqlx::query(
+            r#"
+            DELETE FROM anatomy_structure_groups AS groups
+            USING anatomy_zone_modalities AS modality
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE
+                zone.account_id = $1
+                AND modality.zone_id = $2
+                AND modality.id = $3
+                AND groups.id = $4
+                AND groups.modality_id = modality.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .bind(group_id)
+        .execute(pool)
+        .await?;
+
+        Ok(deleted_rows.rows_affected() > 0)
+    }
+
     pub async fn structure_group_exists_for_modality(
         &self,
         pool: &PgPool,
@@ -1590,6 +1652,37 @@ impl PlaygroundRepository {
         .await?;
 
         Ok(row.map(Into::into))
+    }
+
+    pub async fn delete_viewer_structure(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        structure_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let deleted_rows = sqlx::query(
+            r#"
+            DELETE FROM anatomy_structures AS structures
+            USING anatomy_zone_modalities AS modality
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE
+                zone.account_id = $1
+                AND modality.zone_id = $2
+                AND modality.id = $3
+                AND structures.id = $4
+                AND structures.modality_id = modality.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .bind(structure_id)
+        .execute(pool)
+        .await?;
+
+        Ok(deleted_rows.rows_affected() > 0)
     }
 
     pub async fn structure_exists_for_modality(
@@ -1938,6 +2031,38 @@ impl PlaygroundRepository {
         .await?;
 
         Ok(row.map(Into::into))
+    }
+
+    pub async fn delete_viewer_annotation(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        annotation_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let deleted_rows = sqlx::query(
+            r#"
+            DELETE FROM anatomy_structure_annotations AS annotations
+            USING anatomy_zone_modality_assets AS assets
+            INNER JOIN anatomy_zone_modalities AS modality ON modality.id = assets.modality_id
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE
+                zone.account_id = $1
+                AND modality.zone_id = $2
+                AND modality.id = $3
+                AND annotations.id = $4
+                AND annotations.asset_id = assets.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .bind(annotation_id)
+        .execute(pool)
+        .await?;
+
+        Ok(deleted_rows.rows_affected() > 0)
     }
 
     pub async fn asset_exists_for_modality(

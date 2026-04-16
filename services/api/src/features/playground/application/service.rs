@@ -794,6 +794,34 @@ impl PlaygroundService {
             .ok_or_else(|| AppError::not_found("Modality asset was not found"))
     }
 
+    pub async fn delete_zone_modality_asset(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        asset_id: Uuid,
+    ) -> Result<(), AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        let deleted = self
+            .repo
+            .delete_zone_modality_asset(
+                &self.pool,
+                account_id,
+                zone_id,
+                modality_id,
+                asset_id,
+            )
+            .await?;
+
+        if !deleted {
+            return Err(AppError::not_found("Modality asset was not found"));
+        }
+
+        Ok(())
+    }
+
     pub async fn get_zone_modality_viewer_manifest(
         &self,
         account_id: Uuid,
@@ -924,6 +952,34 @@ impl PlaygroundService {
             .ok_or_else(|| AppError::not_found("Structure group was not found"))
     }
 
+    pub async fn delete_viewer_structure_group(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        group_id: Uuid,
+    ) -> Result<(), AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        let deleted = self
+            .repo
+            .delete_viewer_structure_group(
+                &self.pool,
+                account_id,
+                zone_id,
+                modality_id,
+                group_id,
+            )
+            .await?;
+
+        if !deleted {
+            return Err(AppError::not_found("Structure group was not found"));
+        }
+
+        Ok(())
+    }
+
     pub async fn create_viewer_structure(
         &self,
         account_id: Uuid,
@@ -1018,6 +1074,34 @@ impl PlaygroundService {
             )
             .await?
             .ok_or_else(|| AppError::not_found("Structure was not found"))
+    }
+
+    pub async fn delete_viewer_structure(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        structure_id: Uuid,
+    ) -> Result<(), AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        let deleted = self
+            .repo
+            .delete_viewer_structure(
+                &self.pool,
+                account_id,
+                zone_id,
+                modality_id,
+                structure_id,
+            )
+            .await?;
+
+        if !deleted {
+            return Err(AppError::not_found("Structure was not found"));
+        }
+
+        Ok(())
     }
 
     pub async fn create_viewer_annotation(
@@ -1151,6 +1235,34 @@ impl PlaygroundService {
             )
             .await?
             .ok_or_else(|| AppError::not_found("Annotation was not found"))
+    }
+
+    pub async fn delete_viewer_annotation(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        annotation_id: Uuid,
+    ) -> Result<(), AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        let deleted = self
+            .repo
+            .delete_viewer_annotation(
+                &self.pool,
+                account_id,
+                zone_id,
+                modality_id,
+                annotation_id,
+            )
+            .await?;
+
+        if !deleted {
+            return Err(AppError::not_found("Annotation was not found"));
+        }
+
+        Ok(())
     }
 
     async fn normalize_optional_group_id(

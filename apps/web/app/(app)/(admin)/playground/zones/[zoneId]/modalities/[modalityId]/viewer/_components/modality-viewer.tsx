@@ -10,32 +10,26 @@ import {
   useRef,
   useState,
   type MutableRefObject,
-  type ReactNode,
 } from "react";
 import gsap from "gsap";
 import {
   ArrowLeft,
   ArrowRight,
-  CameraIcon,
-  CircleIcon,
   CrosshairIcon,
-  EyeIcon,
-  EyeOffIcon,
   Layers2Icon,
   LayoutGrid,
   LoaderCircleIcon,
   PinIcon,
-  RotateCcwIcon,
   SearchIcon,
-  SparklesIcon,
-  Undo2Icon,
+  Snowflake,
+  Trash2Icon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Group, GroupSeparator } from "@/components/ui/group";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import type {
   CreateViewerAnnotationInput,
   CreateViewerStructureGroupInput,
@@ -43,7 +37,6 @@ import type {
   UpdateViewerAnnotationInput,
   UpdateViewerStructureGroupInput,
   UpdateViewerStructureInput,
-  ViewerAccessLevel,
   ViewerAnnotation,
   ViewerAnnotationPoint,
   ViewerStructure,
@@ -54,6 +47,10 @@ import {
   useCreateViewerAnnotationMutation,
   useCreateViewerStructureGroupMutation,
   useCreateViewerStructureMutation,
+  useDeleteViewerAnnotationMutation,
+  useDeleteViewerStructureGroupMutation,
+  useDeleteViewerStructureMutation,
+  useDeleteZoneModalityAssetMutation,
   useGetZoneModalityViewerManifestQuery,
   useUpdateViewerAnnotationMutation,
   useUpdateViewerStructureGroupMutation,
@@ -61,51 +58,21 @@ import {
 } from "@/lib/store/services/playground-api";
 import { cn } from "@/lib/utils";
 import NextImage from "next/image";
-
-type ViewerCanvasMode =
-  | "browse"
-  | "create-label"
-  | "set-anchor"
-  | "set-label"
-  | "draw-region";
-
-type FontScaleMode = "auto" | "large";
-
-type StructureFormState = {
-  accessLevel: ViewerAccessLevel;
-  groupId: string;
-  latinName: string;
-  learningPoints: string;
-  longDescription: string;
-  shortDescription: string;
-  synonyms: string;
-  title: string;
-};
-
-type GroupFormState = {
-  colorHex: string;
-  description: string;
-  iconName: string;
-  isDefaultVisible: boolean;
-  title: string;
-};
-
-type AnnotationFormState = {
-  anchorX: number;
-  anchorY: number;
-  colorHex: string;
-  isPracticeHidden: boolean;
-  isTargetedDefault: boolean;
-  isVisibleDefault: boolean;
-  labelX: number;
-  labelY: number;
-  leaderColorHex: string;
-  note: string;
-  overlayColorHex: string;
-  overlayOpacity: number;
-  polygonPoints: ViewerAnnotationPoint[];
-  titleOverride: string;
-};
+import { Frame } from "@/components/ui/frame";
+import Loader from "@/components/ui/loader";
+import { ModalityViewerRightPanel } from "./right-panel";
+import {
+  DEFAULT_ANNOTATION_COLOR,
+  DEFAULT_GROUP_COLOR,
+  EMPTY_ANNOTATION_FORM,
+  EMPTY_GROUP_FORM,
+  EMPTY_STRUCTURE_FORM,
+  type AnnotationFormState,
+  type FontScaleMode,
+  type GroupFormState,
+  type StructureFormState,
+  type ViewerCanvasMode,
+} from "./modality-viewer.types";
 
 type NavigationSource = "button" | "click" | "search" | "weighting" | "wheel";
 type PreloadPriority = "high" | "low";
@@ -124,50 +91,15 @@ const TERMINAL_INGEST_STATUSES = new Set([
   "cancelled",
 ]);
 
-const DEFAULT_GROUP_COLOR = "#40d6ff";
-const DEFAULT_ANNOTATION_COLOR = "#94f8ff";
 const IMAGE_PRELOAD_RADIUS = 16;
 const IMMEDIATE_PRELOAD_BURST = 10;
 const STACK_PRELOAD_CONCURRENCY = 12;
 const FILMSTRIP_SCROLL_DURATION_SECONDS = 0.26;
 const LOADING_INDICATOR_DELAY_MS = 260;
 const WHEEL_LOADING_INDICATOR_DELAY_MS = 700;
-const WHEEL_DELTA_THRESHOLD = 40;
-const WHEEL_NAVIGATION_COOLDOWN_MS = 18;
-const BRUSH_POINT_STEP = 0.01;
-const EMPTY_GROUP_FORM: GroupFormState = {
-  colorHex: DEFAULT_GROUP_COLOR,
-  description: "",
-  iconName: "",
-  isDefaultVisible: true,
-  title: "",
-};
-const EMPTY_STRUCTURE_FORM: StructureFormState = {
-  accessLevel: "free",
-  groupId: "",
-  latinName: "",
-  learningPoints: "",
-  longDescription: "",
-  shortDescription: "",
-  synonyms: "",
-  title: "",
-};
-const EMPTY_ANNOTATION_FORM: AnnotationFormState = {
-  anchorX: 0.5,
-  anchorY: 0.5,
-  colorHex: DEFAULT_ANNOTATION_COLOR,
-  isPracticeHidden: false,
-  isTargetedDefault: false,
-  isVisibleDefault: true,
-  labelX: 0.65,
-  labelY: 0.35,
-  leaderColorHex: DEFAULT_ANNOTATION_COLOR,
-  note: "",
-  overlayColorHex: DEFAULT_ANNOTATION_COLOR,
-  overlayOpacity: 0.55,
-  polygonPoints: [],
-  titleOverride: "",
-};
+const WHEEL_DELTA_THRESHOLD = 120;
+const WHEEL_NAVIGATION_COOLDOWN_MS = 110;
+const BRUSH_POINT_STEP = 0.006;
 
 export function DraftModalityViewer({
   modalityId,
@@ -202,10 +134,19 @@ export function DraftModalityViewer({
     useCreateViewerAnnotationMutation();
   const [updateAnnotation, { isLoading: isUpdatingAnnotation }] =
     useUpdateViewerAnnotationMutation();
+  const [deleteGroup, { isLoading: isDeletingGroup }] =
+    useDeleteViewerStructureGroupMutation();
+  const [deleteStructure, { isLoading: isDeletingStructure }] =
+    useDeleteViewerStructureMutation();
+  const [deleteAnnotation, { isLoading: isDeletingAnnotation }] =
+    useDeleteViewerAnnotationMutation();
+  const [deleteAsset, { isLoading: isDeletingAsset }] =
+    useDeleteZoneModalityAssetMutation();
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
   const [currentAssetId, setCurrentAssetId] = useState<string | null>(null);
   const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedStructureId, setSelectedStructureId] = useState<string | null>(
     null,
   );
@@ -252,6 +193,10 @@ export function DraftModalityViewer({
   const [showStudyPanel, setShowStudyPanel] = useState(true);
   const [showControlPanel, setShowControlPanel] = useState(true);
   const [pinControlPanel, setPinControlPanel] = useState(false);
+  const [canvasRotationQuarterTurns, setCanvasRotationQuarterTurns] =
+    useState(0);
+  const [canvasFlipHorizontal, setCanvasFlipHorizontal] = useState(false);
+  const [canvasFlipVertical, setCanvasFlipVertical] = useState(false);
 
   const filmstripScrollerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -550,8 +495,8 @@ export function DraftModalityViewer({
   const selectedStructure = selectedStructureId
     ? (structuresById.get(selectedStructureId) ?? null)
     : null;
-  const selectedGroup = selectedStructure?.groupId
-    ? (groupsById.get(selectedStructure.groupId) ?? null)
+  const selectedGroup = selectedGroupId
+    ? (groupsById.get(selectedGroupId) ?? null)
     : null;
   const selectedAnnotation = selectedAnnotationId
     ? (annotationsById.get(selectedAnnotationId) ?? null)
@@ -630,6 +575,24 @@ export function DraftModalityViewer({
             .map((group) => group.id),
     );
   }, [data, groups]);
+
+  useEffect(() => {
+    if (selectedGroupId && groupsById.has(selectedGroupId)) {
+      return;
+    }
+
+    if (
+      selectedStructure?.groupId &&
+      groupsById.has(selectedStructure.groupId)
+    ) {
+      setSelectedGroupId(selectedStructure.groupId);
+      return;
+    }
+
+    if (selectedGroupId) {
+      setSelectedGroupId(null);
+    }
+  }, [groupsById, selectedGroupId, selectedStructure?.groupId]);
 
   useEffect(() => {
     if (!weightings.includes(activeWeighting)) {
@@ -911,6 +874,10 @@ export function DraftModalityViewer({
     isCreatingAnnotation ||
     isCreatingGroup ||
     isCreatingStructure ||
+    isDeletingAnnotation ||
+    isDeletingAsset ||
+    isDeletingGroup ||
+    isDeletingStructure ||
     isUpdatingAnnotation ||
     isUpdatingGroup ||
     isUpdatingStructure;
@@ -1122,11 +1089,6 @@ export function DraftModalityViewer({
     }));
   }
 
-  function resetAuthoringDraft() {
-    setCanvasMode("browse");
-    setAnnotationForm(EMPTY_ANNOTATION_FORM);
-  }
-
   function clearPolygonDraft() {
     updateAnnotationForm("polygonPoints", []);
   }
@@ -1171,6 +1133,7 @@ export function DraftModalityViewer({
         selectedStructure ? "Structure updated." : "Structure created.",
       );
       setSelectedStructureId(structure.id);
+      setSelectedGroupId(structure.groupId ?? null);
     } catch (mutationError) {
       toast.error(
         readMutationError(mutationError, "Unable to save the structure."),
@@ -1252,6 +1215,7 @@ export function DraftModalityViewer({
         : await createGroup({ input, modalityId, zoneId }).unwrap();
 
       toast.success(selectedGroup ? "Group updated." : "Group created.");
+      setSelectedGroupId(group.id);
       setVisibleGroupIds((current) =>
         group.isDefaultVisible
           ? Array.from(new Set([...current, group.id]))
@@ -1264,12 +1228,129 @@ export function DraftModalityViewer({
     }
   }
 
+  async function handleDeleteGroup(groupId: string) {
+    const group = groupsById.get(groupId);
+
+    if (!group) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete group "${group.title}"? Topics in this group stay available but become ungrouped.`,
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await deleteGroup({ groupId, modalityId, zoneId }).unwrap();
+      if (selectedGroupId === groupId) {
+        setSelectedGroupId(null);
+      }
+      if (structureForm.groupId === groupId) {
+        updateStructureForm("groupId", "");
+      }
+      toast.success("Group deleted.");
+    } catch (mutationError) {
+      toast.error(
+        readMutationError(mutationError, "Unable to delete the group."),
+      );
+    }
+  }
+
+  async function handleDeleteStructure(structureId: string) {
+    const structure = structuresById.get(structureId);
+
+    if (!structure) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Delete topic "${structure.title}"? All linked pins and areas will be removed.`,
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await deleteStructure({ modalityId, structureId, zoneId }).unwrap();
+      if (selectedStructureId === structureId) {
+        setSelectedStructureId(null);
+        setSelectedAnnotationId(null);
+      }
+      toast.success("Topic deleted.");
+    } catch (mutationError) {
+      toast.error(
+        readMutationError(mutationError, "Unable to delete the topic."),
+      );
+    }
+  }
+
+  async function handleDeleteAnnotation(annotationId: string) {
+    const annotation = annotationsById.get(annotationId);
+
+    if (!annotation) {
+      return;
+    }
+
+    if (!window.confirm("Delete this pin and area from the slice?")) {
+      return;
+    }
+
+    try {
+      await deleteAnnotation({ annotationId, modalityId, zoneId }).unwrap();
+      if (selectedAnnotationId === annotationId) {
+        setSelectedAnnotationId(null);
+        setCanvasMode("browse");
+      }
+      toast.success("Annotation deleted.");
+    } catch (mutationError) {
+      toast.error(
+        readMutationError(mutationError, "Unable to delete the annotation."),
+      );
+    }
+  }
+
+  async function handleDeleteCurrentSlice() {
+    if (!currentAsset) {
+      toast.error("Select a slice first.");
+      return;
+    }
+
+    const warning =
+      activeAssets.length <= 1
+        ? "This is the last available slice. Delete it anyway?"
+        : `Delete slice "${currentAsset.label}"?`;
+
+    if (!window.confirm(warning)) {
+      return;
+    }
+
+    try {
+      await deleteAsset({
+        zoneId,
+        modalityId,
+        assetId: currentAsset.id,
+      }).unwrap();
+      setSelectedAnnotationId(null);
+      toast.success("Slice removed.");
+    } catch (mutationError) {
+      toast.error(
+        readMutationError(mutationError, "Unable to delete the slice."),
+      );
+    }
+  }
+
   function jumpToStructure(structureId: string) {
+    const structure = structuresById.get(structureId);
     const nextAnnotation = annotations.find(
       (annotation) => annotation.structureId === structureId,
     );
 
     setSelectedStructureId(structureId);
+    setSelectedGroupId(structure?.groupId ?? null);
     setTargetedLabeling(true);
 
     if (!nextAnnotation) {
@@ -1388,10 +1469,7 @@ export function DraftModalityViewer({
     }
 
     const direction = Math.sign(wheelDeltaRef.current);
-    const stepCount = Math.max(
-      1,
-      Math.floor(Math.abs(wheelDeltaRef.current) / WHEEL_DELTA_THRESHOLD),
-    );
+    const stepCount = 1;
     wheelDeltaRef.current = 0;
 
     if (direction === 0) {
@@ -1434,6 +1512,79 @@ export function DraftModalityViewer({
     } catch {
       toast.error("Unable to capture the current viewer frame.");
     }
+  }
+
+  function handlePreviousAsset() {
+    navigateToAsset(
+      clamp(navigationAssetIndex - 1, 0, activeAssets.length - 1),
+      "button",
+    );
+  }
+
+  function handleNextAsset() {
+    navigateToAsset(
+      clamp(navigationAssetIndex + 1, 0, activeAssets.length - 1),
+      "button",
+    );
+  }
+
+  function handleRotateCanvasLeft() {
+    setCanvasRotationQuarterTurns((current) => (current + 3) % 4);
+  }
+
+  function handleRotateCanvasRight() {
+    setCanvasRotationQuarterTurns((current) => (current + 1) % 4);
+  }
+
+  function handleFlipCanvasHorizontal() {
+    setCanvasFlipHorizontal((current) => !current);
+  }
+
+  function handleFlipCanvasVertical() {
+    setCanvasFlipVertical((current) => !current);
+  }
+
+  function handleReset(){
+    setCanvasRotationQuarterTurns(0);
+    setCanvasFlipHorizontal(false);
+    setCanvasFlipVertical(false);
+    navigateToAsset(0, "button");
+  }
+
+  function handleResetGroupDraft() {
+    setSelectedGroupId(null);
+    setGroupForm(EMPTY_GROUP_FORM);
+  }
+
+  function handleResetStructureDraft() {
+    setSelectedStructureId(null);
+    setSelectedAnnotationId(null);
+    setStructureForm({
+      ...EMPTY_STRUCTURE_FORM,
+      groupId: selectedGroupId ?? groups[0]?.id ?? "",
+    });
+  }
+
+  function handleSelectGroupFromPanel(groupId: string) {
+    setSelectedGroupId(groupId);
+    updateStructureForm("groupId", groupId);
+  }
+
+  function handleSelectStructureFromPanel(
+    structureId: string,
+    groupId: string | null,
+  ) {
+    setSelectedStructureId(structureId);
+    setSelectedGroupId(groupId);
+    setSelectedAnnotationId(null);
+  }
+
+  function handleSelectAnnotationFromPanel(
+    annotationId: string,
+    structureId: string,
+  ) {
+    setSelectedAnnotationId(annotationId);
+    setSelectedStructureId(structureId);
   }
 
   if (isLoading && !data) {
@@ -1540,7 +1691,10 @@ export function DraftModalityViewer({
       <main className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
         <ViewerCanvas
           annotationForm={annotationForm}
+          canvasFlipHorizontal={canvasFlipHorizontal}
+          canvasFlipVertical={canvasFlipVertical}
           canvasMode={canvasMode}
+          canvasRotationQuarterTurns={canvasRotationQuarterTurns}
           currentAsset={currentAsset}
           currentImageElement={currentImageElement}
           darkMode={darkMode}
@@ -1567,22 +1721,25 @@ export function DraftModalityViewer({
           onAnnotationSelect={(annotationId, structureId) => {
             setSelectedAnnotationId(annotationId);
             setSelectedStructureId(structureId);
+            const structure = structuresById.get(structureId);
+            setSelectedGroupId(structure?.groupId ?? null);
           }}
           onCanvasClick={handleCanvasClick}
           onCanvasDoubleClick={handleCanvasDoubleClick}
           onWheelNavigate={handleWheelNavigation}
         />
 
-        <div className="absolute right-3 top-3 z-30 flex items-center gap-1 rounded-lg border border-white/10 bg-black/45 p-1 backdrop-blur">
-          <button
+        <Group
+          aria-label="Viewer controls"
+          className="absolute right-3 top-3 z-30 rounded-sm bg-white/6 p-0.5"
+        >
+          <Button
+            aria-label={
+              showStudyPanel ? "Hide study panel" : "Show study panel"
+            }
             type="button"
-            className={cn(
-              "rounded-md border border-white/10 p-2 transition",
-              showStudyPanel
-                ? "text-white/80 hover:bg-white/10"
-                : "bg-cyan-500/20 text-cyan-200",
-            )}
-            title={showStudyPanel ? "Hide study panel" : "Show study panel"}
+            size="icon-lg"
+            variant={!showStudyPanel ? "secondary" : "default"}
             onClick={() => setShowStudyPanel((current) => !current)}
           >
             {showStudyPanel ? (
@@ -1590,63 +1747,43 @@ export function DraftModalityViewer({
             ) : (
               <ArrowRight className="size-4" />
             )}
-          </button>
-          <button
+          </Button>
+          <Button
+            aria-label={
+              showCrossReferences ? "Hide crosshair" : "Show crosshair"
+            }
             type="button"
-            className="rounded-md border border-white/10 p-2 text-white/80 transition hover:bg-white/10"
-            title="Open block view"
-            onClick={() => setShowBlockView(true)}
-          >
-            <LayoutGrid className="size-4" />
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "rounded-md border border-white/10 p-2 transition",
-              showCrossReferences
-                ? "bg-cyan-500/20 text-cyan-200"
-                : "text-white/70 hover:bg-white/10",
-            )}
-            title="Toggle guide lines"
+            size="icon-lg"
+            variant={!showCrossReferences ? "secondary" : "default"}
             onClick={() => setShowCrossReferences((current) => !current)}
           >
             <CrosshairIcon className="size-4" />
-          </button>
-          <button
+          </Button>
+          <Button
+            aria-label={showLabels ? "Hide labels" : "Show labels"}
             type="button"
-            className={cn(
-              "rounded-md border border-white/10 p-2 transition",
-              showLabels
-                ? "bg-cyan-500/20 text-cyan-200"
-                : "text-white/70 hover:bg-white/10",
-            )}
-            title="Toggle labels"
+            size="icon-lg"
+            variant={!showLabels ? "secondary" : "default"}
             onClick={() => setShowLabels((current) => !current)}
           >
             <Layers2Icon className="size-4" />
-          </button>
-          <button
+          </Button>
+          <Button
+            aria-label={
+              pinControlPanel ? "Unpin control panel" : "Pin control panel"
+            }
             type="button"
-            className={cn(
-              "rounded-md border border-white/10 p-2 transition",
-              pinControlPanel
-                ? "bg-lime-500/20 text-lime-100"
-                : "text-white/70 hover:bg-white/10",
-            )}
-            title={pinControlPanel ? "Unpin menu panel" : "Pin menu panel"}
+            size="icon-lg"
+            variant={!pinControlPanel ? "secondary" : "default"}
             onClick={() => setPinControlPanel((current) => !current)}
           >
             <PinIcon className="size-4" />
-          </button>
-          <button
+          </Button>
+          <Button
+            aria-label={showControlPanel ? "Hide menu" : "Show menu"}
             type="button"
-            className={cn(
-              "rounded-md border border-white/10 p-2 transition",
-              showControlPanel
-                ? "text-white/80 hover:bg-white/10"
-                : "bg-cyan-500/20 text-cyan-200",
-            )}
-            title={showControlPanel ? "Hide menu panel" : "Show menu panel"}
+            size="icon-lg"
+            variant={!showControlPanel ? "secondary" : "default"}
             onClick={() =>
               setShowControlPanel((current) =>
                 pinControlPanel ? true : !current,
@@ -1658,29 +1795,37 @@ export function DraftModalityViewer({
             ) : (
               <ArrowLeft className="size-4" />
             )}
-          </button>
-          <button
+          </Button>
+          {showControlPanel ? (
+              <Button
+                aria-label={
+                  isAuthoringMode
+                    ? "Switch to learner mode"
+                    : "Switch to authoring mode"
+                }
+                type="button"
+                size="icon-lg"
+                variant={!isAuthoringMode ? "secondary" : "default"}
+                onClick={() =>
+                  setViewerMode((current) =>
+                    current === "authoring" ? "learner" : "authoring",
+                  )
+                }
+              >
+                <Snowflake className="size-4" />
+              </Button>
+          ) : null}
+          <Button
+            aria-label="Delete current slice"
             type="button"
-            className={cn(
-              "rounded-md border border-white/10 p-2 transition",
-              isAuthoringMode
-                ? "bg-lime-500/15 text-lime-200"
-                : "text-white/70 hover:bg-white/10",
-            )}
-            title={
-              isAuthoringMode
-                ? "Switch to learner mode"
-                : "Switch to authoring mode"
-            }
-            onClick={() =>
-              setViewerMode((current) =>
-                current === "authoring" ? "learner" : "authoring",
-              )
-            }
+            size="icon-lg"
+            variant="secondary"
+            disabled={!currentAsset || busy}
+            onClick={() => void handleDeleteCurrentSlice()}
           >
-            <SparklesIcon className="size-4" />
-          </button>
-        </div>
+            <Trash2Icon className="size-4" />
+          </Button>
+        </Group>
 
         {!showStudyPanel ? (
           <button
@@ -1708,7 +1853,7 @@ export function DraftModalityViewer({
               <div className="truncate text-sm font-semibold text-lime-100">
                 {lockedPreviewStructure.title}
               </div>
-              <span className="rounded bg-lime-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-lime-200">
+              <span className="rounded bg-lime-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-lime-200">
                 Locked
               </span>
             </div>
@@ -1786,17 +1931,18 @@ export function DraftModalityViewer({
           </div>
         ) : null}
       </main>
-      <div className="absolute px-2 bottom-0 w-full left-0 bg-white/[0.03]">
+
+      <div className="absolute px-2 bottom-0 w-full left-0 bg-white/3">
         <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-sm  p-1">
           <div className="flex size-6 items-center justify-center rounded-md">
             <NextImage src="/logo.png" alt="Anatomy" height={24} width={24} />
           </div>
 
-          <div className="relative min-w-0">
-            <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-cyan-300/95 shadow-[0_0_10px_rgba(34,211,238,0.85)]" />
+          <div className="relative min-w-0 ml-23.75">
+            <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-primary shadow-[0_0_10px_rgba(34,211,238,0.85)]" />
             <div
               ref={filmstripScrollerRef}
-              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-white/[0.03] p-1"
+              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-white/3 p-1"
             >
               <div className="flex w-max items-end gap-1">
                 {filmstripAssets.map(({ asset, assetIndex }) => (
@@ -1832,15 +1978,7 @@ export function DraftModalityViewer({
             <Button size={"icon"} onClick={() => setShowBlockView(true)}>
               <LayoutGrid />
             </Button>
-            <Button
-              size={"icon"}
-              onClick={() =>
-                navigateToAsset(
-                  clamp(navigationAssetIndex - 1, 0, activeAssets.length - 1),
-                  "button",
-                )
-              }
-            >
+            <Button size={"icon"} onClick={handlePreviousAsset}>
               <ArrowLeft />
             </Button>
             <p className="pr-1 text-sm font-semibold tabular-nums text-white/85 w-24 text-center">
@@ -1848,15 +1986,7 @@ export function DraftModalityViewer({
                 ? `${navigationAssetIndex + 1}/${activeAssets.length}`
                 : `0/${activeAssets.length}`}
             </p>
-            <Button
-              size={"icon"}
-              onClick={() =>
-                navigateToAsset(
-                  clamp(navigationAssetIndex + 1, 0, activeAssets.length - 1),
-                  "button",
-                )
-              }
-            >
+            <Button size={"icon"} onClick={handleNextAsset}>
               <ArrowRight />
             </Button>
           </div>
@@ -1864,638 +1994,87 @@ export function DraftModalityViewer({
       </div>
 
       {showControlPanel ? (
-        <aside className="min-h-0 overflow-y-auto p-2">
-          <div className="mb-3 flex items-center justify-between rounded-xl border border-white/10 bg-black/25 px-3 py-2">
-            <div className="text-sm font-semibold text-white">
-              {isAuthoringMode ? "Authoring Menu" : "Learner Menu"}
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                className={cn(
-                  "rounded-md border border-white/10 p-1.5 transition",
-                  pinControlPanel
-                    ? "bg-lime-500/20 text-lime-100"
-                    : "text-white/70 hover:bg-white/10",
-                )}
-                title={pinControlPanel ? "Unpin menu panel" : "Pin menu panel"}
-                onClick={() => setPinControlPanel((current) => !current)}
-              >
-                <PinIcon className="size-3.5" />
-              </button>
-              <button
-                type="button"
-                className="rounded-md border border-white/10 px-2 py-1 text-xs text-white/70 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={pinControlPanel}
-                title={
-                  pinControlPanel ? "Unpin to hide panel" : "Hide menu panel"
-                }
-                onClick={() => setShowControlPanel(false)}
-              >
-                Hide
-              </button>
-            </div>
-          </div>
-
-          <ViewerSidebarSection title="Weightings">
-            <div className="grid grid-cols-3 gap-2">
-              {weightings.map((weighting) => (
-                <button
-                  key={weighting}
-                  type="button"
-                  className={cn(
-                    "rounded-xl border px-3 py-2 text-sm transition",
-                    weighting === activeWeighting
-                      ? "border-cyan-400 bg-cyan-500/10 text-white"
-                      : "border-white/10 text-white/65 hover:bg-white/6",
-                  )}
-                  onClick={() => handleWeightingChange(weighting)}
-                >
-                  {formatWeightingLabel(weighting)}
-                </button>
-              ))}
-            </div>
-          </ViewerSidebarSection>
-
-          <ViewerSidebarSection title="Anatomical Parts">
-            <div className="space-y-2">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-xl border border-white/10 px-3 py-2 text-sm"
-                onClick={() =>
-                  setVisibleGroupIds(
-                    visibleGroupIds.length === groups.length
-                      ? []
-                      : groups.map((group) => group.id),
-                  )
-                }
-              >
-                <span>Select all</span>
-                <span className="text-xs text-white/45">
-                  {visibleGroupIds.length}/{groups.length}
-                </span>
-              </button>
-              <div className="grid grid-cols-3 gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    setVisibleGroupIds(groups.map((group) => group.id))
-                  }
-                >
-                  Show all
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setVisibleGroupIds([])}
-                >
-                  Hide all
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    setVisibleGroupIds(
-                      groups
-                        .filter((group) => group.isDefaultVisible)
-                        .map((group) => group.id),
-                    )
-                  }
-                >
-                  Defaults
-                </Button>
-              </div>
-              {groups.map((group) => (
-                <button
-                  key={group.id}
-                  type="button"
-                  className="flex w-full items-center justify-between rounded-xl border border-white/8 px-3 py-2 text-left text-sm"
-                  onClick={() =>
-                    updateGroupVisibility(
-                      group.id,
-                      !visibleGroupIds.includes(group.id),
-                    )
-                  }
-                >
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="size-2.5 rounded-full"
-                      style={{ backgroundColor: group.colorHex }}
-                    />
-                    {group.title}
-                  </span>
-                  {visibleGroupIds.includes(group.id) ? (
-                    <EyeIcon className="size-4 text-white/60" />
-                  ) : (
-                    <EyeOffIcon className="size-4 text-white/35" />
-                  )}
-                </button>
-              ))}
-            </div>
-          </ViewerSidebarSection>
-
-          <ViewerSidebarSection title="Transformations">
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() =>
-                  navigateToAsset(
-                    clamp(navigationAssetIndex - 1, 0, activeAssets.length - 1),
-                    "button",
-                  )
-                }
-              >
-                Previous
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() =>
-                  navigateToAsset(
-                    clamp(navigationAssetIndex + 1, 0, activeAssets.length - 1),
-                    "button",
-                  )
-                }
-              >
-                Next
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={resetAuthoringDraft}
-              >
-                <RotateCcwIcon className="size-4" />
-                Reset
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={handleCaptureSnapshot}
-              >
-                <CameraIcon className="size-4" />
-                Screenshot
-              </Button>
-            </div>
-          </ViewerSidebarSection>
-
-          {isAuthoringMode ? (
-            <>
-              <ViewerSidebarSection title="Labeling">
-                <div className="grid grid-cols-2 gap-2">
-                  <TogglePill
-                    active={practiceMode}
-                    label="Practice mode"
-                    onToggle={setPracticeMode}
-                  />
-                  <TogglePill
-                    active={pinsOnly}
-                    label="Pins only"
-                    onToggle={setPinsOnly}
-                  />
-                  <TogglePill
-                    active={targetedLabeling}
-                    label="Focus topic"
-                    onToggle={setTargetedLabeling}
-                  />
-                  <TogglePill
-                    active={showLabels}
-                    label="Show names"
-                    onToggle={setShowLabels}
-                  />
-                </div>
-                <div className="mt-3">
-                  <div className="mb-2 text-sm text-white/70">Text size</div>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => setFontScaleMode("auto")}
-                    >
-                      Auto
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => setFontScaleMode("large")}
-                    >
-                      Large
-                    </Button>
-                  </div>
-                </div>
-              </ViewerSidebarSection>
-
-              <ViewerSidebarSection title="Display mode">
-                <div className="space-y-2">
-                  <ToggleRow
-                    active={showOrientation}
-                    label="Orientation title"
-                    onToggle={setShowOrientation}
-                  />
-                  <ToggleRow
-                    active={showCrossReferences}
-                    label="Guide lines"
-                    onToggle={setShowCrossReferences}
-                  />
-                  <ToggleRow
-                    active={darkMode}
-                    label="Dark background"
-                    onToggle={setDarkMode}
-                  />
-                </div>
-                <div className="mt-3 space-y-2">
-                  <div className="text-sm text-white/70">Overlay strength</div>
-                  <input
-                    className="w-full accent-cyan-400"
-                    max={1}
-                    min={0.1}
-                    step={0.05}
-                    type="range"
-                    value={overlayOpacity}
-                    onChange={(event) =>
-                      setOverlayOpacity(Number(event.target.value))
-                    }
-                  />
-                </div>
-              </ViewerSidebarSection>
-
-              <ViewerSidebarSection title="Advanced settings">
-                <div className="space-y-2">
-                  <ToggleRow
-                    active={reverseScroll}
-                    label="Reverse scroll"
-                    onToggle={setReverseScroll}
-                  />
-                  <ToggleRow
-                    active={pointAnimation}
-                    label="Pulse markers"
-                    onToggle={setPointAnimation}
-                  />
-                </div>
-              </ViewerSidebarSection>
-            </>
-          ) : (
-            <ViewerSidebarSection title="Study controls">
-              <div className="grid grid-cols-2 gap-2">
-                <TogglePill
-                  active={showLabels}
-                  label="Show names"
-                  onToggle={setShowLabels}
-                />
-                <TogglePill
-                  active={pinsOnly}
-                  label="Pins only"
-                  onToggle={setPinsOnly}
-                />
-                <TogglePill
-                  active={practiceMode}
-                  label="Practice"
-                  onToggle={setPracticeMode}
-                />
-                <TogglePill
-                  active={darkMode}
-                  label="Dark mode"
-                  onToggle={setDarkMode}
-                />
-              </div>
-              <div className="mt-3 space-y-2">
-                <ToggleRow
-                  active={showOrientation}
-                  label="Orientation title"
-                  onToggle={setShowOrientation}
-                />
-                <ToggleRow
-                  active={showCrossReferences}
-                  label="Guide lines"
-                  onToggle={setShowCrossReferences}
-                />
-              </div>
-              <div className="mt-3 space-y-2">
-                <div className="text-sm text-white/70">Overlay strength</div>
-                <input
-                  className="w-full accent-cyan-400"
-                  max={1}
-                  min={0.1}
-                  step={0.05}
-                  type="range"
-                  value={overlayOpacity}
-                  onChange={(event) =>
-                    setOverlayOpacity(Number(event.target.value))
-                  }
-                />
-              </div>
-            </ViewerSidebarSection>
-          )}
-
-          {isAuthoringMode ? (
-            <>
-              <ViewerSidebarSection title="Workflow status">
-                <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-3 text-sm text-white/70">
-                  Follow this order: group, then topic, then pin/area.
-                  Controls only
-                  appear when the previous step is ready.
-                </div>
-                <div className="mt-3 rounded-2xl border border-white/8 bg-black/20 p-3 text-sm text-white/70">
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Selected topic</span>
-                    <span className="text-right text-white">
-                      {selectedStructure?.title ?? "No topic selected yet"}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <span>Current tool</span>
-                    <span className="text-right text-white">
-                      {getCanvasModeLabel(canvasMode)}
-                    </span>
-                  </div>
-                </div>
-              </ViewerSidebarSection>
-
-              <ViewerSidebarSection title="Authoring workflow">
-                <div className="space-y-4">
-                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-white">
-                        Step 1: Group
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setGroupForm(EMPTY_GROUP_FORM)}
-                      >
-                        New
-                      </Button>
-                    </div>
-                    <Input
-                      placeholder="Group title"
-                      value={groupForm.title}
-                      onChange={(event) =>
-                        updateGroupForm("title", event.target.value)
-                      }
-                    />
-                    <Input
-                      placeholder="Color hex"
-                      value={groupForm.colorHex}
-                      onChange={(event) =>
-                        updateGroupForm("colorHex", event.target.value)
-                      }
-                    />
-                    <Button
-                      disabled={busy}
-                      type="button"
-                      variant="secondary"
-                      onClick={handleSaveGroup}
-                    >
-                      {busy ? (
-                        <LoaderCircleIcon className="size-4 animate-spin" />
-                      ) : (
-                        <Layers2Icon className="size-4" />
-                      )}
-                      Save group
-                    </Button>
-                  </div>
-
-                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-white">
-                        Step 2: Topic
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => {
-                          setSelectedStructureId(null);
-                          setSelectedAnnotationId(null);
-                        }}
-                      >
-                        New
-                      </Button>
-                    </div>
-                    <Input
-                      placeholder="Topic title"
-                      value={structureForm.title}
-                      onChange={(event) =>
-                        updateStructureForm("title", event.target.value)
-                      }
-                    />
-                    <select
-                      className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
-                      value={structureForm.groupId}
-                      onChange={(event) =>
-                        updateStructureForm("groupId", event.target.value)
-                      }
-                    >
-                      <option value="">No group yet</option>
-                      {groups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.title}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
-                      value={structureForm.accessLevel}
-                      onChange={(event) =>
-                        updateStructureForm(
-                          "accessLevel",
-                          event.target.value as ViewerAccessLevel,
-                        )
-                      }
-                    >
-                      <option value="free">Open to all learners</option>
-                      <option value="subscription">Subscriber lesson</option>
-                    </select>
-                    <Textarea
-                      placeholder="Short explanation shown first"
-                      value={structureForm.shortDescription}
-                      onChange={(event) =>
-                        updateStructureForm("shortDescription", event.target.value)
-                      }
-                    />
-                    <button
-                      type="button"
-                      className="text-left text-xs text-cyan-300 underline underline-offset-2"
-                      onClick={() =>
-                        setShowStructureAdvanced((current) => !current)
-                      }
-                    >
-                      {showStructureAdvanced
-                        ? "Hide advanced topic fields"
-                        : "Show advanced topic fields"}
-                    </button>
-                    {showStructureAdvanced ? (
-                      <>
-                        <Input
-                          placeholder="Latin name"
-                          value={structureForm.latinName}
-                          onChange={(event) =>
-                            updateStructureForm("latinName", event.target.value)
-                          }
-                        />
-                        <Textarea
-                          placeholder="Detailed teaching explanation"
-                          value={structureForm.longDescription}
-                          onChange={(event) =>
-                            updateStructureForm("longDescription", event.target.value)
-                          }
-                        />
-                        <Textarea
-                          placeholder="Key learning points, one line per point"
-                          value={structureForm.learningPoints}
-                          onChange={(event) =>
-                            updateStructureForm("learningPoints", event.target.value)
-                          }
-                        />
-                        <Textarea
-                          placeholder="Other names, separated by commas"
-                          value={structureForm.synonyms}
-                          onChange={(event) =>
-                            updateStructureForm("synonyms", event.target.value)
-                          }
-                        />
-                      </>
-                    ) : null}
-                    <Button
-                      disabled={busy}
-                      type="button"
-                      onClick={handleSaveStructure}
-                    >
-                      {busy ? (
-                        <LoaderCircleIcon className="size-4 animate-spin" />
-                      ) : (
-                        <SparklesIcon className="size-4" />
-                      )}
-                      Save topic
-                    </Button>
-                  </div>
-
-                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-                    <div className="text-sm font-medium text-white">
-                      Step 3: Pin and area
-                    </div>
-                    {!canEditPinArea ? (
-                      <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
-                        Save or select a topic first. Pin and area tools unlock
-                        automatically after that.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setCanvasMode("create-label")}
-                          >
-                            <PinIcon className="size-4" />
-                            Place pin
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setCanvasMode("draw-region")}
-                          >
-                            <CrosshairIcon className="size-4" />
-                            Brush area
-                          </Button>
-                        </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-3 text-sm text-white/70">
-                          {getCanvasModeDescription(canvasMode)}
-                        </div>
-
-                        {canEditAnnotationDetails ? (
-                          <>
-                            <div className="grid grid-cols-2 gap-2">
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => setCanvasMode("set-anchor")}
-                              >
-                                Move pin
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => setCanvasMode("set-label")}
-                              >
-                                Move name
-                              </Button>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <Button
-                                disabled={annotationForm.polygonPoints.length === 0}
-                                type="button"
-                                variant="secondary"
-                                onClick={removeLastPolygonPoint}
-                              >
-                                <Undo2Icon className="size-4" />
-                                Undo point
-                              </Button>
-                              <Button
-                                disabled={annotationForm.polygonPoints.length === 0}
-                                type="button"
-                                variant="secondary"
-                                onClick={clearPolygonDraft}
-                              >
-                                <RotateCcwIcon className="size-4" />
-                                Clear area
-                              </Button>
-                            </div>
-                            <Input
-                              placeholder="Name shown on the image"
-                              value={annotationForm.titleOverride}
-                              onChange={(event) =>
-                                updateAnnotationForm("titleOverride", event.target.value)
-                              }
-                            />
-                            <Textarea
-                              placeholder="Teaching note"
-                              value={annotationForm.note}
-                              onChange={(event) =>
-                                updateAnnotationForm("note", event.target.value)
-                              }
-                            />
-                            <Button
-                              disabled={busy || !selectedStructure}
-                              type="button"
-                              onClick={handleSaveAnnotation}
-                            >
-                              {busy ? (
-                                <LoaderCircleIcon className="size-4 animate-spin" />
-                              ) : (
-                                <CircleIcon className="size-4" />
-                              )}
-                              Save annotation
-                            </Button>
-                          </>
-                        ) : (
-                          <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
-                            Place one pin or start brushing an area to unlock
-                            annotation details.
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </ViewerSidebarSection>
-            </>
-          ) : (
-            <ViewerSidebarSection title="Learner preview">
-              <div className="rounded-2xl border border-cyan-300/30 bg-cyan-500/10 p-3 text-sm text-cyan-100">
-                Learner mode keeps only study controls and topic exploration.
-                Authoring steps are hidden to avoid accidental editing.
-              </div>
-            </ViewerSidebarSection>
-          )}
-        </aside>
+        <ModalityViewerRightPanel
+          activeWeighting={activeWeighting}
+          annotationForm={annotationForm}
+          busy={busy}
+          canEditAnnotationDetails={canEditAnnotationDetails}
+          canEditPinArea={canEditPinArea}
+          canvasFlipHorizontal={canvasFlipHorizontal}
+          canvasFlipVertical={canvasFlipVertical}
+          canvasMode={canvasMode}
+          currentAnnotations={currentAnnotations}
+          currentAsset={currentAsset}
+          darkMode={darkMode}
+          fontScaleMode={fontScaleMode}
+          groupForm={groupForm}
+          groups={groups}
+          groupsById={groupsById}
+          isAuthoringMode={isAuthoringMode}
+          modalityId={modalityId}
+          overlayOpacity={overlayOpacity}
+          pinsOnly={pinsOnly}
+          pointAnimation={pointAnimation}
+          practiceMode={practiceMode}
+          reverseScroll={reverseScroll}
+          selectedAnnotationId={selectedAnnotationId}
+          selectedGroupId={selectedGroupId}
+          selectedStructure={selectedStructure}
+          selectedStructureId={selectedStructureId}
+          showCrossReferences={showCrossReferences}
+          showLabels={showLabels}
+          showOrientation={showOrientation}
+          showStructureAdvanced={showStructureAdvanced}
+          structureForm={structureForm}
+          structures={structures}
+          structuresById={structuresById}
+          targetedLabeling={targetedLabeling}
+          visibleGroupIds={visibleGroupIds}
+          weightings={weightings}
+          zoneId={zoneId}
+          handleReset={handleReset}
+          onAnnotationFormChange={updateAnnotationForm}
+          onCanvasModeChange={setCanvasMode}
+          onCaptureSnapshot={handleCaptureSnapshot}
+          onClearPolygonDraft={clearPolygonDraft}
+          onDarkModeChange={setDarkMode}
+          onDeleteAnnotation={handleDeleteAnnotation}
+          onDeleteGroup={handleDeleteGroup}
+          onDeleteStructure={handleDeleteStructure}
+          onFlipCanvasHorizontal={handleFlipCanvasHorizontal}
+          onFlipCanvasVertical={handleFlipCanvasVertical}
+          onFontScaleModeChange={setFontScaleMode}
+          onGroupFormChange={updateGroupForm}
+          onGroupVisibilityChange={updateGroupVisibility}
+          onNavigateNext={handleNextAsset}
+          onNavigatePrevious={handlePreviousAsset}
+          onOverlayOpacityChange={setOverlayOpacity}
+          onPinsOnlyChange={setPinsOnly}
+          onPointAnimationChange={setPointAnimation}
+          onPracticeModeChange={setPracticeMode}
+          onResetGroup={handleResetGroupDraft}
+          onResetStructure={handleResetStructureDraft}
+          onReverseScrollChange={setReverseScroll}
+          onRotateCanvasLeft={handleRotateCanvasLeft}
+          onRotateCanvasRight={handleRotateCanvasRight}
+          onSaveAnnotation={handleSaveAnnotation}
+          onSaveGroup={handleSaveGroup}
+          onSaveStructure={handleSaveStructure}
+          onSelectAnnotation={handleSelectAnnotationFromPanel}
+          onSelectGroup={handleSelectGroupFromPanel}
+          onSelectStructure={handleSelectStructureFromPanel}
+          onShowCrossReferencesChange={setShowCrossReferences}
+          onShowLabelsChange={setShowLabels}
+          onShowOrientationChange={setShowOrientation}
+          onStructureAdvancedToggle={() =>
+            setShowStructureAdvanced((current) => !current)
+          }
+          onStructureFormChange={updateStructureForm}
+          onTargetedLabelingChange={setTargetedLabeling}
+          onUndoPolygonPoint={removeLastPolygonPoint}
+          onVisibleGroupIdsChange={setVisibleGroupIds}
+          onWeightingChange={handleWeightingChange}
+        />
       ) : null}
     </div>
   );
@@ -2532,79 +2111,6 @@ function splitMultilineList(value: string) {
     .split("\n")
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function ViewerSidebarSection({
-  children,
-  title,
-}: {
-  children: ReactNode;
-  title: string;
-}) {
-  return (
-    <section className="border-t border-white/8 py-4 first:border-t-0 first:pt-0">
-      <div className="mb-3 text-sm font-semibold text-white">{title}</div>
-      {children}
-    </section>
-  );
-}
-
-function TogglePill({
-  active,
-  label,
-  onToggle,
-}: {
-  active: boolean;
-  label: string;
-  onToggle: (value: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        "rounded-xl border px-3 py-2 text-sm transition",
-        active
-          ? "border-cyan-400 bg-cyan-500/10 text-white"
-          : "border-white/10 text-white/60",
-      )}
-      onClick={() => onToggle(!active)}
-    >
-      {label}
-    </button>
-  );
-}
-
-function ToggleRow({
-  active,
-  label,
-  onToggle,
-}: {
-  active: boolean;
-  label: string;
-  onToggle: (value: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="flex w-full items-center justify-between rounded-xl border border-white/8 px-3 py-2 text-sm"
-      onClick={() => onToggle(!active)}
-    >
-      <span>{label}</span>
-      <span
-        className={cn(
-          "inline-flex h-6 w-11 items-center rounded-full p-1 transition",
-          active ? "bg-cyan-500/80" : "bg-white/12",
-        )}
-      >
-        <span
-          className={cn(
-            "h-4 w-4 rounded-full bg-white transition",
-            active ? "translate-x-5" : "translate-x-0",
-          )}
-        />
-      </span>
-    </button>
-  );
 }
 
 function ReferenceCard({
@@ -2722,10 +2228,8 @@ function StructureDrawer({
   return (
     <div
       className={cn(
-        "rounded-[1.5rem] border p-4",
-        darkMode
-          ? "border-white/8 bg-white/[0.04]"
-          : "border-slate-200 bg-white",
+        "rounded-3xl border p-4",
+        darkMode ? "border-white/8 bg-white/4" : "border-slate-200 bg-white",
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -2803,7 +2307,7 @@ function StructureDrawer({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   alt={asset.label}
-                  className="aspect-[4/3] w-full object-cover"
+                  className="aspect-4/3 w-full object-cover"
                   decoding="async"
                   fetchPriority="low"
                   loading="lazy"
@@ -2823,7 +2327,10 @@ function StructureDrawer({
 
 function ViewerCanvas({
   annotationForm,
+  canvasFlipHorizontal,
+  canvasFlipVertical,
   canvasMode,
+  canvasRotationQuarterTurns,
   currentAsset,
   currentImageElement,
   darkMode,
@@ -2853,7 +2360,10 @@ function ViewerCanvas({
   onWheelNavigate,
 }: {
   annotationForm: AnnotationFormState;
+  canvasFlipHorizontal: boolean;
+  canvasFlipVertical: boolean;
   canvasMode: ViewerCanvasMode;
+  canvasRotationQuarterTurns: number;
   currentAsset: ZoneModalityAsset | null;
   currentImageElement: HTMLImageElement | null;
   darkMode: boolean;
@@ -2885,6 +2395,8 @@ function ViewerCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const brushingRef = useRef(false);
   const lastBrushPointRef = useRef<ViewerAnnotationPoint | null>(null);
+  const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
+  const canvasSurfaceTransform = `rotate(${normalizedCanvasRotation * 90}deg) scaleX(${canvasFlipHorizontal ? -1 : 1}) scaleY(${canvasFlipVertical ? -1 : 1})`;
 
   const resolvePointerPoint = useCallback(
     (event: {
@@ -2893,30 +2405,69 @@ function ViewerCanvas({
       currentTarget: SVGSVGElement;
     }) => {
       const rect = event.currentTarget.getBoundingClientRect();
+      let x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+      let y = clamp((event.clientY - rect.top) / rect.height, 0, 1);
+
+      switch (normalizedCanvasRotation) {
+        case 1:
+          [x, y] = [y, 1 - x];
+          break;
+        case 2:
+          [x, y] = [1 - x, 1 - y];
+          break;
+        case 3:
+          [x, y] = [1 - y, x];
+          break;
+        default:
+          break;
+      }
+
+      if (canvasFlipHorizontal) {
+        x = 1 - x;
+      }
+
+      if (canvasFlipVertical) {
+        y = 1 - y;
+      }
 
       return {
-        x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
-        y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+        x: clamp(x, 0, 1),
+        y: clamp(y, 0, 1),
       };
     },
-    [],
+    [canvasFlipHorizontal, canvasFlipVertical, normalizedCanvasRotation],
   );
 
   const commitBrushPoint = useCallback(
     (point: ViewerAnnotationPoint, force = false) => {
       const previousPoint = lastBrushPointRef.current;
 
-      if (!force && previousPoint) {
-        const deltaX = point.x - previousPoint.x;
-        const deltaY = point.y - previousPoint.y;
-
-        if (Math.hypot(deltaX, deltaY) < BRUSH_POINT_STEP) {
-          return;
-        }
+      if (!previousPoint) {
+        lastBrushPointRef.current = point;
+        onCanvasClick(point);
+        return;
       }
 
-      lastBrushPointRef.current = point;
-      onCanvasClick(point);
+      const deltaX = point.x - previousPoint.x;
+      const deltaY = point.y - previousPoint.y;
+      const distance = Math.hypot(deltaX, deltaY);
+
+      if (!force && distance < BRUSH_POINT_STEP) {
+        return;
+      }
+
+      const segments = Math.max(1, Math.ceil(distance / BRUSH_POINT_STEP));
+
+      for (let segmentIndex = 1; segmentIndex <= segments; segmentIndex += 1) {
+        const factor = segmentIndex / segments;
+        const interpolatedPoint = {
+          x: clamp(previousPoint.x + deltaX * factor, 0, 1),
+          y: clamp(previousPoint.y + deltaY * factor, 0, 1),
+        };
+
+        lastBrushPointRef.current = interpolatedPoint;
+        onCanvasClick(interpolatedPoint);
+      }
     },
     [onCanvasClick],
   );
@@ -2960,40 +2511,24 @@ function ViewerCanvas({
   ]);
 
   if (!currentAsset) {
-    if (isPreparingInitialAsset) {
+    if (isPreparingInitialAsset || isIngesting) {
       return (
-        <div className="flex min-h-[40rem] flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 px-6 text-center text-white/70">
-          <LoaderCircleIcon className="size-5 animate-spin" />
-          <p className="mt-3 max-w-lg text-sm leading-6">
-            Preparing the study stack. The first decoded slice appears as soon
-            as it is ready to render without a flash.
-          </p>
-        </div>
-      );
-    }
-
-    if (isIngesting) {
-      return (
-        <div className="flex min-h-[40rem] flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 px-6 text-center text-white/70">
-          <LoaderCircleIcon className="size-5 animate-spin" />
-          <p className="mt-3 max-w-lg text-sm leading-6">
-            Study intake is still processing. The viewer refreshes automatically
-            and slices will appear as soon as derivation is complete.
-          </p>
+        <div className="flex min-h-160 flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 px-6 text-center text-white/70">
+          <Loader />
         </div>
       );
     }
 
     if (ingestFailureMessage) {
       return (
-        <div className="flex min-h-[40rem] items-center justify-center rounded-[1.75rem] border border-dashed border-red-500/30 bg-red-500/5 px-6 text-center text-red-100">
+        <div className="flex min-h-160 items-center justify-center rounded-[1.75rem] border border-dashed border-red-500/30 bg-red-500/5 px-6 text-center text-red-100">
           <p className="max-w-lg text-sm leading-6">{ingestFailureMessage}</p>
         </div>
       );
     }
 
     return (
-      <div className="flex min-h-[40rem] items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 text-white/60">
+      <div className="flex min-h-160 items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 text-white/60">
         This modality does not have any derived slices yet.
       </div>
     );
@@ -3017,14 +2552,17 @@ function ViewerCanvas({
 
       <div
         ref={stageRef}
-        className="flex min-h-[40rem] h-full items-center justify-center p-8"
+        className="flex min-h-160 h-full items-center justify-center p-8"
         onDoubleClick={onCanvasDoubleClick}
         onWheel={(event) => {
           event.preventDefault();
           onWheelNavigate(event.deltaY);
         }}
       >
-        <div className="relative inline-block max-w-full">
+        <div
+          className="relative inline-block max-w-full transition-transform duration-200 ease-out"
+          style={{ transform: canvasSurfaceTransform }}
+        >
           {showLoadingIndicator ? (
             <div className="absolute right-3 top-3 z-20 flex items-center rounded-full border border-white/12 bg-black/60 px-3 py-1.5 text-xs text-white/75 shadow-lg">
               <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
@@ -3246,51 +2784,6 @@ function formatOrientationLabel(value: string | null | undefined) {
       return "Coronal";
     default:
       return value.charAt(0).toUpperCase() + value.slice(1);
-  }
-}
-
-function formatWeightingLabel(value: string) {
-  switch (value) {
-    case "all":
-      return "All";
-    case "t1_gado":
-      return "T1 Gado";
-    case "t2_star":
-      return "T2*";
-    default:
-      return value.toUpperCase();
-  }
-}
-
-function getCanvasModeLabel(mode: ViewerCanvasMode) {
-  switch (mode) {
-    case "create-label":
-      return "Place pin";
-    case "set-anchor":
-      return "Move pin";
-    case "set-label":
-      return "Move name";
-    case "draw-region":
-      return "Draw area";
-    case "browse":
-    default:
-      return "Browse";
-  }
-}
-
-function getCanvasModeDescription(mode: ViewerCanvasMode) {
-  switch (mode) {
-    case "create-label":
-      return "Click once on the image to place a new teaching pin.";
-    case "set-anchor":
-      return "Click the image to move the pin to a better teaching point.";
-    case "set-label":
-      return "Click the image to move the visible name to a clearer position.";
-    case "draw-region":
-      return "Click around the structure to outline the teaching area. Double-click the image when the shape is complete.";
-    case "browse":
-    default:
-      return "Browse the study, select a topic, or start a new pin or area.";
   }
 }
 

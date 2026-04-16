@@ -64,7 +64,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/assets/{asset_id}",
-            axum::routing::patch(update_zone_modality_asset),
+            axum::routing::patch(update_zone_modality_asset).delete(delete_zone_modality_asset),
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer",
@@ -76,7 +76,8 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/structure-groups/{group_id}",
-            axum::routing::patch(update_viewer_structure_group),
+            axum::routing::patch(update_viewer_structure_group)
+                .delete(delete_viewer_structure_group),
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/structures",
@@ -84,7 +85,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/structures/{structure_id}",
-            axum::routing::patch(update_viewer_structure),
+            axum::routing::patch(update_viewer_structure).delete(delete_viewer_structure),
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/annotations",
@@ -92,7 +93,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/annotations/{annotation_id}",
-            axum::routing::patch(update_viewer_annotation),
+            axum::routing::patch(update_viewer_annotation).delete(delete_viewer_annotation),
         )
         .route(
             "/derived-assets/{asset_id}/image",
@@ -383,6 +384,21 @@ async fn update_zone_modality_asset(
     Ok((StatusCode::OK, Json(asset)))
 }
 
+async fn delete_zone_modality_asset(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id, asset_id)): Path<(Uuid, Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    state
+        .playground_service
+        .delete_zone_modality_asset(actor.account_id, zone_id, modality_id, asset_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn get_zone_modality_viewer_manifest(
     State(state): State<AppState>,
     Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
@@ -446,6 +462,21 @@ async fn update_viewer_structure_group(
     Ok((StatusCode::OK, Json(group)))
 }
 
+async fn delete_viewer_structure_group(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id, group_id)): Path<(Uuid, Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    state
+        .playground_service
+        .delete_viewer_structure_group(actor.account_id, zone_id, modality_id, group_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn create_viewer_structure(
     State(state): State<AppState>,
     Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
@@ -491,6 +522,21 @@ async fn update_viewer_structure(
     Ok((StatusCode::OK, Json(structure)))
 }
 
+async fn delete_viewer_structure(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id, structure_id)): Path<(Uuid, Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    state
+        .playground_service
+        .delete_viewer_structure(actor.account_id, zone_id, modality_id, structure_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn create_viewer_annotation(
     State(state): State<AppState>,
     Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
@@ -534,6 +580,21 @@ async fn update_viewer_annotation(
         .await?;
 
     Ok((StatusCode::OK, Json(annotation)))
+}
+
+async fn delete_viewer_annotation(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id, annotation_id)): Path<(Uuid, Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    state
+        .playground_service
+        .delete_viewer_annotation(actor.account_id, zone_id, modality_id, annotation_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_derived_asset_image(

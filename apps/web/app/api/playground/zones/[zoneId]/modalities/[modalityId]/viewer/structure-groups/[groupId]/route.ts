@@ -2,7 +2,10 @@ import { NextResponse } from "next/server"
 
 import { buildInternalAdminHeaders } from "@/lib/api/admin"
 import { ApiClientError } from "@/lib/api/errors"
-import { ensureJsonMutationRequest } from "@/lib/api/request-guard"
+import {
+  ensureJsonMutationRequest,
+  ensureTrustedMutationRequest,
+} from "@/lib/api/request-guard"
 import { serverApiFetch } from "@/lib/api/server"
 import { requireAdminApiSession } from "@/lib/auth/session"
 import type {
@@ -64,6 +67,42 @@ export async function PATCH(request: Request, context: RouteContext) {
     )
 
     return NextResponse.json(group)
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      return jsonError(error.status, error.code ?? "api_error", error.message)
+    }
+
+    throw error
+  }
+}
+
+export async function DELETE(request: Request, context: RouteContext) {
+  const requestGuardError = ensureTrustedMutationRequest(request)
+
+  if (requestGuardError) {
+    return requestGuardError
+  }
+
+  const result = await requireAdminApiSession(request.headers)
+
+  if (!result) {
+    return jsonError(401, "unauthorized", "You are not signed in.")
+  }
+
+  const { groupId, modalityId, zoneId } = await context.params
+
+  try {
+    await serverApiFetch<void>(
+      `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structure-groups/${groupId}`,
+      {
+        method: "DELETE",
+        cache: "no-store",
+        includeCookie: false,
+        headers: buildInternalAdminHeaders(result.user),
+      },
+    )
+
+    return new NextResponse(null, { status: 204 })
   } catch (error) {
     if (error instanceof ApiClientError) {
       return jsonError(error.status, error.code ?? "api_error", error.message)

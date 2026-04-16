@@ -308,7 +308,7 @@ export function AnatomyPlayground() {
                 onSave={handleSaveZoneChanges}
               />
             ) : (
-              <div className="flex h-full min-h-[16rem] flex-col items-center justify-center px-6 text-center">
+              <div className="flex h-full min-h-64 flex-col items-center justify-center px-6 text-center">
                 {isZoneLoading ? (
                   <LoaderCircleIcon className="size-5 animate-spin text-muted-foreground" />
                 ) : (

@@ -654,7 +654,7 @@ export function AnatomyStage({
       )}
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.2),transparent_34%),radial-gradient(circle_at_bottom,rgba(58,63,193,0.18),transparent_28%),linear-gradient(180deg,rgba(126,128,252,0.96)_0%,rgba(111,114,243,1)_100%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] [background-size:4rem_4rem] [mask-image:radial-gradient(circle_at_center,black,transparent_78%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-25 bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-size-[4rem_4rem] mask-[radial-gradient(circle_at_center,black,transparent_78%)]" />
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div className="aspect-square w-[min(76vw,76vh)] rounded-full border border-white/6 bg-[radial-gradient(circle,rgba(255,255,255,0.02),transparent_70%)] shadow-[0_0_100px_rgba(255,255,255,0.05)]" />
       </div>
@@ -676,7 +676,7 @@ export function AnatomyStage({
         }}
       >
         <Canvas
-          className="!h-full !w-full"
+          className="h-full! w-full!"
           dpr={[1, 1.75]}
           gl={{ alpha: true, antialias: true }}
           resize={{ offsetSize: true }}
@@ -1198,7 +1198,7 @@ function AnatomyLayerModel({
   );
 }
 
-function SceneFallback() {
+export function SceneFallback() {
   return (
     <Html center>
       <svg
@@ -1507,3 +1507,4 @@ function roundAnchorValue(value: number) {
 for (const layer of ANATOMY_LAYERS) {
   useGLTF.preload(layer.src);
 }
+

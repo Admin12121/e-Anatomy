@@ -195,6 +195,24 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    deleteZoneModalityAsset: builder.mutation<
+      void,
+      {
+        zoneId: string
+        modalityId: string
+        assetId: string
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId, assetId }) => [
+        { type: "ZoneModalityAssets", id: `LIST:${modalityId}` },
+        { type: "ZoneModalityAssets", id: assetId },
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, assetId }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/assets/${assetId}`,
+        method: "DELETE",
+      }),
+    }),
     getZoneModalityViewerManifest: builder.query<
       ZoneModalityViewerManifest,
       {
@@ -243,6 +261,22 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    deleteViewerStructureGroup: builder.mutation<
+      void,
+      {
+        zoneId: string
+        modalityId: string
+        groupId: string
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, groupId }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structure-groups/${groupId}`,
+        method: "DELETE",
+      }),
+    }),
     createViewerStructure: builder.mutation<
       ViewerStructure,
       {
@@ -276,6 +310,22 @@ export const playgroundApi = createApi({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures/${structureId}`,
         method: "PATCH",
         body: input,
+      }),
+    }),
+    deleteViewerStructure: builder.mutation<
+      void,
+      {
+        zoneId: string
+        modalityId: string
+        structureId: string
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, structureId }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures/${structureId}`,
+        method: "DELETE",
       }),
     }),
     createViewerAnnotation: builder.mutation<
@@ -313,6 +363,22 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    deleteViewerAnnotation: builder.mutation<
+      void,
+      {
+        zoneId: string
+        modalityId: string
+        annotationId: string
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, annotationId }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/annotations/${annotationId}`,
+        method: "DELETE",
+      }),
+    }),
   }),
 })
 
@@ -323,6 +389,10 @@ export const {
   useCreateZoneModalityAssetMutation,
   useCreateZoneMutation,
   useCreateZoneModalityMutation,
+  useDeleteViewerAnnotationMutation,
+  useDeleteViewerStructureGroupMutation,
+  useDeleteViewerStructureMutation,
+  useDeleteZoneModalityAssetMutation,
   useDeleteZoneModalityMutation,
   useGetZoneModalityViewerManifestQuery,
   useGetZoneDetailQuery,
