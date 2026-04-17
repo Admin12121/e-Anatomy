@@ -690,29 +690,30 @@ export function DraftModalityViewer({
       return;
     }
 
+    const structure = structuresById.get(selectedAnnotation.structureId);
+    const group = structure?.groupId
+      ? groupsById.get(structure.groupId)
+      : null;
+    const resolvedColor =
+      group?.colorHex ?? selectedAnnotation.colorHex ?? DEFAULT_ANNOTATION_COLOR;
+
     setAnnotationForm({
       anchorX: selectedAnnotation.anchorX,
       anchorY: selectedAnnotation.anchorY,
-      colorHex: selectedAnnotation.colorHex ?? DEFAULT_ANNOTATION_COLOR,
+      colorHex: resolvedColor,
       isPracticeHidden: selectedAnnotation.isPracticeHidden,
       isTargetedDefault: selectedAnnotation.isTargetedDefault,
       isVisibleDefault: selectedAnnotation.isVisibleDefault,
       labelX: selectedAnnotation.labelX,
       labelY: selectedAnnotation.labelY,
-      leaderColorHex:
-        selectedAnnotation.leaderColorHex ??
-        selectedAnnotation.colorHex ??
-        DEFAULT_ANNOTATION_COLOR,
+      leaderColorHex: selectedAnnotation.leaderColorHex ?? resolvedColor,
       note: selectedAnnotation.note ?? "",
-      overlayColorHex:
-        selectedAnnotation.overlayColorHex ??
-        selectedAnnotation.colorHex ??
-        DEFAULT_ANNOTATION_COLOR,
+      overlayColorHex: selectedAnnotation.overlayColorHex ?? resolvedColor,
       overlayOpacity: selectedAnnotation.overlayOpacity,
       polygonPoints: selectedAnnotation.polygonPoints,
       titleOverride: selectedAnnotation.titleOverride ?? "",
     });
-  }, [selectedAnnotation]);
+  }, [groupsById, selectedAnnotation, structuresById]);
 
   useEffect(() => {
     if (!selectedStructureId || !currentAsset || pendingAsset) {
@@ -1469,6 +1470,15 @@ export function DraftModalityViewer({
     }
   }
 
+  function handleDraftLabelMove(point: ViewerAnnotationPoint) {
+    if (!selectedAnnotationId || canvasMode !== "browse") {
+      return;
+    }
+
+    updateAnnotationForm("labelX", point.x);
+    updateAnnotationForm("labelY", point.y);
+  }
+
   function handleCanvasDoubleClick() {
     if (canvasMode !== "draw-region") {
       return;
@@ -1725,6 +1735,7 @@ export function DraftModalityViewer({
           showLabels={showLabels}
           viewerTitle={viewerTitle}
           stageRef={stageRef}
+          groupsById={groupsById}
           structuresById={structuresById}
           visibleAnnotations={visibleAnnotations}
           onAnnotationHover={setHoveredAnnotationId}
@@ -1736,6 +1747,7 @@ export function DraftModalityViewer({
           }}
           onCanvasClick={handleCanvasClick}
           onCanvasDoubleClick={handleCanvasDoubleClick}
+          onDraftLabelMove={handleDraftLabelMove}
           onWheelNavigate={handleWheelNavigation}
         />
 
@@ -2354,12 +2366,14 @@ function ViewerCanvas({
   showLabels,
   viewerTitle,
   stageRef,
+  groupsById,
   structuresById,
   visibleAnnotations,
   onAnnotationHover,
   onAnnotationSelect,
   onCanvasClick,
   onCanvasDoubleClick,
+  onDraftLabelMove,
   onWheelNavigate,
 }: {
   annotationForm: AnnotationFormState;
@@ -2388,17 +2402,21 @@ function ViewerCanvas({
   showLabels: boolean;
   viewerTitle: string;
   stageRef: MutableRefObject<HTMLDivElement | null>;
+  groupsById: Map<string, ViewerStructureGroup>;
   structuresById: Map<string, ViewerStructure>;
   visibleAnnotations: ViewerAnnotation[];
   onAnnotationHover: (annotationId: string | null) => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   onCanvasClick: (point: ViewerAnnotationPoint) => void;
   onCanvasDoubleClick: () => void;
+  onDraftLabelMove: (point: ViewerAnnotationPoint) => void;
   onWheelNavigate: (deltaY: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const brushingRef = useRef(false);
   const lastBrushPointRef = useRef<ViewerAnnotationPoint | null>(null);
+  const draggingLabelRef = useRef<string | null>(null);
+  const [draggingLabelId, setDraggingLabelId] = useState<string | null>(null);
   const draftPointerMovedFromDefault =
     Math.abs(annotationForm.anchorX - EMPTY_ANNOTATION_FORM.anchorX) > 0.0005 ||
     Math.abs(annotationForm.anchorY - EMPTY_ANNOTATION_FORM.anchorY) > 0.0005 ||
@@ -2614,6 +2632,11 @@ function ViewerCanvas({
               commitBrushPoint(resolvePointerPoint(event), true);
             }}
             onPointerMove={(event) => {
+              if (draggingLabelRef.current) {
+                onDraftLabelMove(resolvePointerPoint(event));
+                return;
+              }
+
               if (canvasMode !== "draw-region" || !brushingRef.current) {
                 return;
               }
@@ -2621,6 +2644,17 @@ function ViewerCanvas({
               commitBrushPoint(resolvePointerPoint(event));
             }}
             onPointerUp={(event) => {
+              if (draggingLabelRef.current) {
+                draggingLabelRef.current = null;
+                setDraggingLabelId(null);
+
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                }
+
+                return;
+              }
+
               if (canvasMode !== "draw-region") {
                 return;
               }
@@ -2633,6 +2667,12 @@ function ViewerCanvas({
               lastBrushPointRef.current = null;
             }}
             onPointerLeave={() => {
+              if (draggingLabelRef.current) {
+                draggingLabelRef.current = null;
+                setDraggingLabelId(null);
+                return;
+              }
+
               if (canvasMode !== "draw-region") {
                 return;
               }
@@ -2647,16 +2687,52 @@ function ViewerCanvas({
                 return null;
               }
 
+              const group = structure.groupId
+                ? groupsById.get(structure.groupId)
+                : null;
+
               const isSelected = annotation.id === selectedAnnotationId;
               const isHovered = annotation.id === hoveredAnnotationId;
-              const color = annotation.colorHex || DEFAULT_ANNOTATION_COLOR;
-              const label = annotation.titleOverride || structure.title;
+              const color =
+                group?.colorHex || annotation.colorHex || DEFAULT_ANNOTATION_COLOR;
+              const anchorX = isSelected
+                ? annotationForm.anchorX
+                : annotation.anchorX;
+              const anchorY = isSelected
+                ? annotationForm.anchorY
+                : annotation.anchorY;
+              const labelX = isSelected ? annotationForm.labelX : annotation.labelX;
+              const labelY = isSelected ? annotationForm.labelY : annotation.labelY;
+              const polygonPoints = isSelected
+                ? annotationForm.polygonPoints
+                : annotation.polygonPoints;
+              const overlayColor = isSelected
+                ? annotationForm.overlayColorHex || color
+                : annotation.overlayColorHex || color;
+              const leaderColor = isSelected
+                ? annotationForm.leaderColorHex || color
+                : annotation.leaderColorHex || color;
+              const polygonOpacity = isSelected
+                ? annotationForm.overlayOpacity
+                : annotation.overlayOpacity;
+              const label =
+                (isSelected
+                  ? annotationForm.titleOverride.trim()
+                  : annotation.titleOverride) || structure.title;
               const markerVisible = showLabels || pinsOnly;
               const textVisible =
                 showLabels &&
                 !pinsOnly &&
                 (!practiceMode || isSelected || isHovered);
               const fontSize = fontScaleMode === "large" ? 24 : 18;
+              const canDragLabel = isSelected && canvasMode === "browse";
+              const highlightLabel =
+                canDragLabel &&
+                (isHovered || draggingLabelId === annotation.id);
+              const labelRectWidth = Math.max(
+                72,
+                label.length * (fontSize === 24 ? 11.5 : 8.7),
+              );
 
               return (
                 <g
@@ -2668,14 +2744,12 @@ function ViewerCanvas({
                     onAnnotationSelect(annotation.id, annotation.structureId);
                   }}
                 >
-                  {annotation.polygonPoints.length >= 3 ? (
+                  {polygonPoints.length >= 3 ? (
                     <polygon
-                      fill={annotation.overlayColorHex || color}
-                      fillOpacity={annotation.overlayOpacity * overlayOpacity}
-                      points={annotation.polygonPoints
-                        .map(pointToSvgPair)
-                        .join(" ")}
-                      stroke={annotation.overlayColorHex || color}
+                      fill={overlayColor}
+                      fillOpacity={polygonOpacity * overlayOpacity}
+                      points={polygonPoints.map(pointToSvgPair).join(" ")}
+                      stroke={overlayColor}
                       strokeOpacity={0.9}
                       strokeWidth={isSelected ? 3 : 2}
                     />
@@ -2683,32 +2757,68 @@ function ViewerCanvas({
                   {markerVisible ? (
                     <>
                       <line
-                        stroke={annotation.leaderColorHex || color}
+                        stroke={leaderColor}
                         strokeWidth={isSelected ? 3 : 2}
-                        x1={annotation.anchorX * 1000}
-                        x2={annotation.labelX * 1000}
-                        y1={annotation.anchorY * 1000}
-                        y2={annotation.labelY * 1000}
+                        x1={anchorX * 1000}
+                        x2={labelX * 1000}
+                        y1={anchorY * 1000}
+                        y2={labelY * 1000}
                       />
                       <circle
-                        cx={annotation.anchorX * 1000}
-                        cy={annotation.anchorY * 1000}
+                        cx={anchorX * 1000}
+                        cy={anchorY * 1000}
                         fill={color}
                         r={isSelected ? 8 : 6}
                       />
                     </>
                   ) : null}
                   {textVisible ? (
-                    <text
-                      fill={color}
-                      fontFamily="system-ui"
-                      fontSize={fontSize}
-                      fontWeight={isSelected ? 700 : 500}
-                      x={annotation.labelX * 1000}
-                      y={annotation.labelY * 1000}
-                    >
-                      {label}
-                    </text>
+                    <g>
+                      {highlightLabel ? (
+                        <rect
+                          fill={color}
+                          height={fontSize + 10}
+                          opacity={0.95}
+                          rx={6}
+                          width={labelRectWidth}
+                          x={labelX * 1000 - 8}
+                          y={labelY * 1000 - fontSize + 2}
+                        />
+                      ) : null}
+                      <text
+                        className={canDragLabel ? "cursor-pointer select-none" : undefined}
+                        fill={highlightLabel ? "#ffffff" : color}
+                        fontFamily="system-ui"
+                        fontSize={fontSize}
+                        fontWeight={isSelected ? 700 : 500}
+                        x={labelX * 1000}
+                        y={labelY * 1000}
+                        onPointerDown={(event) => {
+                          if (!canDragLabel) {
+                            return;
+                          }
+
+                          const svg = event.currentTarget.ownerSVGElement;
+                          if (!svg) {
+                            return;
+                          }
+
+                          event.stopPropagation();
+                          draggingLabelRef.current = annotation.id;
+                          setDraggingLabelId(annotation.id);
+                          svg.setPointerCapture(event.pointerId);
+                          onDraftLabelMove(
+                            resolvePointerPoint({
+                              clientX: event.clientX,
+                              clientY: event.clientY,
+                              currentTarget: svg,
+                            }),
+                          );
+                        }}
+                      >
+                        {label}
+                      </text>
+                    </g>
                   ) : null}
                 </g>
               );
@@ -2958,7 +3068,7 @@ async function captureViewerSnapshot({
 
     const group = structure.groupId ? groupsById.get(structure.groupId) : null;
     const color =
-      annotation.colorHex || group?.colorHex || DEFAULT_ANNOTATION_COLOR;
+      group?.colorHex || annotation.colorHex || DEFAULT_ANNOTATION_COLOR;
     const overlayColor = annotation.overlayColorHex || color;
     const leaderColor = annotation.leaderColorHex || color;
 

@@ -783,15 +783,24 @@ export function ModalityViewerRightPanel({
           <Frame>
             <div className="flex items-center justify-between px-3 py-2">
               {selectedAnatomicalPart.title}
-
-              <Button
-                type="button"
-                disabled={busy || !groupForm.title.trim()}
-                onClick={() => void handleUpdateSelectedAnatomicalArea()}
-              >
-                Save
-                {busy && <LoaderCircleIcon className="size-4 animate-spin" />}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  disabled={busy || !groupForm.title.trim()}
+                  onClick={() => void handleUpdateSelectedAnatomicalArea()}
+                >
+                  Save
+                  {busy && <LoaderCircleIcon className="size-4 animate-spin" />}
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() => void onDeleteGroup(selectedAnatomicalPart.id)}
+                >
+                  <Trash2Icon className="size-4" />
+                </Button>
+              </div>
             </div>
             <FramePanel className="p-3">
               <div className="space-y-3">
@@ -857,6 +866,68 @@ export function ModalityViewerRightPanel({
               </FrameHeader>
             </Frame>
           </div>
+
+          <Frame>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">#</TableHead>
+                  <TableHead>Part Name</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {selectedAnatomicalPartRows.length > 0 ? (
+                  selectedAnatomicalPartRows.map((structure, index) => {
+                    const interactionMode =
+                      parsePartInteractionModeFromStructure(structure);
+
+                    return (
+                      <TableRow key={structure.id}>
+                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span>{structure.title}</span>
+                            <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/65">
+                              {interactionMode}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => {
+                              onSelectStructure(
+                                structure.id,
+                                selectedAnatomicalPart.id,
+                              );
+                              setShowCreatePartFrame(true);
+                              setShowPartEditorWindow(false);
+                              setPartEditorInitialContent(
+                                structure.longDescription ?? "",
+                              );
+                              setPartInteractionMode(interactionMode);
+                              onCanvasModeChange("browse");
+                            }}
+                          >
+                            Edit
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-white/60">
+                      No anatomical parts yet.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Frame>
 
           {showCreatePartFrame ? (
             <Frame>
@@ -965,68 +1036,6 @@ export function ModalityViewerRightPanel({
               </FramePanel>
             </Frame>
           ) : null}
-
-          <Frame>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">#</TableHead>
-                  <TableHead>Part Name</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {selectedAnatomicalPartRows.length > 0 ? (
-                  selectedAnatomicalPartRows.map((structure, index) => {
-                    const interactionMode =
-                      parsePartInteractionModeFromStructure(structure);
-
-                    return (
-                      <TableRow key={structure.id}>
-                        <TableCell>{index + 1}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span>{structure.title}</span>
-                            <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/65">
-                              {interactionMode}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => {
-                              onSelectStructure(
-                                structure.id,
-                                selectedAnatomicalPart.id,
-                              );
-                              setShowCreatePartFrame(true);
-                              setShowPartEditorWindow(false);
-                              setPartEditorInitialContent(
-                                structure.longDescription ?? "",
-                              );
-                              setPartInteractionMode(interactionMode);
-                              onCanvasModeChange("browse");
-                            }}
-                          >
-                            Edit
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={3} className="text-white/60">
-                      No anatomical parts yet.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </Frame>
 
           {showPartEditorWindow ? (
             <AnatomicalPartEditorWindow

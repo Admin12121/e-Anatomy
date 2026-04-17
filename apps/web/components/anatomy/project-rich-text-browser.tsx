@@ -12,7 +12,7 @@ import { MantineProvider } from "@mantine/core";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 import { useTheme } from "next-themes";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -155,6 +155,8 @@ export function ProjectRichTextEditorBrowser({
 }) {
   const { resolvedTheme } = useTheme();
   const [initialContent] = useState(() => parseStoredDocument(value, title));
+  const lastEmittedValueRef = useRef<string>("");
+  const lastAppliedExternalValueRef = useRef<string>("");
   const editor = useCreateBlockNote(
     {
       initialContent,
@@ -175,6 +177,47 @@ export function ProjectRichTextEditorBrowser({
     }),
     [],
   );
+
+  useEffect(() => {
+    const incomingValue = value?.trim() ?? "";
+
+    if (incomingValue === lastEmittedValueRef.current.trim()) {
+      return;
+    }
+
+    if (incomingValue === lastAppliedExternalValueRef.current.trim()) {
+      return;
+    }
+
+    let nextBlocks: PartialBlock[];
+
+    if (!incomingValue) {
+      nextBlocks = createDefaultDocument(title);
+    } else {
+      try {
+        const parsed = JSON.parse(incomingValue);
+
+        if (Array.isArray(parsed)) {
+          nextBlocks = parsed as PartialBlock[];
+        } else {
+          const markdownBlocks = editor.tryParseMarkdownToBlocks(incomingValue);
+          nextBlocks =
+            markdownBlocks.length > 0
+              ? (markdownBlocks as unknown as PartialBlock[])
+              : createDefaultDocument(title);
+        }
+      } catch {
+        const markdownBlocks = editor.tryParseMarkdownToBlocks(incomingValue);
+        nextBlocks =
+          markdownBlocks.length > 0
+            ? (markdownBlocks as unknown as PartialBlock[])
+            : createDefaultDocument(title);
+      }
+    }
+
+    editor.replaceBlocks(editor.document, nextBlocks);
+    lastAppliedExternalValueRef.current = incomingValue;
+  }, [editor, title, value]);
 
   return (
     <div
@@ -222,6 +265,7 @@ export function ProjectRichTextEditorBrowser({
             const nextValue = documentHasContent(currentEditor.document)
               ? currentEditor.blocksToMarkdownLossy(currentEditor.document).trim()
               : "";
+            lastEmittedValueRef.current = nextValue;
             onChange(nextValue);
           }}
         >
