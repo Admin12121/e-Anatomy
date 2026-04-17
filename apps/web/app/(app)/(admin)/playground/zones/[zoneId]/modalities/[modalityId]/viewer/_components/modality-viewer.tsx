@@ -25,6 +25,8 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { toast } from "sonner";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,6 +75,7 @@ import {
   type StructureFormState,
   type ViewerCanvasMode,
 } from "./modality-viewer.types";
+import EmptyParticle from "./empty";
 
 type NavigationSource = "button" | "click" | "search" | "weighting" | "wheel";
 type PreloadPriority = "high" | "low";
@@ -892,8 +895,8 @@ export function DraftModalityViewer({
     "grid max-h-[calc(100vh-101px)] flex-1 gap-2",
     showStudyPanel &&
       showControlPanel &&
-      "xl:grid-cols-[16rem_minmax(0,1fr)_22rem]",
-    showStudyPanel && !showControlPanel && "xl:grid-cols-[16rem_minmax(0,1fr)]",
+      "xl:grid-cols-[22rem_minmax(0,1fr)_22rem]",
+    showStudyPanel && !showControlPanel && "xl:grid-cols-[22rem_minmax(0,1fr)]",
     !showStudyPanel && showControlPanel && "xl:grid-cols-[minmax(0,1fr)_22rem]",
     !showStudyPanel && !showControlPanel && "xl:grid-cols-[minmax(0,1fr)]",
   );
@@ -1096,10 +1099,10 @@ export function DraftModalityViewer({
     );
   }
 
-  async function handleSaveStructure() {
+  async function handleSaveStructure(): Promise<ViewerStructure | null> {
     if (!structureForm.title.trim()) {
       toast.error("Structure title is required.");
-      return;
+      return null;
     }
 
     const input: CreateViewerStructureInput | UpdateViewerStructureInput = {
@@ -1130,15 +1133,20 @@ export function DraftModalityViewer({
       );
       setSelectedStructureId(structure.id);
       setSelectedGroupId(structure.groupId ?? null);
+      return structure;
     } catch (mutationError) {
       toast.error(
         readMutationError(mutationError, "Unable to save the structure."),
       );
+      return null;
     }
   }
 
-  async function handleSaveAnnotation() {
-    if (!selectedStructure || !currentAsset) {
+  async function handleSaveAnnotation(options?: { structureId?: string }) {
+    const activeStructureId =
+      options?.structureId ?? selectedStructure?.id ?? selectedStructureId;
+
+    if (!activeStructureId || !currentAsset) {
       toast.error("Choose a structure and slice first.");
       return;
     }
@@ -1158,7 +1166,7 @@ export function DraftModalityViewer({
       overlayColorHex: annotationForm.overlayColorHex.trim() || null,
       overlayOpacity: annotationForm.overlayOpacity,
       polygonPoints: annotationForm.polygonPoints,
-      structureId: selectedStructure.id,
+      structureId: activeStructureId,
       titleOverride: annotationForm.titleOverride.trim() || null,
     };
 
@@ -1376,11 +1384,27 @@ export function DraftModalityViewer({
   }
 
   function handleCanvasClick(point: ViewerAnnotationPoint) {
-    if (!selectedStructure || !currentAsset) {
+    if (!currentAsset) {
       return;
     }
 
+    const activeStructureId = selectedStructure?.id ?? selectedStructureId;
+
     if (canvasMode === "create-label") {
+      const nextLabelX = createDefaultLabelX(point.x);
+      const nextLabelY = clamp(point.y - 0.08, 0.08, 0.92);
+
+      updateAnnotationForm("anchorX", point.x);
+      updateAnnotationForm("anchorY", point.y);
+      updateAnnotationForm("labelX", nextLabelX);
+      updateAnnotationForm("labelY", nextLabelY);
+      updateAnnotationForm("polygonPoints", []);
+
+      if (!activeStructureId) {
+        setCanvasMode("browse");
+        return;
+      }
+
       const nextInput: CreateViewerAnnotationInput = {
         anchorX: point.x,
         anchorY: point.y,
@@ -1389,14 +1413,14 @@ export function DraftModalityViewer({
         isPracticeHidden: annotationForm.isPracticeHidden,
         isTargetedDefault: annotationForm.isTargetedDefault,
         isVisibleDefault: annotationForm.isVisibleDefault,
-        labelX: createDefaultLabelX(point.x),
-        labelY: clamp(point.y - 0.08, 0.08, 0.92),
+        labelX: nextLabelX,
+        labelY: nextLabelY,
         leaderColorHex: annotationForm.leaderColorHex.trim() || null,
         note: annotationForm.note.trim() || null,
         overlayColorHex: annotationForm.overlayColorHex.trim() || null,
         overlayOpacity: annotationForm.overlayOpacity,
-        polygonPoints: annotationForm.polygonPoints,
-        structureId: selectedStructure.id,
+        polygonPoints: [],
+        structureId: activeStructureId,
         titleOverride: annotationForm.titleOverride.trim() || null,
       };
 
@@ -1419,6 +1443,18 @@ export function DraftModalityViewer({
       return;
     }
 
+    if (canvasMode === "draw-region") {
+      updateAnnotationForm("polygonPoints", [
+        ...annotationForm.polygonPoints,
+        point,
+      ]);
+      return;
+    }
+
+    if (!activeStructureId) {
+      return;
+    }
+
     if (canvasMode === "set-anchor") {
       updateAnnotationForm("anchorX", point.x);
       updateAnnotationForm("anchorY", point.y);
@@ -1430,19 +1466,18 @@ export function DraftModalityViewer({
       updateAnnotationForm("labelX", point.x);
       updateAnnotationForm("labelY", point.y);
       setCanvasMode("browse");
-      return;
-    }
-
-    if (canvasMode === "draw-region") {
-      updateAnnotationForm("polygonPoints", [
-        ...annotationForm.polygonPoints,
-        point,
-      ]);
     }
   }
 
   function handleCanvasDoubleClick() {
     if (canvasMode !== "draw-region") {
+      return;
+    }
+
+    const activeStructureId = selectedStructure?.id ?? selectedStructureId;
+
+    if (!activeStructureId) {
+      setCanvasMode("browse");
       return;
     }
 
@@ -1540,7 +1575,7 @@ export function DraftModalityViewer({
     setCanvasFlipVertical((current) => !current);
   }
 
-  function handleReset(){
+  function handleReset() {
     setCanvasRotationQuarterTurns(0);
     setCanvasFlipHorizontal(false);
     setCanvasFlipVertical(false);
@@ -1585,26 +1620,14 @@ export function DraftModalityViewer({
 
   if (isLoading && !data) {
     return (
-      <div className="flex min-h-[70vh] h-full items-center justify-center rounded-3xl bg-[#05070a] text-white">
-        <div className="flex items-center gap-3 text-sm text-white/80">
-          <LoaderCircleIcon className="size-5 animate-spin" />
-          Loading draft viewer...
-        </div>
+      <div className="flex min-h-[70vh] h-full items-center justify-center">
+        <Loader />
       </div>
     );
   }
 
   if (!data || error) {
-    return (
-      <div className="rounded-3xl border border-white/10 bg-[#05070a] p-8 text-white">
-        <div className="text-lg font-semibold">Viewer unavailable</div>
-        <p className="mt-2 max-w-xl text-sm leading-6 text-white/65">
-          This study is not ready for teaching review yet. Finish preparing the
-          slices first, then return here to add groups, topics, pins, and
-          teaching areas.
-        </p>
-      </div>
-    );
+    return <EmptyParticle />;
   }
 
   return (
@@ -1615,7 +1638,7 @@ export function DraftModalityViewer({
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/40" />
               <Input
-                className="border-white/10 bg-black/30 pl-9 text-white placeholder:text-white/35"
+                className="pl-9"
                 placeholder="Search in this module"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
@@ -1642,7 +1665,7 @@ export function DraftModalityViewer({
             ) : null}
           </div>
 
-          {referenceAssets.length > 0 ? (
+          {referenceAssets.length > 0 && (
             <div className="space-y-3">
               <TriViewStudyPanel
                 activeAssetId={activeViewerAssetId}
@@ -1660,14 +1683,9 @@ export function DraftModalityViewer({
                 />
               ))}
             </div>
-          ) : (
-            <div className="rounded-2xl border border-white/8 bg-black/20 p-4 text-sm text-white/55">
-              Review the teaching slice set here. Use the tools on the right to
-              add pins, teaching areas, and learner-friendly notes.
-            </div>
           )}
 
-          {selectedStructure ? (
+          {selectedStructure && (
             <StructureDrawer
               darkMode={darkMode}
               relatedAssets={relatedAssets}
@@ -1675,11 +1693,6 @@ export function DraftModalityViewer({
               selectedStructure={selectedStructure}
               onJumpToAsset={(assetId) => navigateToAssetId(assetId, "click")}
             />
-          ) : (
-            <div className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-white/55">
-              Select a topic on the image to review its summary, full teaching
-              notes, and related slices.
-            </div>
           )}
         </aside>
       ) : null}
@@ -1706,6 +1719,7 @@ export function DraftModalityViewer({
           pointAnimation={pointAnimation}
           practiceMode={practiceMode}
           selectedAnnotationId={selectedAnnotationId}
+          draftStructureTitle={selectedStructure?.title ?? structureForm.title}
           showCrossReferences={showCrossReferences}
           showOrientation={showOrientation}
           showLabels={showLabels}
@@ -1727,7 +1741,7 @@ export function DraftModalityViewer({
 
         <Group
           aria-label="Viewer controls"
-          className="absolute right-3 top-3 z-30 rounded-sm bg-white/6 p-0.5"
+          className="absolute right-3 top-3 z-30 rounded-sm p-0.5"
         >
           <Button
             aria-label={
@@ -1784,23 +1798,23 @@ export function DraftModalityViewer({
             )}
           </Button>
           {showControlPanel ? (
-              <Button
-                aria-label={
-                  isAuthoringMode
-                    ? "Switch to learner mode"
-                    : "Switch to authoring mode"
-                }
-                type="button"
-                size="icon-lg"
-                variant={!isAuthoringMode ? "secondary" : "default"}
-                onClick={() =>
-                  setViewerMode((current) =>
-                    current === "authoring" ? "learner" : "authoring",
-                  )
-                }
-              >
-                <Snowflake className="size-4" />
-              </Button>
+            <Button
+              aria-label={
+                isAuthoringMode
+                  ? "Switch to learner mode"
+                  : "Switch to authoring mode"
+              }
+              type="button"
+              size="icon-lg"
+              variant={!isAuthoringMode ? "secondary" : "default"}
+              onClick={() =>
+                setViewerMode((current) =>
+                  current === "authoring" ? "learner" : "authoring",
+                )
+              }
+            >
+              <Snowflake className="size-4" />
+            </Button>
           ) : null}
           <Button
             aria-label="Delete current slice"
@@ -1813,26 +1827,6 @@ export function DraftModalityViewer({
             <Trash2Icon className="size-4" />
           </Button>
         </Group>
-
-        {!showStudyPanel ? (
-          <button
-            type="button"
-            className="absolute left-3 top-3 z-30 rounded-md border border-white/15 bg-black/45 px-2 py-1 text-xs text-white/80 backdrop-blur transition hover:bg-white/10"
-            onClick={() => setShowStudyPanel(true)}
-          >
-            Show study panel
-          </button>
-        ) : null}
-
-        {!showControlPanel ? (
-          <button
-            type="button"
-            className="absolute right-3 top-14 z-30 rounded-md border border-white/15 bg-black/45 px-2 py-1 text-xs text-white/80 backdrop-blur transition hover:bg-white/10"
-            onClick={() => setShowControlPanel(true)}
-          >
-            Show menu
-          </button>
-        ) : null}
 
         {lockedPreviewStructure ? (
           <div className="absolute right-4 top-20 z-30 w-72 rounded-xl border border-lime-300/55 bg-[#20242b]/95 p-3 shadow-xl backdrop-blur">
@@ -1874,7 +1868,7 @@ export function DraftModalityViewer({
         ) : null}
 
         {showBlockView ? (
-          <div className="absolute inset-0 z-40 bg-black/80 p-4 backdrop-blur-sm">
+          <div className="absolute inset-0 z-40 bg-black/80 p-4 backdrop-blur-sm overflow-hidden overflow-y-auto">
             <div className="mb-3 flex items-center justify-between">
               <div className="text-base font-semibold text-white">
                 All series - {activeAssets.length} images
@@ -1887,7 +1881,7 @@ export function DraftModalityViewer({
                 Close
               </Button>
             </div>
-            <div className="grid max-h-[calc(100vh-49px)] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
+            <div className="grid max-h-[calc(100vh-49px)] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6 lg:grid-cols-8 :grid-cols-10">
               {activeAssets.map((asset, assetIndex) => (
                 <button
                   key={`block-${asset.id}`}
@@ -1926,10 +1920,10 @@ export function DraftModalityViewer({
           </div>
 
           <div className="relative min-w-0 ml-23.75">
-            <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-primary shadow-[0_0_10px_rgba(34,211,238,0.85)]" />
+            <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-primary" />
             <div
               ref={filmstripScrollerRef}
-              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-white/3 p-1"
+              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-[#f4f4f5] dark:bg-[#121212] p-1"
             >
               <div className="flex w-max items-end gap-1">
                 {filmstripAssets.map(({ asset, assetIndex }) => (
@@ -1961,14 +1955,18 @@ export function DraftModalityViewer({
               </div>
             </div>
           </div>
+
           <div className="flex gap-2 items-center">
-            <Button size={"icon"} onClick={() => setShowBlockView(true)}>
+            <Button
+              size={"icon"}
+              onClick={() => setShowBlockView(!showBlockView)}
+            >
               <LayoutGrid />
             </Button>
             <Button size={"icon"} onClick={handlePreviousAsset}>
               <ArrowLeft />
             </Button>
-            <p className="pr-1 text-sm font-semibold tabular-nums text-white/85 w-24 text-center">
+            <p className="pr-1 text-sm font-semibold tabular-nums dark:text-white/85 w-24 text-center">
               {navigationAssetIndex >= 0
                 ? `${navigationAssetIndex + 1}/${activeAssets.length}`
                 : `0/${activeAssets.length}`}
@@ -2160,7 +2158,7 @@ function TriViewStudyPanel({
   }
 
   return (
-    <div className="space-y-3 rounded-2xl border border-white/8 bg-black/25 p-3">
+    <div className="px-3">
       {assets.map((asset, index) => (
         <button
           key={`tri-${asset.id}`}
@@ -2211,15 +2209,13 @@ function StructureDrawer({
   onJumpToAsset: (assetId: string) => void;
 }) {
   const isLocked = selectedStructure.accessLevel === "subscription";
+  const visibleLearningPoints = selectedStructure.learningPoints.filter(
+    (point) => !point.startsWith("interaction:"),
+  );
 
   return (
-    <div
-      className={cn(
-        "rounded-3xl border p-4",
-        darkMode ? "border-white/8 bg-white/4" : "border-slate-200 bg-white",
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
+    <div className={cn("px-2")}>
+      <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-2xl font-semibold">
             {selectedStructure.title}
@@ -2236,9 +2232,10 @@ function StructureDrawer({
       </div>
 
       {selectedStructure.shortDescription ? (
-        <p className="mt-4 text-sm leading-6 text-white/75">
-          {selectedStructure.shortDescription}
-        </p>
+        <MarkdownContent
+          className="mt-4"
+          content={selectedStructure.shortDescription}
+        />
       ) : null}
 
       {isLocked ? (
@@ -2247,20 +2244,19 @@ function StructureDrawer({
           publish broader access.
         </div>
       ) : selectedStructure.longDescription ? (
-        <div className="mt-4 space-y-3 text-sm leading-6 text-white/72">
-          {selectedStructure.longDescription.split("\n").map((paragraph) => (
-            <p key={paragraph}>{paragraph}</p>
-          ))}
-        </div>
+        <MarkdownContent
+          className="mt-4"
+          content={selectedStructure.longDescription}
+        />
       ) : null}
 
-      {selectedStructure.learningPoints.length > 0 ? (
+      {visibleLearningPoints.length > 0 ? (
         <div className="mt-5">
           <div className="text-xs uppercase tracking-[0.2em] text-white/40">
             Learning points
           </div>
           <ul className="mt-3 space-y-2 text-sm text-white/70">
-            {selectedStructure.learningPoints.map((point) => (
+            {visibleLearningPoints.map((point) => (
               <li
                 key={point}
                 className="rounded-xl border border-white/8 px-3 py-2"
@@ -2312,6 +2308,25 @@ function StructureDrawer({
   );
 }
 
+function MarkdownContent({
+  className,
+  content,
+}: {
+  className?: string;
+  content: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "text-sm leading-6 text-white/75 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-white/10 [&_code]:px-1 [&_code]:py-0.5 [&_li]:mb-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5",
+        className,
+      )}
+    >
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  );
+}
+
 function ViewerCanvas({
   annotationForm,
   canvasFlipHorizontal,
@@ -2332,6 +2347,7 @@ function ViewerCanvas({
   pointAnimation,
   practiceMode,
   selectedAnnotationId,
+  draftStructureTitle,
   showLoadingIndicator,
   showCrossReferences,
   showOrientation,
@@ -2365,6 +2381,7 @@ function ViewerCanvas({
   pointAnimation: boolean;
   practiceMode: boolean;
   selectedAnnotationId: string | null;
+  draftStructureTitle: string;
   showLoadingIndicator: boolean;
   showCrossReferences: boolean;
   showOrientation: boolean;
@@ -2382,6 +2399,21 @@ function ViewerCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const brushingRef = useRef(false);
   const lastBrushPointRef = useRef<ViewerAnnotationPoint | null>(null);
+  const draftPointerMovedFromDefault =
+    Math.abs(annotationForm.anchorX - EMPTY_ANNOTATION_FORM.anchorX) > 0.0005 ||
+    Math.abs(annotationForm.anchorY - EMPTY_ANNOTATION_FORM.anchorY) > 0.0005 ||
+    Math.abs(annotationForm.labelX - EMPTY_ANNOTATION_FORM.labelX) > 0.0005 ||
+    Math.abs(annotationForm.labelY - EMPTY_ANNOTATION_FORM.labelY) > 0.0005;
+  const showDraftPointer =
+    !selectedAnnotationId &&
+    canvasMode !== "draw-region" &&
+    draftPointerMovedFromDefault;
+  const draftPointerColor =
+    annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
+  const draftPointerLabel =
+    annotationForm.titleOverride.trim() ||
+    draftStructureTitle.trim() ||
+    "Draft";
   const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
   const canvasSurfaceTransform = `rotate(${normalizedCanvasRotation * 90}deg) scaleX(${canvasFlipHorizontal ? -1 : 1}) scaleY(${canvasFlipVertical ? -1 : 1})`;
 
@@ -2681,6 +2713,36 @@ function ViewerCanvas({
                 </g>
               );
             })}
+            {showDraftPointer ? (
+              <g>
+                <line
+                  stroke={annotationForm.leaderColorHex || draftPointerColor}
+                  strokeWidth={2}
+                  x1={annotationForm.anchorX * 1000}
+                  x2={annotationForm.labelX * 1000}
+                  y1={annotationForm.anchorY * 1000}
+                  y2={annotationForm.labelY * 1000}
+                />
+                <circle
+                  cx={annotationForm.anchorX * 1000}
+                  cy={annotationForm.anchorY * 1000}
+                  fill={draftPointerColor}
+                  r={7}
+                />
+                {showLabels && !pinsOnly ? (
+                  <text
+                    fill={draftPointerColor}
+                    fontFamily="system-ui"
+                    fontSize={fontScaleMode === "large" ? 24 : 18}
+                    fontWeight={600}
+                    x={annotationForm.labelX * 1000}
+                    y={annotationForm.labelY * 1000}
+                  >
+                    {draftPointerLabel}
+                  </text>
+                ) : null}
+              </g>
+            ) : null}
             {overlayPreview ? (
               <polygon
                 fill={annotationForm.overlayColorHex}
@@ -2716,19 +2778,6 @@ function ViewerCanvas({
           </svg>
         </div>
       </div>
-
-      {canvasMode !== "browse" ? (
-        <div className="absolute bottom-4 left-4 rounded-full border border-cyan-400/45 bg-black/55 px-4 py-2 text-sm text-cyan-200">
-          {canvasMode === "create-label" &&
-            "Click in the image to place a new label."}
-          {canvasMode === "set-anchor" &&
-            "Click in the image to move the anchor."}
-          {canvasMode === "set-label" &&
-            "Click in the image to move the label text."}
-          {canvasMode === "draw-region" &&
-            "Click to add polygon points. Double-click anywhere on the image to save."}
-        </div>
-      ) : null}
 
       {pointAnimation ? (
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.03),transparent_60%)]" />

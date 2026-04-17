@@ -34,7 +34,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
         <SiteHeader />
         <div
           data-lenis-prevent
-          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-y-contain"
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-y-contain dark:bg-[#171717]"
         >
           {children}
         </div>

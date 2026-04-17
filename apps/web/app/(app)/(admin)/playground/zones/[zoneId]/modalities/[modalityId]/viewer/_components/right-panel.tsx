@@ -1,9 +1,5 @@
 "use client";
 
-import type { PartialBlock } from "@blocknote/core";
-import { BlockNoteViewRaw, useCreateBlockNote } from "@blocknote/react";
-import "@blocknote/core/fonts/inter.css";
-import "@blocknote/react/style.css";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   CircleIcon,
@@ -23,8 +19,6 @@ import {
   SparklesIcon,
   Trash2Icon,
   Undo2Icon,
-  MinusIcon,
-  SquareIcon,
   XIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -41,7 +35,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Safari } from "@/components/ui/safari";
 import type {
   ViewerAccessLevel,
   ViewerAnnotation,
@@ -49,11 +42,10 @@ import type {
   ViewerStructureGroup,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
-import { cn } from "@/lib/utils";
-
 import {
   DEFAULT_ANNOTATION_COLOR,
   DEFAULT_GROUP_COLOR,
+  EMPTY_ANNOTATION_FORM,
   type AnnotationFormState,
   type FontScaleMode,
   type GroupFormState,
@@ -75,6 +67,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import { ProjectRichTextEditor } from "@/components/anatomy/project-rich-text";
 
 type UpdateAnnotationForm = <Key extends keyof AnnotationFormState>(
   key: Key,
@@ -153,9 +147,14 @@ type RightPanelProps = {
   onReverseScrollChange: (value: boolean) => void;
   onRotateCanvasLeft: () => void;
   onRotateCanvasRight: () => void;
-  onSaveAnnotation: () => void | Promise<void>;
+  onSaveAnnotation: (options?: {
+    structureId?: string;
+  }) => void | Promise<void>;
   onSaveGroup: () => void | Promise<void>;
-  onSaveStructure: () => void | Promise<void>;
+  onSaveStructure: () =>
+    | ViewerStructure
+    | null
+    | Promise<ViewerStructure | null>;
   onSelectAnnotation: (annotationId: string, structureId: string) => void;
   onSelectGroup: (groupId: string) => void;
   onSelectStructure: (structureId: string, groupId: string | null) => void;
@@ -176,18 +175,110 @@ type PartInteractionMode = "pointer" | "area";
 const PART_INTERACTION_MARKER = "interaction:";
 const PART_EDITOR_MIN_WIDTH = 680;
 const PART_EDITOR_MIN_HEIGHT = 440;
+const PART_EDITOR_RESPONSIVE_MIN_WIDTH = 360;
+const PART_EDITOR_RESPONSIVE_MIN_HEIGHT = 280;
+const PART_EDITOR_VIEWPORT_MARGIN = 8;
 const PART_EDITOR_DEFAULT_RECT = {
   height: 620,
   width: 980,
   x: 120,
   y: 84,
 };
-const PART_EDITOR_SCREEN_STYLE: React.CSSProperties = {
-  height: "92.9615%",
-  left: "0.0831%",
-  top: "6.9057%",
-  width: "99.7506%",
+
+type PartEditorWindowRect = {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 };
+
+function getPartEditorViewportBounds() {
+  const maxWidth = Math.max(
+    PART_EDITOR_RESPONSIVE_MIN_WIDTH,
+    window.innerWidth - PART_EDITOR_VIEWPORT_MARGIN * 2,
+  );
+  const maxHeight = Math.max(
+    PART_EDITOR_RESPONSIVE_MIN_HEIGHT,
+    window.innerHeight - PART_EDITOR_VIEWPORT_MARGIN * 2,
+  );
+
+  return {
+    maxHeight,
+    maxWidth,
+    minHeight: Math.min(PART_EDITOR_MIN_HEIGHT, maxHeight),
+    minWidth: Math.min(PART_EDITOR_MIN_WIDTH, maxWidth),
+  };
+}
+
+function clampPartEditorRect(rect: PartEditorWindowRect): PartEditorWindowRect {
+  const bounds = getPartEditorViewportBounds();
+  const width = clampNumber(rect.width, bounds.minWidth, bounds.maxWidth);
+  const height = clampNumber(rect.height, bounds.minHeight, bounds.maxHeight);
+  const x = clampNumber(
+    rect.x,
+    PART_EDITOR_VIEWPORT_MARGIN,
+    Math.max(
+      PART_EDITOR_VIEWPORT_MARGIN,
+      window.innerWidth - width - PART_EDITOR_VIEWPORT_MARGIN,
+    ),
+  );
+  const y = clampNumber(
+    rect.y,
+    PART_EDITOR_VIEWPORT_MARGIN,
+    Math.max(
+      PART_EDITOR_VIEWPORT_MARGIN,
+      window.innerHeight - height - PART_EDITOR_VIEWPORT_MARGIN,
+    ),
+  );
+
+  return {
+    height,
+    width,
+    x,
+    y,
+  };
+}
+
+function getMaximizedPartEditorRect(): PartEditorWindowRect {
+  const bounds = getPartEditorViewportBounds();
+
+  return {
+    height: bounds.maxHeight,
+    width: bounds.maxWidth,
+    x: PART_EDITOR_VIEWPORT_MARGIN,
+    y: PART_EDITOR_VIEWPORT_MARGIN,
+  };
+}
+
+function getCanvasModeFromPartInteraction(
+  mode: PartInteractionMode,
+): ViewerCanvasMode {
+  return mode === "area" ? "draw-region" : "create-label";
+}
+
+function hasPointerPlacementDraft(annotationForm: AnnotationFormState) {
+  const epsilon = 0.0005;
+
+  return (
+    Math.abs(annotationForm.anchorX - EMPTY_ANNOTATION_FORM.anchorX) >
+      epsilon ||
+    Math.abs(annotationForm.anchorY - EMPTY_ANNOTATION_FORM.anchorY) >
+      epsilon ||
+    Math.abs(annotationForm.labelX - EMPTY_ANNOTATION_FORM.labelX) > epsilon ||
+    Math.abs(annotationForm.labelY - EMPTY_ANNOTATION_FORM.labelY) > epsilon
+  );
+}
+
+function hasPartAnnotationDraft(
+  mode: PartInteractionMode,
+  annotationForm: AnnotationFormState,
+) {
+  if (mode === "area") {
+    return annotationForm.polygonPoints.length >= 3;
+  }
+
+  return hasPointerPlacementDraft(annotationForm);
+}
 
 export function ModalityViewerRightPanel({
   activeWeighting,
@@ -332,6 +423,30 @@ export function ModalityViewerRightPanel({
     );
   }, [showCreatePartFrame, structureForm.learningPoints]);
 
+  useEffect(() => {
+    if (
+      !showCreatePartFrame ||
+      !selectedAnatomicalPart ||
+      selectedStructureId
+    ) {
+      return;
+    }
+
+    const areaColorHex = toColorInputValue(
+      selectedAnatomicalPart.colorHex,
+      DEFAULT_GROUP_COLOR,
+    );
+
+    onAnnotationFormChange("colorHex", areaColorHex);
+    onAnnotationFormChange("leaderColorHex", areaColorHex);
+    onAnnotationFormChange("overlayColorHex", areaColorHex);
+  }, [
+    onAnnotationFormChange,
+    selectedAnatomicalPart,
+    selectedStructureId,
+    showCreatePartFrame,
+  ]);
+
   const handleSaveAnatomicalPart = async () => {
     await onSaveGroup();
     onResetGroup();
@@ -352,6 +467,22 @@ export function ModalityViewerRightPanel({
       "learningPoints",
       `${PART_INTERACTION_MARKER}${nextMode}`,
     );
+    onCanvasModeChange(getCanvasModeFromPartInteraction(nextMode));
+  };
+
+  const handleDeleteSelectedPart = async () => {
+    if (!selectedStructureId) {
+      return;
+    }
+
+    await onDeleteStructure(selectedStructureId);
+    onResetStructure();
+    setShowCreatePartFrame(false);
+    setShowPartEditorWindow(false);
+    setPartEditorInitialContent("");
+    setPartInteractionMode("pointer");
+    onClearPolygonDraft();
+    onCanvasModeChange("browse");
   };
 
   const handleSaveStructurePart = async () => {
@@ -359,15 +490,32 @@ export function ModalityViewerRightPanel({
       return;
     }
 
+    const isCreatingPart = !selectedStructureId;
+
     if (structureForm.groupId !== selectedAnatomicalPart.id) {
       onStructureFormChange("groupId", selectedAnatomicalPart.id);
     }
 
-    await onSaveStructure();
-    onCanvasModeChange(partInteractionMode === "area" ? "draw-region" : "create-label");
-    onResetStructure();
-    onStructureFormChange("groupId", selectedAnatomicalPart.id);
-    onStructureFormChange("learningPoints", "");
+    const savedStructure = await onSaveStructure();
+
+    if (!savedStructure) {
+      return;
+    }
+
+    const shouldSaveDraftAnnotation =
+      isCreatingPart &&
+      hasPartAnnotationDraft(partInteractionMode, annotationForm);
+
+    onSelectStructure(savedStructure.id, savedStructure.groupId);
+
+    if (shouldSaveDraftAnnotation) {
+      await onSaveAnnotation({ structureId: savedStructure.id });
+    } else {
+      onCanvasModeChange("browse");
+    }
+
+    onClearPolygonDraft();
+    // Keep the newly created structure selected so pointer/area actions can start immediately.
     setPartInteractionMode("pointer");
     setShowCreatePartFrame(false);
     setShowPartEditorWindow(false);
@@ -388,7 +536,7 @@ export function ModalityViewerRightPanel({
                 }
               }}
             >
-              <SelectTrigger className="w-full rounded-xl border-white/10 bg-white/3 text-sm text-white [&_svg]:text-white/70">
+              <SelectTrigger className="w-full rounded-xl text-sm">
                 <SelectValue placeholder="Select weighting" />
               </SelectTrigger>
               <SelectContent className="max-h-72">
@@ -423,9 +571,19 @@ export function ModalityViewerRightPanel({
                   type="button"
                   size="icon"
                   variant={showAnatomicalPartsPanel ? "default" : "secondary"}
-                  onClick={() =>
-                    setShowAnatomicalPartsPanel((current) => !current)
-                  }
+                  onClick={() => {
+                    const next = !showAnatomicalPartsPanel;
+
+                    if (next) {
+                      // Create-area mode and edit-area mode are mutually exclusive.
+                      setSelectedAnatomicalPartId(null);
+                      setShowCreatePartFrame(false);
+                      setShowPartEditorWindow(false);
+                      onResetGroup();
+                    }
+
+                    setShowAnatomicalPartsPanel(next);
+                  }}
                 >
                   <PlusIcon className="size-4" />
                 </Button>
@@ -435,7 +593,7 @@ export function ModalityViewerRightPanel({
             <div className="space-y-2">
               <button
                 type="button"
-                className="flex w-full items-center justify-between px-1 py-1.5 text-sm text-white/95"
+                className="flex w-full items-center justify-between px-1 py-1.5 text-sm"
                 onClick={() =>
                   onVisibleGroupIdsChange(masterVisible ? [] : allGroupIds)
                 }
@@ -466,12 +624,25 @@ export function ModalityViewerRightPanel({
                       <span className="flex min-w-0 flex-1 items-center gap-2.5">
                         <button
                           type="button"
-                          className="inline-flex size-6 items-center justify-center rounded-md text-white/70 transition hover:bg-white/8 hover:text-white"
+                          className="inline-flex size-6 items-center justify-center rounded-md transition"
                           aria-label={`Open ${group.title} details`}
                           onClick={() => {
-                            onSelectGroup(group.id);
-                            setSelectedAnatomicalPartId(group.id);
+                            const nextGroupId =
+                              selectedAnatomicalPartId === group.id
+                                ? null
+                                : group.id;
+
+                            setShowAnatomicalPartsPanel(false);
                             setShowCreatePartFrame(false);
+                            setShowPartEditorWindow(false);
+
+                            if (nextGroupId) {
+                              onSelectGroup(nextGroupId);
+                            } else {
+                              onResetGroup();
+                            }
+
+                            setSelectedAnatomicalPartId(nextGroupId);
                           }}
                         >
                           <GripVertical className="size-4" />
@@ -489,7 +660,7 @@ export function ModalityViewerRightPanel({
                             style={{ backgroundColor: group.colorHex }}
                           />
                         )}
-                        <span className="truncate text-[15px] leading-5 text-white/95">
+                        <span className="truncate text-[15px] leading-5">
                           {group.title}
                         </span>
                       </span>
@@ -507,7 +678,7 @@ export function ModalityViewerRightPanel({
             </div>
           </ViewerSidebarSection>
 
-          <ViewerSidebarSection title="Transformations">
+          <ViewerSidebarSection title="Transformations" className="pb-0">
             <div className="space-y-2">
               <Group
                 aria-label="Transformations"
@@ -565,713 +736,6 @@ export function ModalityViewerRightPanel({
               </Group>
             </div>
           </ViewerSidebarSection>
-
-          {/* {isAuthoringMode ? (
-            <>
-              <ViewerSidebarSection title="Labeling">
-                <div className="grid grid-cols-2 gap-2">
-                  <TogglePill
-                    active={practiceMode}
-                    label="Practice mode"
-                    onToggle={onPracticeModeChange}
-                  />
-                  <TogglePill
-                    active={pinsOnly}
-                    label="Pins only"
-                    onToggle={onPinsOnlyChange}
-                  />
-                  <TogglePill
-                    active={targetedLabeling}
-                    label="Focus topic"
-                    onToggle={onTargetedLabelingChange}
-                  />
-                  <TogglePill
-                    active={showLabels}
-                    label="Show names"
-                    onToggle={onShowLabelsChange}
-                  />
-                </div>
-                <div className="mt-3">
-                  <div className="mb-2 text-sm text-white/70">Text size</div>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant={fontScaleMode === "auto" ? "secondary" : "default"}
-                      onClick={() => onFontScaleModeChange("auto")}
-                    >
-                      Auto
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={
-                        fontScaleMode === "large" ? "secondary" : "default"
-                      }
-                      onClick={() => onFontScaleModeChange("large")}
-                    >
-                      Large
-                    </Button>
-                  </div>
-                </div>
-              </ViewerSidebarSection>
-
-              <ViewerSidebarSection title="Display mode">
-                <div className="space-y-2">
-                  <ToggleRow
-                    active={showOrientation}
-                    label="Orientation title"
-                    onToggle={onShowOrientationChange}
-                  />
-                  <ToggleRow
-                    active={showCrossReferences}
-                    label="Guide lines"
-                    onToggle={onShowCrossReferencesChange}
-                  />
-                  <ToggleRow
-                    active={darkMode}
-                    label="Dark background"
-                    onToggle={onDarkModeChange}
-                  />
-                </div>
-                <div className="mt-3 space-y-2">
-                  <div className="text-sm text-white/70">Overlay strength</div>
-                  <input
-                    className="w-full accent-cyan-400"
-                    max={1}
-                    min={0.1}
-                    step={0.05}
-                    type="range"
-                    value={overlayOpacity}
-                    onChange={(event) =>
-                      onOverlayOpacityChange(Number(event.target.value))
-                    }
-                  />
-                </div>
-              </ViewerSidebarSection>
-
-              <ViewerSidebarSection title="Advanced settings">
-                <div className="space-y-2">
-                  <ToggleRow
-                    active={reverseScroll}
-                    label="Reverse scroll"
-                    onToggle={onReverseScrollChange}
-                  />
-                  <ToggleRow
-                    active={pointAnimation}
-                    label="Pulse markers"
-                    onToggle={onPointAnimationChange}
-                  />
-                </div>
-              </ViewerSidebarSection>
-            </>
-          ) : (
-            <ViewerSidebarSection title="Study controls">
-              <div className="grid grid-cols-2 gap-2">
-                <TogglePill
-                  active={showLabels}
-                  label="Show names"
-                  onToggle={onShowLabelsChange}
-                />
-                <TogglePill
-                  active={pinsOnly}
-                  label="Pins only"
-                  onToggle={onPinsOnlyChange}
-                />
-                <TogglePill
-                  active={practiceMode}
-                  label="Practice"
-                  onToggle={onPracticeModeChange}
-                />
-                <TogglePill
-                  active={darkMode}
-                  label="Dark mode"
-                  onToggle={onDarkModeChange}
-                />
-              </div>
-              <div className="mt-3 space-y-2">
-                <ToggleRow
-                  active={showOrientation}
-                  label="Orientation title"
-                  onToggle={onShowOrientationChange}
-                />
-                <ToggleRow
-                  active={showCrossReferences}
-                  label="Guide lines"
-                  onToggle={onShowCrossReferencesChange}
-                />
-              </div>
-              <div className="mt-3 space-y-2">
-                <div className="text-sm text-white/70">Overlay strength</div>
-                <input
-                  className="w-full accent-cyan-400"
-                  max={1}
-                  min={0.1}
-                  step={0.05}
-                  type="range"
-                  value={overlayOpacity}
-                  onChange={(event) =>
-                    onOverlayOpacityChange(Number(event.target.value))
-                  }
-                />
-              </div>
-            </ViewerSidebarSection>
-          )}
-
-          {isAuthoringMode ? (
-            <>
-              <ViewerSidebarSection title="Workflow status">
-                <div className="rounded-2xl border border-white/8 bg-white/3 p-3 text-sm text-white/70">
-                  Follow this order: group, then topic, then pin/area. Controls
-                  only appear when the previous step is ready.
-                </div>
-                <div className="mt-3 rounded-2xl border border-white/8 bg-black/20 p-3 text-sm text-white/70">
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Selected topic</span>
-                    <span className="text-right text-white">
-                      {selectedStructure?.title ?? "No topic selected yet"}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <span>Current tool</span>
-                    <span className="text-right text-white">
-                      {getCanvasModeLabel(canvasMode)}
-                    </span>
-                  </div>
-                </div>
-              </ViewerSidebarSection>
-
-              <ViewerSidebarSection title="Authoring workflow">
-                <div className="space-y-4">
-                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-white">
-                        Step 1: Group
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={onResetGroup}
-                      >
-                        New
-                      </Button>
-                    </div>
-                    {groups.length > 0 ? (
-                      <div className="max-h-36 space-y-1 overflow-y-auto rounded-xl border border-white/8 bg-black/20 p-1.5">
-                        {groups.map((group) => (
-                          <div
-                            key={group.id}
-                            className={cn(
-                              "flex items-center gap-2 rounded-lg border px-2 py-1.5",
-                              selectedGroupId === group.id
-                                ? "border-cyan-400/65 bg-cyan-500/10"
-                                : "border-transparent",
-                            )}
-                          >
-                            <button
-                              type="button"
-                              className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm"
-                              onClick={() => onSelectGroup(group.id)}
-                            >
-                              <span
-                                className="size-2.5 rounded-full"
-                                style={{ backgroundColor: group.colorHex }}
-                              />
-                              <span className="truncate">{group.title}</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded-md p-1 text-red-300 transition hover:bg-red-500/20 hover:text-red-200"
-                              title="Delete group"
-                              onClick={() => void onDeleteGroup(group.id)}
-                            >
-                              <Trash2Icon className="size-3.5" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
-                        No groups yet. Create one to unlock topic authoring.
-                      </div>
-                    )}
-                    <Input
-                      placeholder="Group title"
-                      value={groupForm.title}
-                      onChange={(event) =>
-                        onGroupFormChange("title", event.target.value)
-                      }
-                    />
-                    <div className="flex items-center gap-2">
-                      <input
-                        aria-label="Group color"
-                        className="h-10 w-14 rounded-xl border border-white/15 bg-transparent p-1"
-                        type="color"
-                        value={toColorInputValue(
-                          groupForm.colorHex,
-                          DEFAULT_GROUP_COLOR,
-                        )}
-                        onChange={(event) =>
-                          onGroupFormChange("colorHex", event.target.value)
-                        }
-                      />
-                      <Input
-                        placeholder="Color value"
-                        value={groupForm.colorHex}
-                        onChange={(event) =>
-                          onGroupFormChange("colorHex", event.target.value)
-                        }
-                      />
-                    </div>
-                    <ToggleRow
-                      active={groupForm.isDefaultVisible}
-                      label="Visible by default"
-                      onToggle={(value) =>
-                        onGroupFormChange("isDefaultVisible", value)
-                      }
-                    />
-                    <Button
-                      disabled={busy}
-                      type="button"
-                      variant="secondary"
-                      onClick={() => void onSaveGroup()}
-                    >
-                      {busy ? (
-                        <LoaderCircleIcon className="size-4 animate-spin" />
-                      ) : (
-                        <Layers2Icon className="size-4" />
-                      )}
-                      Save group
-                    </Button>
-                  </div>
-
-                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-medium text-white">
-                        Step 2: Topic
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {selectedStructureId ? (
-                          <Button asChild size="sm" variant="secondary">
-                            <Link
-                              href={`/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures/${selectedStructureId}`}
-                            >
-                              Write details
-                            </Link>
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={onResetStructure}
-                        >
-                          New
-                        </Button>
-                      </div>
-                    </div>
-                    {groups.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
-                        Save at least one group first. Topic controls appear right
-                        after that.
-                      </div>
-                    ) : (
-                      <>
-                        {structures.length > 0 ? (
-                          <div className="max-h-36 space-y-1 overflow-y-auto rounded-xl border border-white/8 bg-black/20 p-1.5">
-                            {structures.map((structure) => {
-                              const group = structure.groupId
-                                ? groupsById.get(structure.groupId)
-                                : null;
-
-                              return (
-                                <div
-                                  key={structure.id}
-                                  className={cn(
-                                    "flex items-center gap-2 rounded-lg border px-2 py-1.5",
-                                    selectedStructureId === structure.id
-                                      ? "border-cyan-400/65 bg-cyan-500/10"
-                                      : "border-transparent",
-                                  )}
-                                >
-                                  <button
-                                    type="button"
-                                    className="min-w-0 flex-1 text-left"
-                                    onClick={() =>
-                                      onSelectStructure(
-                                        structure.id,
-                                        structure.groupId ?? null,
-                                      )
-                                    }
-                                  >
-                                    <div className="truncate text-sm text-white">
-                                      {structure.title}
-                                    </div>
-                                    <div className="truncate text-[11px] text-white/45">
-                                      {group?.title ?? "Ungrouped"}
-                                    </div>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="rounded-md p-1 text-red-300 transition hover:bg-red-500/20 hover:text-red-200"
-                                    title="Delete topic"
-                                    onClick={() =>
-                                      void onDeleteStructure(structure.id)
-                                    }
-                                  >
-                                    <Trash2Icon className="size-3.5" />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                        <Input
-                          placeholder="Topic title"
-                          value={structureForm.title}
-                          onChange={(event) =>
-                            onStructureFormChange("title", event.target.value)
-                          }
-                        />
-                        <select
-                          className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
-                          value={structureForm.groupId}
-                          onChange={(event) =>
-                            onStructureFormChange("groupId", event.target.value)
-                          }
-                        >
-                          <option value="">No group yet</option>
-                          {groups.map((group) => (
-                            <option key={group.id} value={group.id}>
-                              {group.title}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm"
-                          value={structureForm.accessLevel}
-                          onChange={(event) =>
-                            onStructureFormChange(
-                              "accessLevel",
-                              event.target.value as ViewerAccessLevel,
-                            )
-                          }
-                        >
-                          <option value="free">Open to all learners</option>
-                          <option value="subscription">Subscriber lesson</option>
-                        </select>
-                        <Textarea
-                          placeholder="Short explanation shown first"
-                          value={structureForm.shortDescription}
-                          onChange={(event) =>
-                            onStructureFormChange(
-                              "shortDescription",
-                              event.target.value,
-                            )
-                          }
-                        />
-                        <button
-                          type="button"
-                          className="text-left text-xs text-cyan-300 underline underline-offset-2"
-                          onClick={onStructureAdvancedToggle}
-                        >
-                          {showStructureAdvanced
-                            ? "Hide advanced topic fields"
-                            : "Show advanced topic fields"}
-                        </button>
-                        {showStructureAdvanced ? (
-                          <>
-                            <Input
-                              placeholder="Latin name"
-                              value={structureForm.latinName}
-                              onChange={(event) =>
-                                onStructureFormChange(
-                                  "latinName",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                            <Textarea
-                              placeholder="Detailed teaching explanation"
-                              value={structureForm.longDescription}
-                              onChange={(event) =>
-                                onStructureFormChange(
-                                  "longDescription",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                            <Textarea
-                              placeholder="Key learning points, one line per point"
-                              value={structureForm.learningPoints}
-                              onChange={(event) =>
-                                onStructureFormChange(
-                                  "learningPoints",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                            <Textarea
-                              placeholder="Other names, separated by commas"
-                              value={structureForm.synonyms}
-                              onChange={(event) =>
-                                onStructureFormChange(
-                                  "synonyms",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                          </>
-                        ) : null}
-                        <Button
-                          disabled={busy}
-                          type="button"
-                          onClick={() => void onSaveStructure()}
-                        >
-                          {busy ? (
-                            <LoaderCircleIcon className="size-4 animate-spin" />
-                          ) : (
-                            <SparklesIcon className="size-4" />
-                          )}
-                          Save topic
-                        </Button>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-                    <div className="text-sm font-medium text-white">
-                      Step 3: Pin and area
-                    </div>
-                    {!canEditPinArea ? (
-                      <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
-                        Save or select a topic first. Pin and area tools unlock
-                        automatically after that.
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => onCanvasModeChange("create-label")}
-                          >
-                            <PinIcon className="size-4" />
-                            Place pin
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => onCanvasModeChange("draw-region")}
-                          >
-                            <CrosshairIcon className="size-4" />
-                            Brush area
-                          </Button>
-                        </div>
-                        <div className="rounded-xl border border-white/8 bg-black/25 p-3 text-sm text-white/70">
-                          {getCanvasModeDescription(canvasMode)}
-                        </div>
-
-                        {currentAnnotations.length > 0 ? (
-                          <div className="max-h-32 space-y-1 overflow-y-auto rounded-xl border border-white/8 bg-black/20 p-1.5">
-                            {currentAnnotations.map((annotation) => {
-                              const structure = structuresById.get(
-                                annotation.structureId,
-                              );
-
-                              return (
-                                <div
-                                  key={annotation.id}
-                                  className={cn(
-                                    "flex items-center gap-2 rounded-lg border px-2 py-1.5",
-                                    selectedAnnotationId === annotation.id
-                                      ? "border-cyan-400/65 bg-cyan-500/10"
-                                      : "border-transparent",
-                                  )}
-                                >
-                                  <button
-                                    type="button"
-                                    className="min-w-0 flex-1 truncate text-left text-sm"
-                                    onClick={() =>
-                                      onSelectAnnotation(
-                                        annotation.id,
-                                        annotation.structureId,
-                                      )
-                                    }
-                                  >
-                                    {annotation.titleOverride ||
-                                      structure?.title ||
-                                      "Untitled annotation"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="rounded-md p-1 text-red-300 transition hover:bg-red-500/20 hover:text-red-200"
-                                    title="Delete annotation"
-                                    onClick={() =>
-                                      void onDeleteAnnotation(annotation.id)
-                                    }
-                                  >
-                                    <Trash2Icon className="size-3.5" />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-
-                        {canEditAnnotationDetails ? (
-                          <>
-                            <div className="grid grid-cols-2 gap-2">
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => onCanvasModeChange("set-anchor")}
-                              >
-                                Move pin
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => onCanvasModeChange("set-label")}
-                              >
-                                Move name
-                              </Button>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <Button
-                                disabled={
-                                  annotationForm.polygonPoints.length === 0
-                                }
-                                type="button"
-                                variant="secondary"
-                                onClick={onUndoPolygonPoint}
-                              >
-                                <Undo2Icon className="size-4" />
-                                Undo point
-                              </Button>
-                              <Button
-                                disabled={
-                                  annotationForm.polygonPoints.length === 0
-                                }
-                                type="button"
-                                variant="secondary"
-                                onClick={onClearPolygonDraft}
-                              >
-                                <RotateCcwIcon className="size-4" />
-                                Clear area
-                              </Button>
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                              <label className="space-y-1 text-xs text-white/70">
-                                <span>Pin</span>
-                                <input
-                                  aria-label="Pin color"
-                                  className="h-9 w-full rounded-lg border border-white/15 bg-transparent p-1"
-                                  type="color"
-                                  value={toColorInputValue(
-                                    annotationForm.colorHex,
-                                    DEFAULT_ANNOTATION_COLOR,
-                                  )}
-                                  onChange={(event) => {
-                                    onAnnotationFormChange(
-                                      "colorHex",
-                                      event.target.value,
-                                    );
-                                    onAnnotationFormChange(
-                                      "leaderColorHex",
-                                      event.target.value,
-                                    );
-                                  }}
-                                />
-                              </label>
-                              <label className="space-y-1 text-xs text-white/70">
-                                <span>Line</span>
-                                <input
-                                  aria-label="Leader color"
-                                  className="h-9 w-full rounded-lg border border-white/15 bg-transparent p-1"
-                                  type="color"
-                                  value={toColorInputValue(
-                                    annotationForm.leaderColorHex,
-                                    DEFAULT_ANNOTATION_COLOR,
-                                  )}
-                                  onChange={(event) =>
-                                    onAnnotationFormChange(
-                                      "leaderColorHex",
-                                      event.target.value,
-                                    )
-                                  }
-                                />
-                              </label>
-                              <label className="space-y-1 text-xs text-white/70">
-                                <span>Area</span>
-                                <input
-                                  aria-label="Overlay color"
-                                  className="h-9 w-full rounded-lg border border-white/15 bg-transparent p-1"
-                                  type="color"
-                                  value={toColorInputValue(
-                                    annotationForm.overlayColorHex,
-                                    DEFAULT_ANNOTATION_COLOR,
-                                  )}
-                                  onChange={(event) =>
-                                    onAnnotationFormChange(
-                                      "overlayColorHex",
-                                      event.target.value,
-                                    )
-                                  }
-                                />
-                              </label>
-                            </div>
-                            <Input
-                              placeholder="Name shown on the image"
-                              value={annotationForm.titleOverride}
-                              onChange={(event) =>
-                                onAnnotationFormChange(
-                                  "titleOverride",
-                                  event.target.value,
-                                )
-                              }
-                            />
-                            <Textarea
-                              placeholder="Teaching note"
-                              value={annotationForm.note}
-                              onChange={(event) =>
-                                onAnnotationFormChange("note", event.target.value)
-                              }
-                            />
-                            <Button
-                              disabled={busy || !selectedStructure}
-                              type="button"
-                              onClick={() => void onSaveAnnotation()}
-                            >
-                              {busy ? (
-                                <LoaderCircleIcon className="size-4 animate-spin" />
-                              ) : (
-                                <CircleIcon className="size-4" />
-                              )}
-                              Save annotation
-                            </Button>
-                          </>
-                        ) : (
-                          <div className="rounded-xl border border-dashed border-white/15 bg-black/25 p-3 text-sm text-white/60">
-                            Place one pin or start brushing an area to unlock
-                            annotation details.
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </ViewerSidebarSection>
-            </>
-          ) : (
-            <ViewerSidebarSection title="Learner preview">
-              <div className="rounded-2xl border border-cyan-300/30 bg-cyan-500/10 p-3 text-sm text-cyan-100">
-                Learner mode keeps only study controls and topic exploration.
-                Authoring steps are hidden to avoid accidental editing.
-              </div>
-            </ViewerSidebarSection>
-          )} */}
         </FramePanel>
       </Frame>
       {showAnatomicalPartsPanel ? (
@@ -1290,9 +754,7 @@ export function ModalityViewerRightPanel({
           <FramePanel className="p-3">
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <div className="text-xs font-medium text-white/70">
-                  Area Name
-                </div>
+                <div className="text-xs font-medium">Area Name</div>
                 <Input
                   placeholder="Ex: Frontal Lobe"
                   value={groupForm.title}
@@ -1303,7 +765,7 @@ export function ModalityViewerRightPanel({
               </div>
 
               <div className="space-y-1.5">
-                <div className="text-xs font-medium text-white/70">Color</div>
+                <div className="text-xs font-medium">Color</div>
                 <AnatomicalAreaColorPicker
                   colorHex={groupColorValue}
                   onColorChange={(value) =>
@@ -1334,9 +796,7 @@ export function ModalityViewerRightPanel({
             <FramePanel className="p-3">
               <div className="space-y-3">
                 <div className="space-y-1.5">
-                  <div className="text-xs font-medium text-white/70">
-                    Area Name
-                  </div>
+                  <div className="text-xs font-medium">Area Name</div>
                   <Input
                     placeholder="Ex: Frontal Lobe"
                     value={groupForm.title}
@@ -1347,7 +807,7 @@ export function ModalityViewerRightPanel({
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="text-xs font-medium text-white/70">Color</div>
+                  <div className="text-xs font-medium">Color</div>
                   <AnatomicalAreaColorPicker
                     colorHex={groupColorValue}
                     onColorChange={(value) =>
@@ -1367,28 +827,29 @@ export function ModalityViewerRightPanel({
                   type="button"
                   size="icon"
                   onClick={() => {
-                    setShowCreatePartFrame((current) => {
-                      const next = !current;
+                    const next = !showCreatePartFrame;
 
-                      if (next) {
-                        onResetStructure();
-                        onStructureFormChange(
-                          "groupId",
-                          selectedAnatomicalPart.id,
-                        );
-                        onStructureFormChange(
-                          "learningPoints",
-                          `${PART_INTERACTION_MARKER}pointer`,
-                        );
-                        setPartInteractionMode("pointer");
-                        setPartEditorInitialContent("");
-                        setShowPartEditorWindow(false);
-                      } else {
-                        setShowPartEditorWindow(false);
-                      }
+                    if (next) {
+                      onResetStructure();
+                      onStructureFormChange(
+                        "groupId",
+                        selectedAnatomicalPart.id,
+                      );
+                      onStructureFormChange(
+                        "learningPoints",
+                        `${PART_INTERACTION_MARKER}pointer`,
+                      );
+                      setPartInteractionMode("pointer");
+                      setPartEditorInitialContent("");
+                      setShowPartEditorWindow(false);
+                      onClearPolygonDraft();
+                      onCanvasModeChange("browse");
+                    } else {
+                      setShowPartEditorWindow(false);
+                      onCanvasModeChange("browse");
+                    }
 
-                      return next;
-                    });
+                    setShowCreatePartFrame(next);
                   }}
                 >
                   <PlusIcon className="size-4" />
@@ -1396,18 +857,35 @@ export function ModalityViewerRightPanel({
               </FrameHeader>
             </Frame>
           </div>
+
           {showCreatePartFrame ? (
             <Frame>
               <div className="flex items-center justify-between px-3 py-2">
-                New Anatomical Part
-                <Button
-                  disabled={busy || !structureForm.title.trim()}
-                  type="button"
-                  onClick={() => void handleSaveStructurePart()}
-                >
-                  Save
-                  {busy && <LoaderCircleIcon className="size-4 animate-spin" />}
-                </Button>
+                {selectedStructureId
+                  ? "Edit Anatomical Part"
+                  : "New Anatomical Part"}
+                <div className="flex items-center gap-2">
+                  <Button
+                    disabled={busy || !structureForm.title.trim()}
+                    type="button"
+                    onClick={() => void handleSaveStructurePart()}
+                  >
+                    Save
+                    {busy && (
+                      <LoaderCircleIcon className="size-4 animate-spin" />
+                    )}
+                  </Button>
+                  {selectedStructureId ? (
+                    <Button
+                      disabled={busy}
+                      type="button"
+                      variant="destructive"
+                      onClick={() => void handleDeleteSelectedPart()}
+                    >
+                      <Trash2Icon className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <FramePanel className="p-3">
                 <div className="space-y-3">
@@ -1436,7 +914,9 @@ export function ModalityViewerRightPanel({
                             ? "default"
                             : "secondary"
                         }
-                        onClick={() => handlePartInteractionModeChange("pointer")}
+                        onClick={() =>
+                          handlePartInteractionModeChange("pointer")
+                        }
                       >
                         <PinIcon className="size-4" />
                         Pointer
@@ -1460,31 +940,25 @@ export function ModalityViewerRightPanel({
                     <div className="text-xs font-medium text-white/70">
                       Description and Full Explanation
                     </div>
-                    <div className="rounded-xl border border-white/10 bg-black/25 p-3 text-xs text-white/70">
-                      <p>
-                        Use the editor window to write the short description and
-                        full rich explanation. Draft content is preserved on
-                        minimize and close.
-                      </p>
-                      <div className="mt-3 flex items-center justify-between gap-3">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          onClick={() => {
-                            setPartEditorInitialContent(
-                              structureForm.longDescription,
-                            );
-                            setShowPartEditorWindow(true);
-                          }}
-                        >
-                          Open Editor Window
-                        </Button>
-                        <span className="truncate text-[11px] text-white/50">
-                          {structureForm.shortDescription.trim()
-                            ? "Description draft ready"
-                            : "No description draft yet"}
-                        </span>
-                      </div>
+
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setPartEditorInitialContent(
+                            structureForm.longDescription,
+                          );
+                          setShowPartEditorWindow(true);
+                        }}
+                      >
+                        Open Editor
+                      </Button>
+                      <span className="truncate text-[11px] text-white/50">
+                        {structureForm.shortDescription.trim()
+                          ? "Description draft ready"
+                          : "No description draft yet"}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1497,7 +971,7 @@ export function ModalityViewerRightPanel({
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-12">#</TableHead>
-                  <TableHead>Previous Title</TableHead>
+                  <TableHead>Part Name</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1508,38 +982,41 @@ export function ModalityViewerRightPanel({
                       parsePartInteractionModeFromStructure(structure);
 
                     return (
-                    <TableRow key={structure.id}>
-                      <TableCell>{index + 1}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span>{structure.title}</span>
-                          <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/65">
-                            {interactionMode}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => {
-                            onSelectStructure(
-                              structure.id,
-                              selectedAnatomicalPart.id,
-                            );
-                            onCanvasModeChange(
-                              interactionMode === "area"
-                                ? "draw-region"
-                                : "create-label",
-                            );
-                          }}
-                        >
-                          Open
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  )})
+                      <TableRow key={structure.id}>
+                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span>{structure.title}</span>
+                            <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/65">
+                              {interactionMode}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => {
+                              onSelectStructure(
+                                structure.id,
+                                selectedAnatomicalPart.id,
+                              );
+                              setShowCreatePartFrame(true);
+                              setShowPartEditorWindow(false);
+                              setPartEditorInitialContent(
+                                structure.longDescription ?? "",
+                              );
+                              setPartInteractionMode(interactionMode);
+                              onCanvasModeChange("browse");
+                            }}
+                          >
+                            Edit
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 ) : (
                   <TableRow>
                     <TableCell colSpan={3} className="text-white/60">
@@ -1555,13 +1032,9 @@ export function ModalityViewerRightPanel({
             <AnatomicalPartEditorWindow
               initialContent={partEditorInitialContent}
               partTitle={structureForm.title}
-              shortDescription={structureForm.shortDescription}
               onClose={() => setShowPartEditorWindow(false)}
               onLongDescriptionChange={(value) =>
                 onStructureFormChange("longDescription", value)
-              }
-              onShortDescriptionChange={(value) =>
-                onStructureFormChange("shortDescription", value)
               }
             />
           ) : null}
@@ -1600,47 +1073,29 @@ function parsePartInteractionModeFromStructure(
   return "pointer";
 }
 
-function toEditorBlocks(value: string | null | undefined): PartialBlock[] {
-  const normalized = value?.trim();
-
-  if (!normalized) {
-    return [{ type: "paragraph", content: "" }];
-  }
-
-  const paragraphs = normalized
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
-
-  if (paragraphs.length === 0) {
-    return [{ type: "paragraph", content: normalized }];
-  }
-
-  return paragraphs.map((paragraph) => ({
-    type: "paragraph",
-    content: paragraph,
-  }));
-}
-
 function AnatomicalPartEditorWindow({
   initialContent,
   partTitle,
-  shortDescription,
   onClose,
   onLongDescriptionChange,
-  onShortDescriptionChange,
 }: {
   initialContent: string;
   partTitle: string;
-  shortDescription: string;
   onClose: () => void;
   onLongDescriptionChange: (value: string) => void;
-  onShortDescriptionChange: (value: string) => void;
 }) {
   const [isMinimized, setIsMinimized] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [windowRect, setWindowRect] = useState(PART_EDITOR_DEFAULT_RECT);
-  const previousWindowRectRef = useRef(PART_EDITOR_DEFAULT_RECT);
+  const [windowRect, setWindowRect] = useState<PartEditorWindowRect>(() => {
+    if (typeof window === "undefined") {
+      return PART_EDITOR_DEFAULT_RECT;
+    }
+
+    return clampPartEditorRect(PART_EDITOR_DEFAULT_RECT);
+  });
+  const previousWindowRectRef = useRef<PartEditorWindowRect>(
+    PART_EDITOR_DEFAULT_RECT,
+  );
   const dragStateRef = useRef<{
     originX: number;
     originY: number;
@@ -1655,38 +1110,30 @@ function AnatomicalPartEditorWindow({
     startY: number;
     width: number;
   } | null>(null);
+  const [editorDraft, setEditorDraft] = useState(initialContent);
 
-  const editor = useCreateBlockNote(
-    {
-      initialContent: toEditorBlocks(initialContent),
-    },
-    [initialContent],
-  );
+  useEffect(() => {
+    setEditorDraft(initialContent);
+  }, [initialContent]);
 
   const persistEditorDraft = () => {
-    const nextMarkdown = editor.blocksToMarkdownLossy(editor.document).trim();
-    onLongDescriptionChange(nextMarkdown);
+    onLongDescriptionChange(editorDraft.trim());
   };
 
   useEffect(() => {
-    if (!isMaximized) {
-      return;
-    }
-
-    const applyMaximizedRect = () => {
-      setWindowRect({
-        x: 20,
-        y: 20,
-        width: Math.max(PART_EDITOR_MIN_WIDTH, window.innerWidth - 40),
-        height: Math.max(PART_EDITOR_MIN_HEIGHT, window.innerHeight - 40),
-      });
+    const syncWindowRectToViewport = () => {
+      setWindowRect((current) =>
+        isMaximized
+          ? getMaximizedPartEditorRect()
+          : clampPartEditorRect(current),
+      );
     };
 
-    applyMaximizedRect();
-    window.addEventListener("resize", applyMaximizedRect);
+    syncWindowRectToViewport();
+    window.addEventListener("resize", syncWindowRectToViewport);
 
     return () => {
-      window.removeEventListener("resize", applyMaximizedRect);
+      window.removeEventListener("resize", syncWindowRectToViewport);
     };
   }, [isMaximized]);
 
@@ -1702,7 +1149,7 @@ function AnatomicalPartEditorWindow({
 
   const handleWindowMaximizeToggle = () => {
     if (isMaximized) {
-      setWindowRect(previousWindowRectRef.current);
+      setWindowRect(clampPartEditorRect(previousWindowRectRef.current));
       setIsMaximized(false);
       return;
     }
@@ -1713,7 +1160,7 @@ function AnatomicalPartEditorWindow({
 
   if (isMinimized) {
     return (
-      <div className="pointer-events-auto fixed bottom-4 right-4 z-[90]">
+      <div className="pointer-events-auto fixed bottom-4 right-4 z-90">
         <div className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/85 p-2 shadow-2xl backdrop-blur-md">
           <Button
             type="button"
@@ -1739,7 +1186,7 @@ function AnatomicalPartEditorWindow({
   }
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[90]">
+    <div className="pointer-events-none fixed inset-0 z-90">
       <div
         className="pointer-events-auto absolute"
         style={{
@@ -1749,142 +1196,123 @@ function AnatomicalPartEditorWindow({
           width: windowRect.width,
         }}
       >
-        <Safari
-          className="pointer-events-none h-full w-full rounded-2xl shadow-2xl"
-          mode="simple"
-          style={{
-            aspectRatio: "auto",
-            height: "100%",
-            width: "100%",
-          }}
-          url={partTitle.trim() || "New Anatomical Part"}
-        />
+        <div className="relative flex h-full min-h-0 flex-col overflow-visible rounded-xl bg-[#1f1f1f]">
+          <div
+            className={cn(
+              "flex h-8 shrink-0 select-none items-center gap-3 bg-[#151515] px-3 rounded-tl-xl rounded-tr-xl",
+              isMaximized ? "cursor-default" : "cursor-move",
+            )}
+            onPointerCancel={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              dragStateRef.current = null;
+            }}
+            onPointerDown={(event) => {
+              if (isMaximized) {
+                return;
+              }
 
-        <div className="absolute z-20" style={PART_EDITOR_SCREEN_STYLE}>
-          <div className="flex h-full flex-col overflow-hidden rounded-b-xl border border-white/10 bg-[#0b0d10]/95">
-            <div
-              className={cn(
-                "flex select-none items-center justify-between border-b border-white/10 px-3 py-2",
-                isMaximized ? "cursor-default" : "cursor-move",
-              )}
-              onPointerCancel={(event) => {
-                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                }
-                dragStateRef.current = null;
-              }}
-              onPointerDown={(event) => {
-                if (isMaximized) {
-                  return;
-                }
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              dragStateRef.current = {
+                originX: windowRect.x,
+                originY: windowRect.y,
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+              };
+            }}
+            onPointerMove={(event) => {
+              const dragState = dragStateRef.current;
 
-                event.preventDefault();
-                event.currentTarget.setPointerCapture(event.pointerId);
-                dragStateRef.current = {
-                  originX: windowRect.x,
-                  originY: windowRect.y,
-                  pointerId: event.pointerId,
-                  startX: event.clientX,
-                  startY: event.clientY,
-                };
-              }}
-              onPointerMove={(event) => {
-                const dragState = dragStateRef.current;
+              if (!dragState || dragState.pointerId !== event.pointerId) {
+                return;
+              }
 
-                if (!dragState || dragState.pointerId !== event.pointerId) {
-                  return;
-                }
+              const deltaX = event.clientX - dragState.startX;
+              const deltaY = event.clientY - dragState.startY;
+              const maxX = Math.max(
+                PART_EDITOR_VIEWPORT_MARGIN,
+                window.innerWidth -
+                  windowRect.width -
+                  PART_EDITOR_VIEWPORT_MARGIN,
+              );
+              const maxY = Math.max(
+                PART_EDITOR_VIEWPORT_MARGIN,
+                window.innerHeight -
+                  windowRect.height -
+                  PART_EDITOR_VIEWPORT_MARGIN,
+              );
 
-                const deltaX = event.clientX - dragState.startX;
-                const deltaY = event.clientY - dragState.startY;
-                const maxX = Math.max(8, window.innerWidth - windowRect.width - 8);
-                const maxY = Math.max(
-                  8,
-                  window.innerHeight - windowRect.height - 8,
-                );
+              setWindowRect((current) => ({
+                ...current,
+                x: clampNumber(
+                  dragState.originX + deltaX,
+                  PART_EDITOR_VIEWPORT_MARGIN,
+                  maxX,
+                ),
+                y: clampNumber(
+                  dragState.originY + deltaY,
+                  PART_EDITOR_VIEWPORT_MARGIN,
+                  maxY,
+                ),
+              }));
+            }}
+            onPointerUp={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              }
+              dragStateRef.current = null;
+            }}
+          >
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                aria-label="Close editor"
+                type="button"
+                className="size-3 rounded-full border border-black/25 bg-[#ff5f57] transition hover:brightness-95 cursor-pointer"
+                onClick={handleWindowClose}
+                onPointerDown={(event) => event.stopPropagation()}
+              />
+              <button
+                aria-label="Minimize editor"
+                type="button"
+                className="size-3 rounded-full border border-black/25 bg-[#febc2e] transition hover:brightness-95 cursor-pointer"
+                onClick={handleWindowMinimize}
+                onPointerDown={(event) => event.stopPropagation()}
+              />
+              <button
+                aria-label={isMaximized ? "Restore editor" : "Maximize editor"}
+                type="button"
+                className="size-3 rounded-full border border-black/25 bg-[#28c840] transition hover:brightness-95 cursor-pointer"
+                onClick={handleWindowMaximizeToggle}
+                onPointerDown={(event) => event.stopPropagation()}
+              />
+            </div>
 
-                setWindowRect((current) => ({
-                  ...current,
-                  x: clampNumber(dragState.originX + deltaX, 8, maxX),
-                  y: clampNumber(dragState.originY + deltaY, 8, maxY),
-                }));
-              }}
-              onPointerUp={(event) => {
-                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                }
-                dragStateRef.current = null;
-              }}
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-white">
+            <div className="min-w-0 flex-1">
+              <div className="mx-auto max-w-lg rounded-md border border-white/10 bg-black/30 px-3 py-1 text-center">
+                <span className="block truncate text-[11px] text-white/65">
                   {partTitle.trim() || "New Anatomical Part"}
-                </div>
-                <div className="text-[11px] text-white/55">
-                  Rich editor auto-saves on minimize and close.
-                </div>
+                </span>
               </div>
-
-              <Group className="rounded-md bg-white/7 p-0.5">
-                <Button
-                  aria-label="Minimize"
-                  type="button"
-                  size="icon"
-                  variant="secondary"
-                  onClick={handleWindowMinimize}
-                >
-                  <MinusIcon className="size-4" />
-                </Button>
-                <Button
-                  aria-label={isMaximized ? "Restore window" : "Maximize window"}
-                  type="button"
-                  size="icon"
-                  variant="secondary"
-                  onClick={handleWindowMaximizeToggle}
-                >
-                  <SquareIcon className="size-4" />
-                </Button>
-                <Button
-                  aria-label="Close editor"
-                  type="button"
-                  size="icon"
-                  variant="secondary"
-                  onClick={handleWindowClose}
-                >
-                  <XIcon className="size-4" />
-                </Button>
-              </Group>
             </div>
 
-            <div className="grid min-h-0 flex-1 lg:grid-cols-[18rem_minmax(0,1fr)]">
-              <aside className="space-y-2 overflow-y-auto border-b border-white/10 p-3 lg:border-b-0 lg:border-r">
-                <div className="text-xs font-semibold uppercase tracking-wide text-white/65">
-                  Description
-                </div>
-                <Textarea
-                  className="min-h-28"
-                  placeholder="Short summary for this anatomical part"
-                  value={shortDescription}
-                  onChange={(event) =>
-                    onShortDescriptionChange(event.target.value)
-                  }
-                />
-                <p className="text-[11px] leading-5 text-white/55">
-                  Full explanation is written in the rich editor panel.
-                </p>
-              </aside>
-
-              <section className="project-rich-text min-h-0 border-white/10 bg-black/20">
-                <BlockNoteViewRaw
-                  className="h-full"
-                  editor={editor}
-                  sideMenu={true}
-                  theme="dark"
-                  onChange={persistEditorDraft}
-                />
-              </section>
-            </div>
+            <div className="h-3 w-13 shrink-0" />
           </div>
+
+          <section className="project-rich-text min-h-0 bg-black/20">
+            <ProjectRichTextEditor
+              className="h-full"
+              variant="workspace"
+              title={partTitle.trim() || "New Anatomical Part"}
+              value={editorDraft}
+              onChange={(value: string) => {
+                setEditorDraft(value);
+                onLongDescriptionChange(value);
+              }}
+            />
+          </section>
         </div>
 
         {!isMaximized ? (
@@ -1916,25 +1344,26 @@ function AnatomicalPartEditorWindow({
 
               const widthDelta = event.clientX - resizeState.startX;
               const heightDelta = event.clientY - resizeState.startY;
+              const bounds = getPartEditorViewportBounds();
               const maxWidth = Math.max(
-                PART_EDITOR_MIN_WIDTH,
-                window.innerWidth - windowRect.x - 8,
+                bounds.minWidth,
+                window.innerWidth - windowRect.x - PART_EDITOR_VIEWPORT_MARGIN,
               );
               const maxHeight = Math.max(
-                PART_EDITOR_MIN_HEIGHT,
-                window.innerHeight - windowRect.y - 8,
+                bounds.minHeight,
+                window.innerHeight - windowRect.y - PART_EDITOR_VIEWPORT_MARGIN,
               );
 
               setWindowRect((current) => ({
                 ...current,
                 width: clampNumber(
                   resizeState.width + widthDelta,
-                  PART_EDITOR_MIN_WIDTH,
+                  bounds.minWidth,
                   maxWidth,
                 ),
                 height: clampNumber(
                   resizeState.height + heightDelta,
-                  PART_EDITOR_MIN_HEIGHT,
+                  bounds.minHeight,
                   maxHeight,
                 ),
               }));
@@ -2071,7 +1500,7 @@ function AnatomicalAreaColorPicker({
       <PopoverPopup
         align="start"
         sideOffset={8}
-        className="w-[15rem] border-none p-0 shadow-none before:hidden [--viewport-inline-padding:0] rounded-2xl"
+        className="w-60 border-none p-0 shadow-none before:hidden [--viewport-inline-padding:0] rounded-2xl"
         viewport="p-0"
       >
         <div className="p-2">
@@ -2104,8 +1533,8 @@ function AnatomicalAreaColorPicker({
               }
             }}
           >
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-white to-transparent" />
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black to-transparent" />
+            <div className="pointer-events-none absolute inset-0 bg-linear-to-r from-white to-transparent" />
+            <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-black to-transparent" />
             <span
               className="pointer-events-none absolute size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.55)]"
               style={{ left: saturationCursorLeft, top: saturationCursorTop }}
@@ -2308,15 +1737,22 @@ function ViewerSidebarSection({
   actions,
   children,
   title,
+  className,
 }: {
   actions?: ReactNode;
   children: ReactNode;
   title: string;
+  className?: string;
 }) {
   return (
-    <section className="border-t border-white/8 py-4 first:border-t-0 first:pt-0">
+    <section
+      className={cn(
+        "border-t dark:border-white/8 py-4 first:border-t-0 first:pt-0",
+        className,
+      )}
+    >
       <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-white">{title}</div>
+        <div className="text-sm font-semibold">{title}</div>
         {actions ? <div className="shrink-0">{actions}</div> : null}
       </div>
       {children}
