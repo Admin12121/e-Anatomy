@@ -5,33 +5,15 @@ import {
   startTransition,
   useDeferredValue,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
+  type WheelEvent,
 } from "react";
 import gsap from "gsap";
-import {
-  ArrowLeft,
-  ArrowRight,
-  CrosshairIcon,
-  Layers2Icon,
-  LayoutGrid,
-  LoaderCircleIcon,
-  PinIcon,
-  SearchIcon,
-  Snowflake,
-  Trash2Icon,
-} from "lucide-react";
 import { toast } from "sonner";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Group, GroupSeparator } from "@/components/ui/group";
-import { Input } from "@/components/ui/input";
 import type {
   CreateViewerAnnotationInput,
   CreateViewerStructureGroupInput,
@@ -42,14 +24,12 @@ import type {
   ViewerAnnotation,
   ViewerAnnotationPoint,
   ViewerStructure,
-  ViewerStructureGroup,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 import {
   useCreateViewerAnnotationMutation,
   useCreateViewerStructureGroupMutation,
   useCreateViewerStructureMutation,
-  useDeleteViewerAnnotationMutation,
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
   useDeleteZoneModalityAssetMutation,
@@ -57,10 +37,9 @@ import {
   useUpdateViewerAnnotationMutation,
   useUpdateViewerStructureGroupMutation,
   useUpdateViewerStructureMutation,
+  useUpdateZoneModalityAssetMutation,
 } from "@/lib/store/services/playground-api";
 import { cn } from "@/lib/utils";
-import NextImage from "next/image";
-import { Frame } from "@/components/ui/frame";
 import Loader from "@/components/ui/loader";
 import { ModalityViewerRightPanel } from "./right-panel";
 import {
@@ -76,6 +55,28 @@ import {
   type ViewerCanvasMode,
 } from "./modality-viewer.types";
 import EmptyParticle from "./empty";
+import { ViewerBlockView } from "./modality-viewer/block-view";
+import { SliceFilmstrip } from "./modality-viewer/slice-filmstrip";
+import { StudyPanel } from "./modality-viewer/study-panel";
+import { ViewerToolbar } from "./modality-viewer/viewer-toolbar";
+import {
+  ViewerCanvas,
+  type AreaEditTool,
+  type MainInteractionTool,
+} from "./modality-viewer/viewer-canvas";
+import {
+  buildImmediatePreloadOrder,
+  buildStackWarmupOrder,
+  clamp,
+  createDefaultLabelX,
+  formatModalityTypeLabel,
+  formatOrientationLabel,
+  isSliceAsset,
+  readMutationError,
+  splitCommaList,
+  splitMultilineList,
+  structureMatchesSearch,
+} from "./modality-viewer/utils";
 
 type NavigationSource = "button" | "click" | "search" | "weighting" | "wheel";
 type PreloadPriority = "high" | "low";
@@ -102,7 +103,14 @@ const LOADING_INDICATOR_DELAY_MS = 260;
 const WHEEL_LOADING_INDICATOR_DELAY_MS = 700;
 const WHEEL_DELTA_THRESHOLD = 120;
 const WHEEL_NAVIGATION_COOLDOWN_MS = 110;
-const BRUSH_POINT_STEP = 0.006;
+
+function areAssetIdOrdersEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => value === right[index]);
+}
 
 export function DraftModalityViewer({
   modalityId,
@@ -113,7 +121,12 @@ export function DraftModalityViewer({
 }) {
   const [viewerPollingIntervalMs, setViewerPollingIntervalMs] = useState(2500);
 
-  const { data, error, isLoading } = useGetZoneModalityViewerManifestQuery(
+  const {
+    data,
+    error,
+    isLoading,
+    refetch: refetchViewerManifest,
+  } = useGetZoneModalityViewerManifestQuery(
     {
       zoneId,
       modalityId,
@@ -141,10 +154,8 @@ export function DraftModalityViewer({
     useDeleteViewerStructureGroupMutation();
   const [deleteStructure, { isLoading: isDeletingStructure }] =
     useDeleteViewerStructureMutation();
-  const [deleteAnnotation, { isLoading: isDeletingAnnotation }] =
-    useDeleteViewerAnnotationMutation();
-  const [deleteAsset, { isLoading: isDeletingAsset }] =
-    useDeleteZoneModalityAssetMutation();
+  const [updateModalityAsset] = useUpdateZoneModalityAssetMutation();
+  const [deleteModalityAsset] = useDeleteZoneModalityAssetMutation();
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
   const [currentAssetId, setCurrentAssetId] = useState<string | null>(null);
@@ -163,16 +174,16 @@ export function DraftModalityViewer({
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [canvasMode, setCanvasMode] = useState<ViewerCanvasMode>("browse");
   const [showLabels, setShowLabels] = useState(true);
-  const [practiceMode, setPracticeMode] = useState(false);
-  const [pinsOnly, setPinsOnly] = useState(false);
+  const practiceMode = false;
+  const pinsOnly = false;
   const [targetedLabeling, setTargetedLabeling] = useState(false);
-  const [showOrientation, setShowOrientation] = useState(true);
+  const showOrientation = true;
   const [showCrossReferences, setShowCrossReferences] = useState(true);
-  const [darkMode, setDarkMode] = useState(true);
-  const [overlayOpacity, setOverlayOpacity] = useState(0.72);
-  const [reverseScroll, setReverseScroll] = useState(false);
-  const [pointAnimation, setPointAnimation] = useState(true);
-  const [fontScaleMode, setFontScaleMode] = useState<FontScaleMode>("auto");
+  const darkMode = true;
+  const overlayOpacity = 0.72;
+  const reverseScroll = false;
+  const pointAnimation = true;
+  const fontScaleMode: FontScaleMode = "auto";
   const [groupForm, setGroupForm] = useState<GroupFormState>(EMPTY_GROUP_FORM);
   const [structureForm, setStructureForm] =
     useState<StructureFormState>(EMPTY_STRUCTURE_FORM);
@@ -189,19 +200,32 @@ export function DraftModalityViewer({
   const [currentImageElement, setCurrentImageElement] =
     useState<HTMLImageElement | null>(null);
   const [showBlockView, setShowBlockView] = useState(false);
-  const [viewerMode, setViewerMode] = useState<"learner" | "authoring">(
-    "authoring",
-  );
-  const [showStructureAdvanced, setShowStructureAdvanced] = useState(false);
+  const [showSliceEditorPanel, setShowSliceEditorPanel] = useState(false);
+  const [mainInteractionTool, setMainInteractionTool] =
+    useState<MainInteractionTool>("layers");
   const [showStudyPanel, setShowStudyPanel] = useState(true);
   const [showControlPanel, setShowControlPanel] = useState(true);
-  const [pinControlPanel, setPinControlPanel] = useState(false);
   const [canvasRotationQuarterTurns, setCanvasRotationQuarterTurns] =
     useState(0);
   const [canvasFlipHorizontal, setCanvasFlipHorizontal] = useState(false);
   const [canvasFlipVertical, setCanvasFlipVertical] = useState(false);
+  const [areaEditTool, setAreaEditTool] = useState<AreaEditTool>("brush");
+  const [areaBrushSize, setAreaBrushSize] = useState(20);
+  const [areaEraserSize, setAreaEraserSize] = useState(28);
+  const [draftDisconnectedPolygons, setDraftDisconnectedPolygons] = useState<
+    ViewerAnnotationPoint[][]
+  >([]);
+  const [sliceTimelineIds, setSliceTimelineIds] = useState<string[]>([]);
+  const [sliceTimelineUndoStack, setSliceTimelineUndoStack] = useState<
+    string[][]
+  >([]);
+  const [sliceTimelineRedoStack, setSliceTimelineRedoStack] = useState<
+    string[][]
+  >([]);
+  const [isApplyingSliceChanges, setIsApplyingSliceChanges] = useState(false);
 
   const filmstripScrollerRef = useRef<HTMLDivElement | null>(null);
+  const sliceEditorScrollerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<SVGSVGElement | null>(null);
   const wheelDeltaRef = useRef(0);
@@ -277,25 +301,65 @@ export function DraftModalityViewer({
 
     return ["all", ...values];
   }, [assets]);
+  const baseSliceAssets = useMemo(
+    () =>
+      assets
+        .filter((asset) => isSliceAsset(asset))
+        .sort((left, right) =>
+          left.sortOrder === right.sortOrder
+            ? left.createdAt.localeCompare(right.createdAt)
+            : left.sortOrder - right.sortOrder,
+        ),
+    [assets],
+  );
+  const baseSliceAssetIds = useMemo(
+    () => baseSliceAssets.map((asset) => asset.id),
+    [baseSliceAssets],
+  );
+  const baseSliceAssetIdSet = useMemo(
+    () => new Set(baseSliceAssetIds),
+    [baseSliceAssetIds],
+  );
+  const sliceAssetById = useMemo(
+    () => new Map(baseSliceAssets.map((asset) => [asset.id, asset])),
+    [baseSliceAssets],
+  );
+  const normalizedSliceTimelineIds =
+    sliceTimelineIds.length > 0 ? sliceTimelineIds : baseSliceAssetIds;
+  const orderedSliceAssets = useMemo(
+    () =>
+      normalizedSliceTimelineIds
+        .map((assetId) => sliceAssetById.get(assetId))
+        .filter((asset): asset is ZoneModalityAsset => Boolean(asset)),
+    [normalizedSliceTimelineIds, sliceAssetById],
+  );
   const activeAssets = useMemo(() => {
-    const sliceAssets = assets
-      .filter((asset) => isSliceAsset(asset))
-      .sort((left, right) =>
-        left.sortOrder === right.sortOrder
-          ? left.createdAt.localeCompare(right.createdAt)
-          : left.sortOrder - right.sortOrder,
-      );
-
     if (activeWeighting === "all") {
-      return sliceAssets;
+      return orderedSliceAssets;
     }
 
-    const weighted = sliceAssets.filter(
+    const weighted = orderedSliceAssets.filter(
       (asset) => (asset.weightingCode ?? "all") === activeWeighting,
     );
 
-    return weighted.length > 0 ? weighted : sliceAssets;
-  }, [activeWeighting, assets]);
+    return weighted.length > 0 ? weighted : orderedSliceAssets;
+  }, [activeWeighting, orderedSliceAssets]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSliceTimelineIds((current) => {
+      const preserved = current.filter((assetId) =>
+        baseSliceAssetIdSet.has(assetId),
+      );
+      const preservedSet = new Set(preserved);
+      const appended = baseSliceAssetIds.filter(
+        (assetId) => !preservedSet.has(assetId),
+      );
+      const next = [...preserved, ...appended];
+
+      return areAssetIdOrdersEqual(current, next) ? current : next;
+    });
+  }, [baseSliceAssetIdSet, baseSliceAssetIds]);
   const referenceAssets = useMemo(() => {
     return assets.filter((asset) => !isSliceAsset(asset));
   }, [assets]);
@@ -315,13 +379,6 @@ export function DraftModalityViewer({
       null
     );
   }, [activeAssets, assets, currentAssetId]);
-  const currentAssetIndex = useMemo(
-    () =>
-      currentAsset
-        ? activeAssets.findIndex((asset) => asset.id === currentAsset.id)
-        : -1,
-    [activeAssets, currentAsset],
-  );
   const pendingAsset = pendingAssetId
     ? (assets.find((asset) => asset.id === pendingAssetId) ?? null)
     : null;
@@ -341,6 +398,10 @@ export function DraftModalityViewer({
       })),
     [activeAssets],
   );
+  const filmstripAssetOrderSignature = useMemo(
+    () => filmstripAssets.map(({ asset }) => asset.id).join("|"),
+    [filmstripAssets],
+  );
   const currentAnnotations = useMemo(
     () =>
       currentAsset
@@ -357,9 +418,15 @@ export function DraftModalityViewer({
         imageElementCacheRef.current.set(asset.id, imageElement);
       }
 
+      const wasReady = readyAssetIdCacheRef.current.has(asset.id);
       readyAssetIdCacheRef.current.add(asset.id);
       pendingImagePreloadCacheRef.current.delete(asset.id);
       imagePreloadPromiseCacheRef.current.delete(asset.id);
+
+      if (wasReady) {
+        return;
+      }
+
       setReadyAssetIds((current) => {
         if (current.has(asset.id)) {
           return current;
@@ -379,7 +446,6 @@ export function DraftModalityViewer({
         readyAssetIdCacheRef.current.has(asset.id) &&
         imageElementCacheRef.current.has(asset.id)
       ) {
-        markAssetReady(asset);
         return Promise.resolve();
       }
 
@@ -588,6 +654,7 @@ export function DraftModalityViewer({
       selectedStructure?.groupId &&
       groupsById.has(selectedStructure.groupId)
     ) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedGroupId(selectedStructure.groupId);
       return;
     }
@@ -687,6 +754,7 @@ export function DraftModalityViewer({
     if (!selectedAnnotation) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnnotationForm(EMPTY_ANNOTATION_FORM);
+      setDraftDisconnectedPolygons([]);
       return;
     }
 
@@ -695,7 +763,7 @@ export function DraftModalityViewer({
       ? groupsById.get(structure.groupId)
       : null;
     const resolvedColor =
-      group?.colorHex ?? selectedAnnotation.colorHex ?? DEFAULT_ANNOTATION_COLOR;
+      selectedAnnotation.colorHex ?? group?.colorHex ?? DEFAULT_ANNOTATION_COLOR;
 
     setAnnotationForm({
       anchorX: selectedAnnotation.anchorX,
@@ -713,10 +781,28 @@ export function DraftModalityViewer({
       polygonPoints: selectedAnnotation.polygonPoints,
       titleOverride: selectedAnnotation.titleOverride ?? "",
     });
+    setDraftDisconnectedPolygons([]);
   }, [groupsById, selectedAnnotation, structuresById]);
 
   useEffect(() => {
-    if (!selectedStructureId || !currentAsset || pendingAsset) {
+    if (
+      !selectedStructureId ||
+      !currentAsset ||
+      pendingAsset ||
+      canvasMode !== "browse"
+    ) {
+      return;
+    }
+
+    const currentSelectedAnnotation = selectedAnnotationId
+      ? (annotationsById.get(selectedAnnotationId) ?? null)
+      : null;
+
+    if (
+      currentSelectedAnnotation &&
+      currentSelectedAnnotation.assetId === currentAsset.id &&
+      currentSelectedAnnotation.structureId === selectedStructureId
+    ) {
       return;
     }
 
@@ -726,9 +812,21 @@ export function DraftModalityViewer({
         annotation.structureId === selectedStructureId,
     );
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSelectedAnnotationId(matchingAnnotation?.id ?? null);
-  }, [annotations, currentAsset, pendingAsset, selectedStructureId]);
+    const nextSelectedAnnotationId = matchingAnnotation?.id ?? null;
+
+    if (nextSelectedAnnotationId !== selectedAnnotationId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSelectedAnnotationId(nextSelectedAnnotationId);
+    }
+  }, [
+    annotations,
+    annotationsById,
+    canvasMode,
+    currentAsset,
+    pendingAsset,
+    selectedAnnotationId,
+    selectedStructureId,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined" || navigationAssetIndex < 0) {
@@ -831,9 +929,7 @@ export function DraftModalityViewer({
   }, [
     currentAnnotations,
     deferredSearchQuery,
-    pinsOnly,
     selectedStructureId,
-    showLabels,
     structuresById,
     targetedLabeling,
     visibleGroupIds,
@@ -874,26 +970,21 @@ export function DraftModalityViewer({
     isCreatingAnnotation ||
     isCreatingGroup ||
     isCreatingStructure ||
-    isDeletingAnnotation ||
-    isDeletingAsset ||
     isDeletingGroup ||
     isDeletingStructure ||
+    isApplyingSliceChanges ||
     isUpdatingAnnotation ||
     isUpdatingGroup ||
     isUpdatingStructure;
-  const hasSelectedStructure = Boolean(selectedStructure);
-  const canEditPinArea = hasSelectedStructure;
-  const canEditAnnotationDetails =
-    Boolean(selectedAnnotation) ||
-    annotationForm.polygonPoints.length > 0 ||
-    canvasMode !== "browse";
-  const isAuthoringMode = viewerMode === "authoring";
   const lockedPreviewStructure =
     selectedStructure?.accessLevel === "subscription"
       ? selectedStructure
       : null;
   const shellGridClass = cn(
-    "grid max-h-[calc(100vh-101px)] flex-1 gap-2",
+    "grid flex-1 gap-2",
+    showSliceEditorPanel
+      ? "max-h-[calc(100vh-351px)]"
+      : "max-h-[calc(100vh-101px)]",
     showStudyPanel &&
       showControlPanel &&
       "xl:grid-cols-[22rem_minmax(0,1fr)_22rem]",
@@ -925,6 +1016,65 @@ export function DraftModalityViewer({
       loadingIndicatorAssetId === pendingAsset.id
     : false;
   const isPreparingInitialAsset = activeAssets.length > 0 && !currentAsset;
+  const activeAreaToolSize =
+    areaEditTool === "erase" ? areaEraserSize : areaBrushSize;
+  const canUndoSliceTimeline = sliceTimelineUndoStack.length > 0;
+  const canRedoSliceTimeline = sliceTimelineRedoStack.length > 0;
+  const canDeleteSelectedSlice =
+    activeAssets.length > 1 && navigationAssetIndex >= 0;
+  const canDeleteLeftSlices = navigationAssetIndex > 0;
+  const canDeleteRightSlices =
+    navigationAssetIndex >= 0 && navigationAssetIndex < activeAssets.length - 1;
+  const canFlipSliceTimeline = activeAssets.length > 1;
+  const pendingDeletedSliceIds = useMemo(() => {
+    const nextOrderSet = new Set(normalizedSliceTimelineIds);
+
+    return baseSliceAssetIds.filter((assetId) => !nextOrderSet.has(assetId));
+  }, [baseSliceAssetIds, normalizedSliceTimelineIds]);
+  const pendingSliceSortUpdates = useMemo(() => {
+    const sortStart = baseSliceAssets.reduce(
+      (minimum, asset) => Math.min(minimum, asset.sortOrder),
+      Number.POSITIVE_INFINITY,
+    );
+    const startSortOrder = Number.isFinite(sortStart) ? sortStart : 0;
+
+    return normalizedSliceTimelineIds
+      .map((assetId, index) => {
+        const asset = sliceAssetById.get(assetId);
+
+        if (!asset) {
+          return null;
+        }
+
+        const nextSortOrder = startSortOrder + index;
+
+        if (asset.sortOrder === nextSortOrder) {
+          return null;
+        }
+
+        return {
+          asset,
+          nextSortOrder,
+        };
+      })
+      .filter(
+        (
+          value,
+        ): value is {
+          asset: ZoneModalityAsset;
+          nextSortOrder: number;
+        } => Boolean(value),
+      );
+  }, [baseSliceAssets, normalizedSliceTimelineIds, sliceAssetById]);
+  const hasPendingSliceTimelineChanges =
+    pendingDeletedSliceIds.length > 0 || pendingSliceSortUpdates.length > 0;
+
+  useEffect(() => {
+    if (canvasMode !== "draw-region") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDraftDisconnectedPolygons([]);
+    }
+  }, [canvasMode]);
 
   useEffect(() => {
     if (!currentAsset) {
@@ -937,12 +1087,6 @@ export function DraftModalityViewer({
       };
     }
   }, [currentAsset]);
-
-  useEffect(() => {
-    if (pinControlPanel && !showControlPanel) {
-      setShowControlPanel(true);
-    }
-  }, [pinControlPanel, showControlPanel]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !pendingAsset) {
@@ -967,45 +1111,63 @@ export function DraftModalityViewer({
     };
   }, [pendingAsset, readyAssetIds]);
 
+  const centerActiveFilmstripItem = useCallback(
+    (scroller: HTMLDivElement | null) => {
+      if (!scroller || !activeViewerAssetId) {
+        return;
+      }
+
+      const activeButton = scroller.querySelector<HTMLElement>(
+        `[data-asset-id="${activeViewerAssetId}"]`,
+      );
+
+      if (!activeButton) {
+        return;
+      }
+
+      const maxScrollLeft = Math.max(
+        0,
+        scroller.scrollWidth - scroller.clientWidth,
+      );
+      const targetScrollLeft = clamp(
+        activeButton.offsetLeft -
+          scroller.clientWidth / 2 +
+          activeButton.clientWidth / 2,
+        0,
+        maxScrollLeft,
+      );
+
+      gsap.killTweensOf(scroller);
+      gsap.to(scroller, {
+        duration: FILMSTRIP_SCROLL_DURATION_SECONDS,
+        ease: "power3.out",
+        overwrite: "auto",
+        scrollLeft: targetScrollLeft,
+      });
+    },
+    [activeViewerAssetId],
+  );
+
   useEffect(() => {
-    const scroller = filmstripScrollerRef.current;
+    const filmstripScroller = filmstripScrollerRef.current;
+    const sliceEditorScroller = sliceEditorScrollerRef.current;
 
-    if (!scroller || !activeViewerAssetId) {
-      return;
+    centerActiveFilmstripItem(filmstripScroller);
+
+    if (showSliceEditorPanel) {
+      centerActiveFilmstripItem(sliceEditorScroller);
     }
-
-    const activeButton = scroller.querySelector<HTMLElement>(
-      `[data-asset-id="${activeViewerAssetId}"]`,
-    );
-
-    if (!activeButton) {
-      return;
-    }
-
-    const maxScrollLeft = Math.max(
-      0,
-      scroller.scrollWidth - scroller.clientWidth,
-    );
-    const targetScrollLeft = clamp(
-      activeButton.offsetLeft -
-        scroller.clientWidth / 2 +
-        activeButton.clientWidth / 2,
-      0,
-      maxScrollLeft,
-    );
-
-    gsap.killTweensOf(scroller);
-    gsap.to(scroller, {
-      duration: FILMSTRIP_SCROLL_DURATION_SECONDS,
-      ease: "power3.out",
-      overwrite: "auto",
-      scrollLeft: targetScrollLeft,
-    });
 
     return () => {
-      gsap.killTweensOf(scroller);
+      if (filmstripScroller) {
+        gsap.killTweensOf(filmstripScroller);
+      }
+
+      if (sliceEditorScroller) {
+        gsap.killTweensOf(sliceEditorScroller);
+      }
     };
-  }, [activeViewerAssetId, filmstripAssets.length]);
+  }, [centerActiveFilmstripItem, filmstripAssetOrderSignature, showSliceEditorPanel]);
 
   function updateGroupVisibility(groupId: string, nextVisible: boolean) {
     setVisibleGroupIds((current) => {
@@ -1090,14 +1252,8 @@ export function DraftModalityViewer({
   }
 
   function clearPolygonDraft() {
+    setDraftDisconnectedPolygons([]);
     updateAnnotationForm("polygonPoints", []);
-  }
-
-  function removeLastPolygonPoint() {
-    updateAnnotationForm(
-      "polygonPoints",
-      annotationForm.polygonPoints.slice(0, -1),
-    );
   }
 
   async function handleSaveStructure(): Promise<ViewerStructure | null> {
@@ -1170,6 +1326,42 @@ export function DraftModalityViewer({
       structureId: activeStructureId,
       titleOverride: annotationForm.titleOverride.trim() || null,
     };
+    const detachedPolygonsForSave = draftDisconnectedPolygons.filter(
+      (polygonPoints) => polygonPoints.length >= 3,
+    );
+
+    const buildDetachedAreaInput = (
+      polygonPoints: ViewerAnnotationPoint[],
+    ): CreateViewerAnnotationInput => {
+      const { sumX, sumY } = polygonPoints.reduce(
+        (accumulator, point) => ({
+          sumX: accumulator.sumX + point.x,
+          sumY: accumulator.sumY + point.y,
+        }),
+        { sumX: 0, sumY: 0 },
+      );
+      const anchorX = clamp(sumX / polygonPoints.length, 0.03, 0.97);
+      const anchorY = clamp(sumY / polygonPoints.length, 0.03, 0.97);
+
+      return {
+        anchorX,
+        anchorY,
+        assetId: currentAsset.id,
+        colorHex: annotationForm.colorHex.trim() || null,
+        isPracticeHidden: annotationForm.isPracticeHidden,
+        isTargetedDefault: annotationForm.isTargetedDefault,
+        isVisibleDefault: annotationForm.isVisibleDefault,
+        labelX: createDefaultLabelX(anchorX),
+        labelY: clamp(anchorY, 0.08, 0.92),
+        leaderColorHex: annotationForm.leaderColorHex.trim() || null,
+        note: annotationForm.note.trim() || null,
+        overlayColorHex: annotationForm.overlayColorHex.trim() || null,
+        overlayOpacity: annotationForm.overlayOpacity,
+        polygonPoints,
+        structureId: activeStructureId,
+        titleOverride: annotationForm.titleOverride.trim() || null,
+      };
+    };
 
     try {
       const annotation = selectedAnnotation
@@ -1181,9 +1373,37 @@ export function DraftModalityViewer({
           }).unwrap()
         : await createAnnotation({ input, modalityId, zoneId }).unwrap();
 
-      toast.success(
-        selectedAnnotation ? "Annotation updated." : "Annotation created.",
-      );
+      let createdDetachedCount = 0;
+      let failedDetachedCount = 0;
+
+      for (const polygonPoints of detachedPolygonsForSave) {
+        try {
+          await createAnnotation({
+            input: buildDetachedAreaInput(polygonPoints),
+            modalityId,
+            zoneId,
+          }).unwrap();
+          createdDetachedCount += 1;
+        } catch {
+          failedDetachedCount += 1;
+        }
+      }
+
+      if (createdDetachedCount > 0 && failedDetachedCount === 0) {
+        toast.success(
+          `${selectedAnnotation ? "Annotation updated" : "Annotation created"} with ${createdDetachedCount + 1} separate areas.`,
+        );
+      } else if (failedDetachedCount > 0) {
+        toast.warning(
+          `Main area saved, ${createdDetachedCount} extra area(s) created, ${failedDetachedCount} failed.`,
+        );
+      } else {
+        toast.success(
+          selectedAnnotation ? "Annotation updated." : "Annotation created.",
+        );
+      }
+
+      setDraftDisconnectedPolygons([]);
       setSelectedAnnotationId(annotation.id);
       setCanvasMode("browse");
     } catch (mutationError) {
@@ -1293,61 +1513,6 @@ export function DraftModalityViewer({
     }
   }
 
-  async function handleDeleteAnnotation(annotationId: string) {
-    const annotation = annotationsById.get(annotationId);
-
-    if (!annotation) {
-      return;
-    }
-
-    if (!window.confirm("Delete this pin and area from the slice?")) {
-      return;
-    }
-
-    try {
-      await deleteAnnotation({ annotationId, modalityId, zoneId }).unwrap();
-      if (selectedAnnotationId === annotationId) {
-        setSelectedAnnotationId(null);
-        setCanvasMode("browse");
-      }
-      toast.success("Annotation deleted.");
-    } catch (mutationError) {
-      toast.error(
-        readMutationError(mutationError, "Unable to delete the annotation."),
-      );
-    }
-  }
-
-  async function handleDeleteCurrentSlice() {
-    if (!currentAsset) {
-      toast.error("Select a slice first.");
-      return;
-    }
-
-    const warning =
-      activeAssets.length <= 1
-        ? "This is the last available slice. Delete it anyway?"
-        : `Delete slice "${currentAsset.label}"?`;
-
-    if (!window.confirm(warning)) {
-      return;
-    }
-
-    try {
-      await deleteAsset({
-        zoneId,
-        modalityId,
-        assetId: currentAsset.id,
-      }).unwrap();
-      setSelectedAnnotationId(null);
-      toast.success("Slice removed.");
-    } catch (mutationError) {
-      toast.error(
-        readMutationError(mutationError, "Unable to delete the slice."),
-      );
-    }
-  }
-
   function jumpToStructure(structureId: string) {
     const structure = structuresById.get(structureId);
     const nextAnnotation = annotations.find(
@@ -1382,6 +1547,14 @@ export function DraftModalityViewer({
     lastNavigationSourceRef.current = "weighting";
     lastNavigationDirectionRef.current = 0;
     setActiveWeighting(nextWeighting);
+  }
+
+  function handleMainInteractionToolChange(nextTool: MainInteractionTool) {
+    if (canvasMode !== "browse") {
+      setCanvasMode("browse");
+    }
+
+    setMainInteractionTool(nextTool);
   }
 
   function handleCanvasClick(point: ViewerAnnotationPoint) {
@@ -1445,10 +1618,10 @@ export function DraftModalityViewer({
     }
 
     if (canvasMode === "draw-region") {
-      updateAnnotationForm("polygonPoints", [
-        ...annotationForm.polygonPoints,
-        point,
-      ]);
+      setAnnotationForm((current) => ({
+        ...current,
+        polygonPoints: [...current.polygonPoints, point],
+      }));
       return;
     }
 
@@ -1477,6 +1650,74 @@ export function DraftModalityViewer({
 
     updateAnnotationForm("labelX", point.x);
     updateAnnotationForm("labelY", point.y);
+  }
+
+  function handleDraftAnchorMove(point: ViewerAnnotationPoint) {
+    if (!selectedAnnotationId || canvasMode === "create-label") {
+      return;
+    }
+
+    updateAnnotationForm("anchorX", point.x);
+    updateAnnotationForm("anchorY", point.y);
+  }
+
+  function handleDraftPolygonPointMove(
+    index: number,
+    point: ViewerAnnotationPoint,
+  ) {
+    if (index < 0) {
+      return;
+    }
+
+    setAnnotationForm((current) => {
+      if (index >= current.polygonPoints.length) {
+        return current;
+      }
+
+      const nextPolygonPoints = [...current.polygonPoints];
+      nextPolygonPoints[index] = point;
+
+      return {
+        ...current,
+        polygonPoints: nextPolygonPoints,
+      };
+    });
+  }
+
+  function handleDraftPolygonReplace(points: ViewerAnnotationPoint[]) {
+    setAnnotationForm((current) => {
+      if (points.length < 3 || selectedAnnotationId) {
+        return {
+          ...current,
+          polygonPoints: points,
+        };
+      }
+
+      const { sumX, sumY } = points.reduce(
+        (accumulator, point) => ({
+          sumX: accumulator.sumX + point.x,
+          sumY: accumulator.sumY + point.y,
+        }),
+        { sumX: 0, sumY: 0 },
+      );
+      const nextAnchorX = clamp(sumX / points.length, 0.03, 0.97);
+      const nextAnchorY = clamp(sumY / points.length, 0.03, 0.97);
+
+      return {
+        ...current,
+        anchorX: nextAnchorX,
+        anchorY: nextAnchorY,
+        labelX: createDefaultLabelX(nextAnchorX),
+        labelY: clamp(nextAnchorY, 0.08, 0.92),
+        polygonPoints: points,
+      };
+    });
+  }
+
+  function handleDraftDisconnectedPolygonsChange(
+    polygons: ViewerAnnotationPoint[][],
+  ) {
+    setDraftDisconnectedPolygons(polygons);
   }
 
   function handleCanvasDoubleClick() {
@@ -1528,31 +1769,28 @@ export function DraftModalityViewer({
     }, WHEEL_NAVIGATION_COOLDOWN_MS);
   }
 
-  async function handleCaptureSnapshot() {
-    if (!currentAsset) {
+  function handleLayerScrubNavigate(nextIndex: number) {
+    if (nextIndex === navigationAssetIndex) {
       return;
     }
 
-    try {
-      const dataUrl = await captureViewerSnapshot({
-        annotations: visibleAnnotations,
-        asset: currentAsset,
-        groupsById,
-        overlayOpacity,
-        pinsOnly,
-        practiceMode,
-        selectedStructureId,
-        showLabels,
-        structuresById,
-      });
-      const link = document.createElement("a");
-      link.href = dataUrl;
-      link.download = `${data?.zone.slug ?? "zone"}-${data?.modality.name ?? "viewer"}-${currentAssetIndex + 1}.png`;
-      link.click();
-      toast.success("Snapshot captured.");
-    } catch {
-      toast.error("Unable to capture the current viewer frame.");
+    navigateToAsset(nextIndex, "wheel");
+  }
+
+  function handleFilmstripHorizontalWheel(event: WheelEvent<HTMLDivElement>) {
+    const scroller = event.currentTarget;
+    const horizontalDelta =
+      Math.abs(event.deltaX) > Math.abs(event.deltaY)
+        ? event.deltaX
+        : event.deltaY;
+
+    if (horizontalDelta === 0) {
+      return;
     }
+
+    scroller.scrollLeft += horizontalDelta;
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function handlePreviousAsset() {
@@ -1620,12 +1858,196 @@ export function DraftModalityViewer({
     setSelectedAnnotationId(null);
   }
 
-  function handleSelectAnnotationFromPanel(
-    annotationId: string,
-    structureId: string,
-  ) {
-    setSelectedAnnotationId(annotationId);
-    setSelectedStructureId(structureId);
+  function commitSliceTimeline(nextOrder: string[]) {
+    if (nextOrder.length === 0) {
+      toast.error("At least one slice must remain.");
+      return;
+    }
+
+    if (areAssetIdOrdersEqual(normalizedSliceTimelineIds, nextOrder)) {
+      return;
+    }
+
+    setSliceTimelineUndoStack((history) => [
+      ...history,
+      normalizedSliceTimelineIds,
+    ]);
+    setSliceTimelineRedoStack([]);
+    setSliceTimelineIds(nextOrder);
+  }
+
+  function handleDeleteLeftSlicesFromSelection() {
+    if (!canDeleteLeftSlices) {
+      return;
+    }
+
+    const leftSliceIds = new Set(
+      activeAssets.slice(0, navigationAssetIndex).map((asset) => asset.id),
+    );
+
+    if (leftSliceIds.size === 0) {
+      return;
+    }
+
+    commitSliceTimeline(
+      normalizedSliceTimelineIds.filter((assetId) => !leftSliceIds.has(assetId)),
+    );
+  }
+
+  function handleDeleteRightSlicesFromSelection() {
+    if (!canDeleteRightSlices) {
+      return;
+    }
+
+    const rightSliceIds = new Set(
+      activeAssets
+        .slice(navigationAssetIndex + 1)
+        .map((asset) => asset.id),
+    );
+
+    if (rightSliceIds.size === 0) {
+      return;
+    }
+
+    commitSliceTimeline(
+      normalizedSliceTimelineIds.filter((assetId) => !rightSliceIds.has(assetId)),
+    );
+  }
+
+  function handleDeleteSelectedSlice() {
+    if (!activeViewerAssetId || !canDeleteSelectedSlice) {
+      return;
+    }
+
+    commitSliceTimeline(
+      normalizedSliceTimelineIds.filter(
+        (assetId) => assetId !== activeViewerAssetId,
+      ),
+    );
+  }
+
+  function handleFlipSliceTimeline() {
+    if (!canFlipSliceTimeline) {
+      return;
+    }
+
+    commitSliceTimeline([...normalizedSliceTimelineIds].reverse());
+  }
+
+  function handleUndoSliceTimeline() {
+    const previousOrder =
+      sliceTimelineUndoStack[sliceTimelineUndoStack.length - 1];
+
+    if (!previousOrder) {
+      return;
+    }
+
+    const filteredPrevious = previousOrder.filter((assetId) =>
+      baseSliceAssetIdSet.has(assetId),
+    );
+
+    if (filteredPrevious.length === 0) {
+      return;
+    }
+
+    setSliceTimelineUndoStack((history) => history.slice(0, -1));
+    setSliceTimelineRedoStack((history) => [
+      ...history,
+      normalizedSliceTimelineIds,
+    ]);
+    setSliceTimelineIds(filteredPrevious);
+  }
+
+  function handleRedoSliceTimeline() {
+    const nextOrder = sliceTimelineRedoStack[sliceTimelineRedoStack.length - 1];
+
+    if (!nextOrder) {
+      return;
+    }
+
+    const filteredNext = nextOrder.filter((assetId) =>
+      baseSliceAssetIdSet.has(assetId),
+    );
+
+    if (filteredNext.length === 0) {
+      return;
+    }
+
+    setSliceTimelineRedoStack((history) => history.slice(0, -1));
+    setSliceTimelineUndoStack((history) => [
+      ...history,
+      normalizedSliceTimelineIds,
+    ]);
+    setSliceTimelineIds(filteredNext);
+  }
+
+  async function handleApplySliceTimelineChanges() {
+    if (isApplyingSliceChanges || !hasPendingSliceTimelineChanges) {
+      return;
+    }
+
+    setIsApplyingSliceChanges(true);
+
+    let deletedCount = 0;
+    let updatedCount = 0;
+    let failedCount = 0;
+
+    for (const assetId of pendingDeletedSliceIds) {
+      try {
+        await deleteModalityAsset({
+          assetId,
+          modalityId,
+          zoneId,
+        }).unwrap();
+        deletedCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    for (const { asset, nextSortOrder } of pendingSliceSortUpdates) {
+      try {
+        await updateModalityAsset({
+          assetId: asset.id,
+          input: {
+            assetKind: asset.assetKind,
+            imageUrl: asset.imageUrl,
+            label: asset.label,
+            notes: asset.notes,
+            sortOrder: nextSortOrder,
+            thumbnailUrl: asset.thumbnailUrl,
+            weightingCode: asset.weightingCode,
+          },
+          modalityId,
+          zoneId,
+        }).unwrap();
+        updatedCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    try {
+      await refetchViewerManifest();
+    } catch {
+      // No-op: refetch failures are surfaced by next query cycle.
+    }
+
+    setSliceTimelineIds([]);
+    setSliceTimelineUndoStack([]);
+    setSliceTimelineRedoStack([]);
+    setIsApplyingSliceChanges(false);
+
+    if (failedCount === 0) {
+      toast.success(
+        `Applied slice changes (${deletedCount} deleted, ${updatedCount} reordered).`,
+      );
+      return;
+    }
+
+    toast.warning(
+      `Slice changes partially applied (${deletedCount} deleted, ${updatedCount} reordered, ${failedCount} failed).`,
+    );
   }
 
   if (isLoading && !data) {
@@ -1643,72 +2065,27 @@ export function DraftModalityViewer({
   return (
     <div className={shellGridClass}>
       {showStudyPanel ? (
-        <aside className="space-y-4 overflow-y-auto p-2">
-          <div className="space-y-2">
-            <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/40" />
-              <Input
-                className="pl-9"
-                placeholder="Search in this module"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-              />
-            </div>
-            {searchHits.length > 0 ? (
-              <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
-                {searchHits.map(({ asset, structure }) => (
-                  <button
-                    key={structure.id}
-                    type="button"
-                    className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-white/6"
-                    onClick={() => jumpToStructure(structure.id)}
-                  >
-                    <span>{structure.title}</span>
-                    {asset ? (
-                      <span className="text-xs text-white/45">
-                        {asset.label}
-                      </span>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-
-          {referenceAssets.length > 0 && (
-            <div className="space-y-3">
-              <TriViewStudyPanel
-                activeAssetId={activeViewerAssetId}
-                assets={triViewAssets}
-                onSelectAsset={(assetId) => navigateToAssetId(assetId, "click")}
-              />
-
-              {referenceAssets.slice(3).map((asset, index) => (
-                <ReferenceCard
-                  key={asset.id}
-                  active={asset.id === activeViewerAssetId}
-                  asset={asset}
-                  index={index + 3}
-                  onSelect={() => navigateToAssetId(asset.id, "click")}
-                />
-              ))}
-            </div>
-          )}
-
-          {selectedStructure && (
-            <StructureDrawer
-              darkMode={darkMode}
-              relatedAssets={relatedAssets}
-              selectedAnnotation={selectedAnnotation}
-              selectedStructure={selectedStructure}
-              onJumpToAsset={(assetId) => navigateToAssetId(assetId, "click")}
-            />
-          )}
-        </aside>
+        <StudyPanel
+          activeAssetId={activeViewerAssetId}
+          darkMode={darkMode}
+          referenceAssets={referenceAssets}
+          relatedAssets={relatedAssets}
+          searchHits={searchHits}
+          searchQuery={searchQuery}
+          selectedAnnotation={selectedAnnotation}
+          selectedStructure={selectedStructure}
+          triViewAssets={triViewAssets}
+          onJumpToAsset={(assetId) => navigateToAssetId(assetId, "click")}
+          onJumpToStructure={jumpToStructure}
+          onSearchQueryChange={setSearchQuery}
+        />
       ) : null}
 
       <main className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
         <ViewerCanvas
+          areaBrushSize={areaBrushSize}
+          areaEditTool={areaEditTool}
+          areaEraserSize={areaEraserSize}
           annotationForm={annotationForm}
           canvasFlipHorizontal={canvasFlipHorizontal}
           canvasFlipVertical={canvasFlipVertical}
@@ -1735,110 +2112,48 @@ export function DraftModalityViewer({
           showLabels={showLabels}
           viewerTitle={viewerTitle}
           stageRef={stageRef}
+          mainInteractionTool={mainInteractionTool}
+          currentAssetIndex={navigationAssetIndex}
+          totalSliceCount={activeAssets.length}
           groupsById={groupsById}
           structuresById={structuresById}
           visibleAnnotations={visibleAnnotations}
+          draftDisconnectedPolygons={draftDisconnectedPolygons}
           onAnnotationHover={setHoveredAnnotationId}
           onAnnotationSelect={(annotationId, structureId) => {
             setSelectedAnnotationId(annotationId);
             setSelectedStructureId(structureId);
+            setShowStudyPanel(true);
             const structure = structuresById.get(structureId);
             setSelectedGroupId(structure?.groupId ?? null);
           }}
           onCanvasClick={handleCanvasClick}
           onCanvasDoubleClick={handleCanvasDoubleClick}
+          onDraftAnchorMove={handleDraftAnchorMove}
+          onDraftDisconnectedPolygonsChange={handleDraftDisconnectedPolygonsChange}
           onDraftLabelMove={handleDraftLabelMove}
+          onDraftPolygonPointMove={handleDraftPolygonPointMove}
+          onDraftPolygonReplace={handleDraftPolygonReplace}
+          onLayerScrubNavigate={handleLayerScrubNavigate}
           onWheelNavigate={handleWheelNavigation}
         />
 
-        <Group
-          aria-label="Viewer controls"
-          className="absolute right-3 top-3 z-30 rounded-sm p-0.5"
-        >
-          <Button
-            aria-label={
-              showStudyPanel ? "Hide study panel" : "Show study panel"
-            }
-            type="button"
-            size="icon-lg"
-            variant={!showStudyPanel ? "secondary" : "default"}
-            onClick={() => setShowStudyPanel((current) => !current)}
-          >
-            {showStudyPanel ? (
-              <ArrowLeft className="size-4" />
-            ) : (
-              <ArrowRight className="size-4" />
-            )}
-          </Button>
-          <Button
-            aria-label={
-              showCrossReferences ? "Hide crosshair" : "Show crosshair"
-            }
-            type="button"
-            size="icon-lg"
-            variant={!showCrossReferences ? "secondary" : "default"}
-            onClick={() => setShowCrossReferences((current) => !current)}
-          >
-            <CrosshairIcon className="size-4" />
-          </Button>
-          <Button
-            aria-label={
-              pinControlPanel ? "Unpin control panel" : "Pin control panel"
-            }
-            type="button"
-            size="icon-lg"
-            variant={!pinControlPanel ? "secondary" : "default"}
-            onClick={() => setPinControlPanel((current) => !current)}
-          >
-            <PinIcon className="size-4" />
-          </Button>
-          <Button
-            aria-label={showControlPanel ? "Hide menu" : "Show menu"}
-            type="button"
-            size="icon-lg"
-            variant={!showControlPanel ? "secondary" : "default"}
-            onClick={() =>
-              setShowControlPanel((current) =>
-                pinControlPanel ? true : !current,
-              )
-            }
-          >
-            {showControlPanel ? (
-              <ArrowRight className="size-4" />
-            ) : (
-              <ArrowLeft className="size-4" />
-            )}
-          </Button>
-          {showControlPanel ? (
-            <Button
-              aria-label={
-                isAuthoringMode
-                  ? "Switch to learner mode"
-                  : "Switch to authoring mode"
-              }
-              type="button"
-              size="icon-lg"
-              variant={!isAuthoringMode ? "secondary" : "default"}
-              onClick={() =>
-                setViewerMode((current) =>
-                  current === "authoring" ? "learner" : "authoring",
-                )
-              }
-            >
-              <Snowflake className="size-4" />
-            </Button>
-          ) : null}
-          <Button
-            aria-label="Delete current slice"
-            type="button"
-            size="icon-lg"
-            variant="secondary"
-            disabled={!currentAsset || busy}
-            onClick={() => void handleDeleteCurrentSlice()}
-          >
-            <Trash2Icon className="size-4" />
-          </Button>
-        </Group>
+        <ViewerToolbar
+          activeAreaToolSize={activeAreaToolSize}
+          areaEditTool={areaEditTool}
+          canvasMode={canvasMode}
+          mainInteractionTool={mainInteractionTool}
+          showControlPanel={showControlPanel}
+          showCrossReferences={showCrossReferences}
+          showStudyPanel={showStudyPanel}
+          onAreaBrushSizeChange={setAreaBrushSize}
+          onAreaEditToolChange={setAreaEditTool}
+          onAreaEraserSizeChange={setAreaEraserSize}
+          onMainInteractionToolChange={handleMainInteractionToolChange}
+          onShowControlPanelChange={setShowControlPanel}
+          onShowCrossReferencesChange={setShowCrossReferences}
+          onShowStudyPanelChange={setShowStudyPanel}
+        />
 
         {lockedPreviewStructure ? (
           <div className="absolute right-4 top-20 z-30 w-72 rounded-xl border border-lime-300/55 bg-[#20242b]/95 p-3 shadow-xl backdrop-blur">
@@ -1866,7 +2181,7 @@ export function DraftModalityViewer({
               </Button>
               <button
                 type="button"
-                className="text-xs text-cyan-200 underline underline-offset-2"
+                className="text-xs text-indigo-200 underline underline-offset-2"
                 onClick={() =>
                   toast.info(
                     "Learner sign-in flow is handled in the learner app.",
@@ -1880,195 +2195,92 @@ export function DraftModalityViewer({
         ) : null}
 
         {showBlockView ? (
-          <div className="absolute inset-0 z-40 bg-black/80 p-4 backdrop-blur-sm overflow-hidden overflow-y-auto">
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-base font-semibold text-white">
-                All series - {activeAssets.length} images
-              </div>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setShowBlockView(false)}
-              >
-                Close
-              </Button>
-            </div>
-            <div className="grid max-h-[calc(100vh-49px)] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6 lg:grid-cols-8 :grid-cols-10">
-              {activeAssets.map((asset, assetIndex) => (
-                <button
-                  key={`block-${asset.id}`}
-                  type="button"
-                  className={cn(
-                    "overflow-hidden rounded-sm border bg-black/40 transition",
-                    asset.id === activeViewerAssetId
-                      ? "border-cyan-300 ring-1 ring-cyan-300/70"
-                      : "border-white/10 hover:border-white/30",
-                  )}
-                  onClick={() => {
-                    navigateToAsset(assetIndex, "click");
-                    setShowBlockView(false);
-                  }}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    alt={asset.label}
-                    className="aspect-square w-full object-cover"
-                    decoding="async"
-                    fetchPriority="low"
-                    loading="lazy"
-                    src={asset.thumbnailUrl || asset.imageUrl}
-                  />
-                </button>
-              ))}
-            </div>
-          </div>
+          <ViewerBlockView
+            activeAssetId={activeViewerAssetId}
+            assets={activeAssets}
+            onClose={() => setShowBlockView(false)}
+            onSelectAsset={(assetIndex) => {
+              navigateToAsset(assetIndex, "click");
+              setShowBlockView(false);
+            }}
+          />
         ) : null}
       </main>
 
-      <div className="absolute px-2 bottom-0 w-full left-0 bg-white/3">
-        <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-sm  p-1">
-          <div className="flex size-6 items-center justify-center rounded-md">
-            <NextImage src="/logo.png" alt="Anatomy" height={24} width={24} />
-          </div>
-
-          <div className="relative min-w-0 ml-23.75">
-            <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-primary" />
-            <div
-              ref={filmstripScrollerRef}
-              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-[#f4f4f5] dark:bg-[#121212] p-1"
-            >
-              <div className="flex w-max items-end gap-1">
-                {filmstripAssets.map(({ asset, assetIndex }) => (
-                  <button
-                    key={asset.id}
-                    data-asset-id={asset.id}
-                    type="button"
-                    className={cn(
-                      "group relative w-9 shrink-0 overflow-hidden rounded-sm border border-transparent text-left transition",
-                      asset.id === activeViewerAssetId
-                        ? "bg-cyan-500/20 opacity-100"
-                        : "bg-black/20 opacity-60 hover:bg-white/6 hover:opacity-100",
-                    )}
-                    onClick={() => navigateToAsset(assetIndex, "click")}
-                  >
-                    <div className="aspect-square bg-black/40">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        alt={asset.label}
-                        className="h-full w-full object-cover"
-                        decoding="async"
-                        fetchPriority="low"
-                        loading="lazy"
-                        src={asset.thumbnailUrl || asset.imageUrl}
-                      />
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex gap-2 items-center">
-            <Button
-              size={"icon"}
-              onClick={() => setShowBlockView(!showBlockView)}
-            >
-              <LayoutGrid />
-            </Button>
-            <Button size={"icon"} onClick={handlePreviousAsset}>
-              <ArrowLeft />
-            </Button>
-            <p className="pr-1 text-sm font-semibold tabular-nums dark:text-white/85 w-24 text-center">
-              {navigationAssetIndex >= 0
-                ? `${navigationAssetIndex + 1}/${activeAssets.length}`
-                : `0/${activeAssets.length}`}
-            </p>
-            <Button size={"icon"} onClick={handleNextAsset}>
-              <ArrowRight />
-            </Button>
-          </div>
-        </div>
-      </div>
+      <SliceFilmstrip
+        activeAssetId={activeViewerAssetId}
+        activeAssets={activeAssets}
+        canDeleteLeftSlices={canDeleteLeftSlices}
+        canDeleteRightSlices={canDeleteRightSlices}
+        canDeleteSelectedSlice={canDeleteSelectedSlice}
+        canFlipSliceTimeline={canFlipSliceTimeline}
+        canRedoSliceTimeline={canRedoSliceTimeline}
+        canUndoSliceTimeline={canUndoSliceTimeline}
+        filmstripAssets={filmstripAssets}
+        filmstripScrollerRef={filmstripScrollerRef}
+        hasPendingSliceTimelineChanges={hasPendingSliceTimelineChanges}
+        isApplyingSliceChanges={isApplyingSliceChanges}
+        navigationAssetIndex={navigationAssetIndex}
+        pendingDeletedSliceIds={pendingDeletedSliceIds}
+        pendingSliceSortUpdates={pendingSliceSortUpdates}
+        showSliceEditorPanel={showSliceEditorPanel}
+        sliceEditorScrollerRef={sliceEditorScrollerRef}
+        totalSliceCount={activeAssets.length}
+        onApplyChanges={handleApplySliceTimelineChanges}
+        onDeleteLeft={handleDeleteLeftSlicesFromSelection}
+        onDeleteRight={handleDeleteRightSlicesFromSelection}
+        onDeleteSelected={handleDeleteSelectedSlice}
+        onFlipOrder={handleFlipSliceTimeline}
+        onNext={handleNextAsset}
+        onPrevious={handlePreviousAsset}
+        onRedo={handleRedoSliceTimeline}
+        onSelectAsset={(assetIndex) => navigateToAsset(assetIndex, "click")}
+        onToggleBlockView={() => setShowBlockView((current) => !current)}
+        onToggleSliceEditorPanel={() =>
+          setShowSliceEditorPanel((current) => !current)
+        }
+        onUndo={handleUndoSliceTimeline}
+        onWheel={handleFilmstripHorizontalWheel}
+      />
 
       {showControlPanel ? (
         <ModalityViewerRightPanel
           activeWeighting={activeWeighting}
           annotationForm={annotationForm}
           busy={busy}
-          canEditAnnotationDetails={canEditAnnotationDetails}
-          canEditPinArea={canEditPinArea}
           canvasFlipHorizontal={canvasFlipHorizontal}
           canvasFlipVertical={canvasFlipVertical}
-          canvasMode={canvasMode}
-          currentAnnotations={currentAnnotations}
           currentAsset={currentAsset}
-          darkMode={darkMode}
-          fontScaleMode={fontScaleMode}
           groupForm={groupForm}
           groups={groups}
           groupsById={groupsById}
-          isAuthoringMode={isAuthoringMode}
-          modalityId={modalityId}
-          overlayOpacity={overlayOpacity}
-          pinsOnly={pinsOnly}
-          pointAnimation={pointAnimation}
-          practiceMode={practiceMode}
-          reverseScroll={reverseScroll}
-          selectedAnnotationId={selectedAnnotationId}
-          selectedGroupId={selectedGroupId}
-          selectedStructure={selectedStructure}
           selectedStructureId={selectedStructureId}
-          showCrossReferences={showCrossReferences}
           showLabels={showLabels}
-          showOrientation={showOrientation}
-          showStructureAdvanced={showStructureAdvanced}
           structureForm={structureForm}
           structures={structures}
-          structuresById={structuresById}
-          targetedLabeling={targetedLabeling}
           visibleGroupIds={visibleGroupIds}
           weightings={weightings}
-          zoneId={zoneId}
           handleReset={handleReset}
           onAnnotationFormChange={updateAnnotationForm}
           onCanvasModeChange={setCanvasMode}
-          onCaptureSnapshot={handleCaptureSnapshot}
           onClearPolygonDraft={clearPolygonDraft}
-          onDarkModeChange={setDarkMode}
-          onDeleteAnnotation={handleDeleteAnnotation}
           onDeleteGroup={handleDeleteGroup}
           onDeleteStructure={handleDeleteStructure}
           onFlipCanvasHorizontal={handleFlipCanvasHorizontal}
           onFlipCanvasVertical={handleFlipCanvasVertical}
-          onFontScaleModeChange={setFontScaleMode}
           onGroupFormChange={updateGroupForm}
           onGroupVisibilityChange={updateGroupVisibility}
-          onNavigateNext={handleNextAsset}
-          onNavigatePrevious={handlePreviousAsset}
-          onOverlayOpacityChange={setOverlayOpacity}
-          onPinsOnlyChange={setPinsOnly}
-          onPointAnimationChange={setPointAnimation}
-          onPracticeModeChange={setPracticeMode}
           onResetGroup={handleResetGroupDraft}
           onResetStructure={handleResetStructureDraft}
-          onReverseScrollChange={setReverseScroll}
           onRotateCanvasLeft={handleRotateCanvasLeft}
           onRotateCanvasRight={handleRotateCanvasRight}
           onSaveAnnotation={handleSaveAnnotation}
           onSaveGroup={handleSaveGroup}
           onSaveStructure={handleSaveStructure}
-          onSelectAnnotation={handleSelectAnnotationFromPanel}
           onSelectGroup={handleSelectGroupFromPanel}
           onSelectStructure={handleSelectStructureFromPanel}
-          onShowCrossReferencesChange={setShowCrossReferences}
           onShowLabelsChange={setShowLabels}
-          onShowOrientationChange={setShowOrientation}
-          onStructureAdvancedToggle={() =>
-            setShowStructureAdvanced((current) => !current)
-          }
           onStructureFormChange={updateStructureForm}
-          onTargetedLabelingChange={setTargetedLabeling}
-          onUndoPolygonPoint={removeLastPolygonPoint}
           onVisibleGroupIdsChange={setVisibleGroupIds}
           onWeightingChange={handleWeightingChange}
         />
@@ -2077,1086 +2289,3 @@ export function DraftModalityViewer({
   );
 }
 
-function readMutationError(error: unknown, fallback: string) {
-  if (typeof error === "object" && error !== null) {
-    if ("data" in error && error.data && typeof error.data === "object") {
-      const errorBody = error.data as { error?: { message?: string } };
-      const message = errorBody.error?.message;
-
-      if (message) {
-        return message;
-      }
-    }
-
-    if ("message" in error && typeof error.message === "string") {
-      return error.message;
-    }
-  }
-
-  return fallback;
-}
-
-function splitCommaList(value: string) {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function splitMultilineList(value: string) {
-  return value
-    .split("\n")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function ReferenceCard({
-  active,
-  asset,
-  index,
-  onSelect,
-}: {
-  active: boolean;
-  asset: ZoneModalityAsset;
-  index: number;
-  onSelect: () => void;
-}) {
-  const labels = ["Sagittal", "Coronal", "3D"];
-
-  return (
-    <button
-      type="button"
-      className={cn(
-        "w-full overflow-hidden rounded-[1.35rem] border text-left transition",
-        active
-          ? "border-cyan-400/70 bg-cyan-500/8"
-          : "border-white/8 bg-black/20",
-      )}
-      onClick={onSelect}
-    >
-      <div className="px-4 pt-3 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300">
-        {labels[index] ?? `Ref ${index + 1}`}
-      </div>
-      <div className="p-4 pt-2">
-        <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/30">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            alt={asset.label}
-            className="h-40 w-full object-cover"
-            decoding="async"
-            fetchPriority="low"
-            loading="lazy"
-            src={asset.imageUrl}
-          />
-        </div>
-      </div>
-    </button>
-  );
-}
-
-function TriViewStudyPanel({
-  activeAssetId,
-  assets,
-  onSelectAsset,
-}: {
-  activeAssetId: string | null;
-  assets: ZoneModalityAsset[];
-  onSelectAsset: (assetId: string) => void;
-}) {
-  const labels = ["SAGITTAL", "CORONAL", "3D"];
-
-  if (assets.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="px-3">
-      {assets.map((asset, index) => (
-        <button
-          key={`tri-${asset.id}`}
-          type="button"
-          className={cn(
-            "w-full rounded-xl border p-2 text-left transition",
-            asset.id === activeAssetId
-              ? "border-cyan-300/70 bg-cyan-500/10"
-              : "border-white/8 bg-black/20 hover:bg-white/5",
-          )}
-          onClick={() => onSelectAsset(asset.id)}
-        >
-          <div className="mb-2 text-xs font-semibold tracking-[0.18em] text-cyan-300">
-            {labels[index] ?? `REF ${index + 1}`}
-          </div>
-          <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/35">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt={asset.label}
-              className="h-28 w-full object-cover"
-              decoding="async"
-              fetchPriority="low"
-              loading="lazy"
-              src={asset.thumbnailUrl || asset.imageUrl}
-            />
-            <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-cyan-300/75" />
-          </div>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function StructureDrawer({
-  darkMode,
-  relatedAssets,
-  selectedAnnotation,
-  selectedStructure,
-  onJumpToAsset,
-}: {
-  darkMode: boolean;
-  relatedAssets: Array<{
-    annotation: ViewerAnnotation;
-    asset: ZoneModalityAsset;
-  }>;
-  selectedAnnotation: ViewerAnnotation | null;
-  selectedStructure: ViewerStructure;
-  onJumpToAsset: (assetId: string) => void;
-}) {
-  const isLocked = selectedStructure.accessLevel === "subscription";
-  const visibleLearningPoints = selectedStructure.learningPoints.filter(
-    (point) => !point.startsWith("interaction:"),
-  );
-
-  return (
-    <div className={cn("px-2")}>
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-2xl font-semibold">
-            {selectedStructure.title}
-          </div>
-          {selectedStructure.latinName ? (
-            <div className="mt-1 text-sm text-cyan-300">
-              {selectedStructure.latinName}
-            </div>
-          ) : null}
-        </div>
-        <Badge variant={isLocked ? "outline" : "secondary"}>
-          {isLocked ? "Subscriber lesson" : "Open lesson"}
-        </Badge>
-      </div>
-
-      {selectedStructure.shortDescription ? (
-        <MarkdownContent
-          className="mt-4"
-          content={selectedStructure.shortDescription}
-        />
-      ) : null}
-
-      {isLocked ? (
-        <div className="mt-4 rounded-2xl border border-lime-400/40 bg-lime-400/8 p-4 text-sm">
-          Learners will only see the subscriber version of this topic until you
-          publish broader access.
-        </div>
-      ) : selectedStructure.longDescription ? (
-        <MarkdownContent
-          className="mt-4"
-          content={selectedStructure.longDescription}
-        />
-      ) : null}
-
-      {visibleLearningPoints.length > 0 ? (
-        <div className="mt-5">
-          <div className="text-xs uppercase tracking-[0.2em] text-white/40">
-            Learning points
-          </div>
-          <ul className="mt-3 space-y-2 text-sm text-white/70">
-            {visibleLearningPoints.map((point) => (
-              <li
-                key={point}
-                className="rounded-xl border border-white/8 px-3 py-2"
-              >
-                {point}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {selectedAnnotation?.note ? (
-        <div className="mt-5 rounded-2xl border border-white/8 bg-black/20 p-4 text-sm text-white/65">
-          {selectedAnnotation.note}
-        </div>
-      ) : null}
-
-      {relatedAssets.length > 0 ? (
-        <div className="mt-5">
-          <div className="mb-3 text-xs uppercase tracking-[0.2em] text-white/40">
-            In this module
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {relatedAssets.slice(0, 8).map(({ asset, annotation }) => (
-              <button
-                key={annotation.id}
-                type="button"
-                className="overflow-hidden rounded-2xl border border-white/8 bg-black/20 text-left"
-                onClick={() => onJumpToAsset(asset.id)}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  alt={asset.label}
-                  className="aspect-4/3 w-full object-cover"
-                  decoding="async"
-                  fetchPriority="low"
-                  loading="lazy"
-                  src={asset.thumbnailUrl || asset.imageUrl}
-                />
-                <div className="px-3 py-2 text-xs text-white/72">
-                  {asset.label}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function MarkdownContent({
-  className,
-  content,
-}: {
-  className?: string;
-  content: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "text-sm leading-6 text-white/75 [&_a]:text-primary [&_a]:underline [&_code]:rounded [&_code]:bg-white/10 [&_code]:px-1 [&_code]:py-0.5 [&_li]:mb-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5",
-        className,
-      )}
-    >
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-    </div>
-  );
-}
-
-function ViewerCanvas({
-  annotationForm,
-  canvasFlipHorizontal,
-  canvasFlipVertical,
-  canvasMode,
-  canvasRotationQuarterTurns,
-  currentAsset,
-  currentImageElement,
-  darkMode,
-  fontScaleMode,
-  hoveredAnnotationId,
-  ingestFailureMessage,
-  isIngesting,
-  isPreparingInitialAsset,
-  overlayOpacity,
-  overlayRef,
-  pinsOnly,
-  pointAnimation,
-  practiceMode,
-  selectedAnnotationId,
-  draftStructureTitle,
-  showLoadingIndicator,
-  showCrossReferences,
-  showOrientation,
-  showLabels,
-  viewerTitle,
-  stageRef,
-  groupsById,
-  structuresById,
-  visibleAnnotations,
-  onAnnotationHover,
-  onAnnotationSelect,
-  onCanvasClick,
-  onCanvasDoubleClick,
-  onDraftLabelMove,
-  onWheelNavigate,
-}: {
-  annotationForm: AnnotationFormState;
-  canvasFlipHorizontal: boolean;
-  canvasFlipVertical: boolean;
-  canvasMode: ViewerCanvasMode;
-  canvasRotationQuarterTurns: number;
-  currentAsset: ZoneModalityAsset | null;
-  currentImageElement: HTMLImageElement | null;
-  darkMode: boolean;
-  fontScaleMode: FontScaleMode;
-  hoveredAnnotationId: string | null;
-  ingestFailureMessage: string | null;
-  isIngesting: boolean;
-  isPreparingInitialAsset: boolean;
-  overlayOpacity: number;
-  overlayRef: MutableRefObject<SVGSVGElement | null>;
-  pinsOnly: boolean;
-  pointAnimation: boolean;
-  practiceMode: boolean;
-  selectedAnnotationId: string | null;
-  draftStructureTitle: string;
-  showLoadingIndicator: boolean;
-  showCrossReferences: boolean;
-  showOrientation: boolean;
-  showLabels: boolean;
-  viewerTitle: string;
-  stageRef: MutableRefObject<HTMLDivElement | null>;
-  groupsById: Map<string, ViewerStructureGroup>;
-  structuresById: Map<string, ViewerStructure>;
-  visibleAnnotations: ViewerAnnotation[];
-  onAnnotationHover: (annotationId: string | null) => void;
-  onAnnotationSelect: (annotationId: string, structureId: string) => void;
-  onCanvasClick: (point: ViewerAnnotationPoint) => void;
-  onCanvasDoubleClick: () => void;
-  onDraftLabelMove: (point: ViewerAnnotationPoint) => void;
-  onWheelNavigate: (deltaY: number) => void;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const brushingRef = useRef(false);
-  const lastBrushPointRef = useRef<ViewerAnnotationPoint | null>(null);
-  const draggingLabelRef = useRef<string | null>(null);
-  const [draggingLabelId, setDraggingLabelId] = useState<string | null>(null);
-  const draftPointerMovedFromDefault =
-    Math.abs(annotationForm.anchorX - EMPTY_ANNOTATION_FORM.anchorX) > 0.0005 ||
-    Math.abs(annotationForm.anchorY - EMPTY_ANNOTATION_FORM.anchorY) > 0.0005 ||
-    Math.abs(annotationForm.labelX - EMPTY_ANNOTATION_FORM.labelX) > 0.0005 ||
-    Math.abs(annotationForm.labelY - EMPTY_ANNOTATION_FORM.labelY) > 0.0005;
-  const showDraftPointer =
-    !selectedAnnotationId &&
-    canvasMode !== "draw-region" &&
-    draftPointerMovedFromDefault;
-  const draftPointerColor =
-    annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
-  const draftPointerLabel =
-    annotationForm.titleOverride.trim() ||
-    draftStructureTitle.trim() ||
-    "Draft";
-  const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
-  const canvasSurfaceTransform = `rotate(${normalizedCanvasRotation * 90}deg) scaleX(${canvasFlipHorizontal ? -1 : 1}) scaleY(${canvasFlipVertical ? -1 : 1})`;
-
-  const resolvePointerPoint = useCallback(
-    (event: {
-      clientX: number;
-      clientY: number;
-      currentTarget: SVGSVGElement;
-    }) => {
-      const rect = event.currentTarget.getBoundingClientRect();
-      let x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-      let y = clamp((event.clientY - rect.top) / rect.height, 0, 1);
-
-      switch (normalizedCanvasRotation) {
-        case 1:
-          [x, y] = [y, 1 - x];
-          break;
-        case 2:
-          [x, y] = [1 - x, 1 - y];
-          break;
-        case 3:
-          [x, y] = [1 - y, x];
-          break;
-        default:
-          break;
-      }
-
-      if (canvasFlipHorizontal) {
-        x = 1 - x;
-      }
-
-      if (canvasFlipVertical) {
-        y = 1 - y;
-      }
-
-      return {
-        x: clamp(x, 0, 1),
-        y: clamp(y, 0, 1),
-      };
-    },
-    [canvasFlipHorizontal, canvasFlipVertical, normalizedCanvasRotation],
-  );
-
-  const commitBrushPoint = useCallback(
-    (point: ViewerAnnotationPoint, force = false) => {
-      const previousPoint = lastBrushPointRef.current;
-
-      if (!previousPoint) {
-        lastBrushPointRef.current = point;
-        onCanvasClick(point);
-        return;
-      }
-
-      const deltaX = point.x - previousPoint.x;
-      const deltaY = point.y - previousPoint.y;
-      const distance = Math.hypot(deltaX, deltaY);
-
-      if (!force && distance < BRUSH_POINT_STEP) {
-        return;
-      }
-
-      const segments = Math.max(1, Math.ceil(distance / BRUSH_POINT_STEP));
-
-      for (let segmentIndex = 1; segmentIndex <= segments; segmentIndex += 1) {
-        const factor = segmentIndex / segments;
-        const interpolatedPoint = {
-          x: clamp(previousPoint.x + deltaX * factor, 0, 1),
-          y: clamp(previousPoint.y + deltaY * factor, 0, 1),
-        };
-
-        lastBrushPointRef.current = interpolatedPoint;
-        onCanvasClick(interpolatedPoint);
-      }
-    },
-    [onCanvasClick],
-  );
-
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-
-    if (!canvas || !currentImageElement) {
-      return;
-    }
-
-    const width =
-      currentAsset?.width ??
-      currentImageElement.naturalWidth ??
-      currentImageElement.width;
-    const height =
-      currentAsset?.height ??
-      currentImageElement.naturalHeight ??
-      currentImageElement.height;
-    const context = canvas.getContext("2d");
-
-    if (!context || width <= 0 || height <= 0) {
-      return;
-    }
-
-    if (canvas.width !== width) {
-      canvas.width = width;
-    }
-
-    if (canvas.height !== height) {
-      canvas.height = height;
-    }
-
-    context.clearRect(0, 0, width, height);
-    context.drawImage(currentImageElement, 0, 0, width, height);
-  }, [
-    currentAsset?.height,
-    currentAsset?.id,
-    currentAsset?.width,
-    currentImageElement,
-  ]);
-
-  if (!currentAsset) {
-    if (isPreparingInitialAsset || isIngesting) {
-      return (
-        <div className="flex min-h-160 flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 px-6 text-center text-white/70">
-          <Loader />
-        </div>
-      );
-    }
-
-    if (ingestFailureMessage) {
-      return (
-        <div className="flex min-h-160 items-center justify-center rounded-[1.75rem] border border-dashed border-red-500/30 bg-red-500/5 px-6 text-center text-red-100">
-          <p className="max-w-lg text-sm leading-6">{ingestFailureMessage}</p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="flex min-h-160 items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 text-white/60">
-        This modality does not have any derived slices yet.
-      </div>
-    );
-  }
-
-  const overlayPreview =
-    canvasMode !== "browse"
-      ? annotationForm.polygonPoints.map(pointToPercentPair).join(" ")
-      : null;
-
-  return (
-    <div
-      className={cn(
-        "relative overflow-hidden",
-        darkMode ? "bg-black" : "bg-white",
-      )}
-    >
-      <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center px-6 py-4 text-sm">
-        {showOrientation ? viewerTitle : "Viewer"}
-      </div>
-
-      <div
-        ref={stageRef}
-        className="flex min-h-160 h-full items-center justify-center p-8"
-        onDoubleClick={onCanvasDoubleClick}
-        onWheel={(event) => {
-          event.preventDefault();
-          onWheelNavigate(event.deltaY);
-        }}
-      >
-        <div
-          className="relative inline-block max-w-full transition-transform duration-200 ease-out"
-          style={{ transform: canvasSurfaceTransform }}
-        >
-          {showLoadingIndicator ? (
-            <div className="absolute right-3 top-3 z-20 flex items-center rounded-full border border-white/12 bg-black/60 px-3 py-1.5 text-xs text-white/75 shadow-lg">
-              <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
-              Loading slice...
-            </div>
-          ) : null}
-          <canvas
-            ref={canvasRef}
-            aria-label={currentAsset.label}
-            className="block max-h-[84vh] w-[min(82vh,82vw)] max-w-full object-contain"
-          />
-          <svg
-            ref={overlayRef}
-            className="absolute inset-0 h-full w-full"
-            viewBox="0 0 1000 1000"
-            onClick={(event) => {
-              if (canvasMode === "draw-region") {
-                return;
-              }
-
-              onCanvasClick(resolvePointerPoint(event));
-            }}
-            onPointerDown={(event) => {
-              if (canvasMode !== "draw-region") {
-                return;
-              }
-
-              brushingRef.current = true;
-              event.currentTarget.setPointerCapture(event.pointerId);
-              commitBrushPoint(resolvePointerPoint(event), true);
-            }}
-            onPointerMove={(event) => {
-              if (draggingLabelRef.current) {
-                onDraftLabelMove(resolvePointerPoint(event));
-                return;
-              }
-
-              if (canvasMode !== "draw-region" || !brushingRef.current) {
-                return;
-              }
-
-              commitBrushPoint(resolvePointerPoint(event));
-            }}
-            onPointerUp={(event) => {
-              if (draggingLabelRef.current) {
-                draggingLabelRef.current = null;
-                setDraggingLabelId(null);
-
-                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                }
-
-                return;
-              }
-
-              if (canvasMode !== "draw-region") {
-                return;
-              }
-
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-
-              brushingRef.current = false;
-              lastBrushPointRef.current = null;
-            }}
-            onPointerLeave={() => {
-              if (draggingLabelRef.current) {
-                draggingLabelRef.current = null;
-                setDraggingLabelId(null);
-                return;
-              }
-
-              if (canvasMode !== "draw-region") {
-                return;
-              }
-
-              brushingRef.current = false;
-              lastBrushPointRef.current = null;
-            }}
-          >
-            {visibleAnnotations.map((annotation) => {
-              const structure = structuresById.get(annotation.structureId);
-              if (!structure) {
-                return null;
-              }
-
-              const group = structure.groupId
-                ? groupsById.get(structure.groupId)
-                : null;
-
-              const isSelected = annotation.id === selectedAnnotationId;
-              const isHovered = annotation.id === hoveredAnnotationId;
-              const color =
-                group?.colorHex || annotation.colorHex || DEFAULT_ANNOTATION_COLOR;
-              const anchorX = isSelected
-                ? annotationForm.anchorX
-                : annotation.anchorX;
-              const anchorY = isSelected
-                ? annotationForm.anchorY
-                : annotation.anchorY;
-              const labelX = isSelected ? annotationForm.labelX : annotation.labelX;
-              const labelY = isSelected ? annotationForm.labelY : annotation.labelY;
-              const polygonPoints = isSelected
-                ? annotationForm.polygonPoints
-                : annotation.polygonPoints;
-              const overlayColor = isSelected
-                ? annotationForm.overlayColorHex || color
-                : annotation.overlayColorHex || color;
-              const leaderColor = isSelected
-                ? annotationForm.leaderColorHex || color
-                : annotation.leaderColorHex || color;
-              const polygonOpacity = isSelected
-                ? annotationForm.overlayOpacity
-                : annotation.overlayOpacity;
-              const label =
-                (isSelected
-                  ? annotationForm.titleOverride.trim()
-                  : annotation.titleOverride) || structure.title;
-              const markerVisible = showLabels || pinsOnly;
-              const textVisible =
-                showLabels &&
-                !pinsOnly &&
-                (!practiceMode || isSelected || isHovered);
-              const fontSize = fontScaleMode === "large" ? 24 : 18;
-              const canDragLabel = isSelected && canvasMode === "browse";
-              const highlightLabel =
-                canDragLabel &&
-                (isHovered || draggingLabelId === annotation.id);
-              const labelRectWidth = Math.max(
-                72,
-                label.length * (fontSize === 24 ? 11.5 : 8.7),
-              );
-
-              return (
-                <g
-                  key={annotation.id}
-                  onMouseEnter={() => onAnnotationHover(annotation.id)}
-                  onMouseLeave={() => onAnnotationHover(null)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onAnnotationSelect(annotation.id, annotation.structureId);
-                  }}
-                >
-                  {polygonPoints.length >= 3 ? (
-                    <polygon
-                      fill={overlayColor}
-                      fillOpacity={polygonOpacity * overlayOpacity}
-                      points={polygonPoints.map(pointToSvgPair).join(" ")}
-                      stroke={overlayColor}
-                      strokeOpacity={0.9}
-                      strokeWidth={isSelected ? 3 : 2}
-                    />
-                  ) : null}
-                  {markerVisible ? (
-                    <>
-                      <line
-                        stroke={leaderColor}
-                        strokeWidth={isSelected ? 3 : 2}
-                        x1={anchorX * 1000}
-                        x2={labelX * 1000}
-                        y1={anchorY * 1000}
-                        y2={labelY * 1000}
-                      />
-                      <circle
-                        cx={anchorX * 1000}
-                        cy={anchorY * 1000}
-                        fill={color}
-                        r={isSelected ? 8 : 6}
-                      />
-                    </>
-                  ) : null}
-                  {textVisible ? (
-                    <g>
-                      {highlightLabel ? (
-                        <rect
-                          fill={color}
-                          height={fontSize + 10}
-                          opacity={0.95}
-                          rx={6}
-                          width={labelRectWidth}
-                          x={labelX * 1000 - 8}
-                          y={labelY * 1000 - fontSize + 2}
-                        />
-                      ) : null}
-                      <text
-                        className={canDragLabel ? "cursor-pointer select-none" : undefined}
-                        fill={highlightLabel ? "#ffffff" : color}
-                        fontFamily="system-ui"
-                        fontSize={fontSize}
-                        fontWeight={isSelected ? 700 : 500}
-                        x={labelX * 1000}
-                        y={labelY * 1000}
-                        onPointerDown={(event) => {
-                          if (!canDragLabel) {
-                            return;
-                          }
-
-                          const svg = event.currentTarget.ownerSVGElement;
-                          if (!svg) {
-                            return;
-                          }
-
-                          event.stopPropagation();
-                          draggingLabelRef.current = annotation.id;
-                          setDraggingLabelId(annotation.id);
-                          svg.setPointerCapture(event.pointerId);
-                          onDraftLabelMove(
-                            resolvePointerPoint({
-                              clientX: event.clientX,
-                              clientY: event.clientY,
-                              currentTarget: svg,
-                            }),
-                          );
-                        }}
-                      >
-                        {label}
-                      </text>
-                    </g>
-                  ) : null}
-                </g>
-              );
-            })}
-            {showDraftPointer ? (
-              <g>
-                <line
-                  stroke={annotationForm.leaderColorHex || draftPointerColor}
-                  strokeWidth={2}
-                  x1={annotationForm.anchorX * 1000}
-                  x2={annotationForm.labelX * 1000}
-                  y1={annotationForm.anchorY * 1000}
-                  y2={annotationForm.labelY * 1000}
-                />
-                <circle
-                  cx={annotationForm.anchorX * 1000}
-                  cy={annotationForm.anchorY * 1000}
-                  fill={draftPointerColor}
-                  r={7}
-                />
-                {showLabels && !pinsOnly ? (
-                  <text
-                    fill={draftPointerColor}
-                    fontFamily="system-ui"
-                    fontSize={fontScaleMode === "large" ? 24 : 18}
-                    fontWeight={600}
-                    x={annotationForm.labelX * 1000}
-                    y={annotationForm.labelY * 1000}
-                  >
-                    {draftPointerLabel}
-                  </text>
-                ) : null}
-              </g>
-            ) : null}
-            {overlayPreview ? (
-              <polygon
-                fill={annotationForm.overlayColorHex}
-                fillOpacity={
-                  annotationForm.overlayOpacity * overlayOpacity * 0.45
-                }
-                points={overlayPreview}
-                stroke={annotationForm.overlayColorHex}
-                strokeDasharray="8 6"
-                strokeWidth={2}
-              />
-            ) : null}
-            {showCrossReferences ? (
-              <>
-                <line
-                  stroke="rgba(56,189,248,0.88)"
-                  strokeWidth={2}
-                  x1={500}
-                  x2={500}
-                  y1={0}
-                  y2={1000}
-                />
-                <line
-                  stroke="rgba(56,189,248,0.88)"
-                  strokeWidth={2}
-                  x1={0}
-                  x2={1000}
-                  y1={500}
-                  y2={500}
-                />
-              </>
-            ) : null}
-          </svg>
-        </div>
-      </div>
-
-      {pointAnimation ? (
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.03),transparent_60%)]" />
-      ) : null}
-    </div>
-  );
-}
-
-function isSliceAsset(asset: ZoneModalityAsset) {
-  return asset.assetKind === "slice" || asset.assetKind === "derived_slice";
-}
-
-function formatModalityTypeLabel(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  switch (value.toLowerCase()) {
-    case "mri":
-      return "MRI";
-    case "ct":
-      return "CT";
-    case "mra":
-      return "MRA";
-    case "mrv":
-      return "MRV";
-    case "cbct":
-      return "CBCT";
-    default:
-      return value.toUpperCase();
-  }
-}
-
-function formatOrientationLabel(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  switch (value.toLowerCase()) {
-    case "axial":
-      return "Axial";
-    case "sagittal":
-      return "Sagittal";
-    case "coronal":
-      return "Coronal";
-    default:
-      return value.charAt(0).toUpperCase() + value.slice(1);
-  }
-}
-
-function structureMatchesSearch(structure: ViewerStructure, query: string) {
-  return [
-    structure.title,
-    structure.latinName ?? "",
-    structure.shortDescription ?? "",
-    ...structure.synonyms,
-  ]
-    .join(" ")
-    .toLowerCase()
-    .includes(query);
-}
-
-function clamp(value: number, minimum: number, maximum: number) {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function buildStackWarmupOrder(
-  assets: ZoneModalityAsset[],
-  centerIndex: number,
-  preferredDirection: -1 | 0 | 1 = 0,
-) {
-  if (assets.length === 0) {
-    return [];
-  }
-
-  const safeCenterIndex = clamp(centerIndex, 0, assets.length - 1);
-  const orderedIndices = [safeCenterIndex];
-
-  for (let offset = 1; orderedIndices.length < assets.length; offset += 1) {
-    const nextIndex = safeCenterIndex + offset;
-    const previousIndex = safeCenterIndex - offset;
-
-    const directionalIndices =
-      preferredDirection >= 0
-        ? [nextIndex, previousIndex]
-        : [previousIndex, nextIndex];
-
-    for (const index of directionalIndices) {
-      if (index >= 0 && index < assets.length) {
-        orderedIndices.push(index);
-      }
-    }
-  }
-
-  return orderedIndices.map((index) => assets[index]!).filter(Boolean);
-}
-
-function buildImmediatePreloadOrder(
-  assets: ZoneModalityAsset[],
-  centerIndex: number,
-  preferredDirection: -1 | 0 | 1,
-  radius: number,
-) {
-  if (assets.length === 0) {
-    return [];
-  }
-
-  const safeCenterIndex = clamp(centerIndex, 0, assets.length - 1);
-  const orderedAssets: ZoneModalityAsset[] = [];
-
-  for (const asset of buildStackWarmupOrder(
-    assets,
-    safeCenterIndex,
-    preferredDirection,
-  )) {
-    if (orderedAssets.length >= radius) {
-      break;
-    }
-
-    orderedAssets.push(asset);
-  }
-
-  return orderedAssets;
-}
-
-function createDefaultLabelX(anchorX: number) {
-  return anchorX < 0.55
-    ? clamp(anchorX + 0.24, 0.08, 0.92)
-    : clamp(anchorX - 0.24, 0.08, 0.92);
-}
-
-function pointToSvgPair(point: ViewerAnnotationPoint) {
-  return `${point.x * 1000},${point.y * 1000}`;
-}
-
-function pointToPercentPair(point: ViewerAnnotationPoint) {
-  return pointToSvgPair(point);
-}
-
-async function captureViewerSnapshot({
-  annotations,
-  asset,
-  groupsById,
-  overlayOpacity,
-  pinsOnly,
-  practiceMode,
-  selectedStructureId,
-  showLabels,
-  structuresById,
-}: {
-  annotations: ViewerAnnotation[];
-  asset: ZoneModalityAsset;
-  groupsById: Map<string, ViewerStructureGroup>;
-  overlayOpacity: number;
-  pinsOnly: boolean;
-  practiceMode: boolean;
-  selectedStructureId: string | null;
-  showLabels: boolean;
-  structuresById: Map<string, ViewerStructure>;
-}) {
-  const image = await loadImage(asset.imageUrl);
-  const canvas = document.createElement("canvas");
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const context = canvas.getContext("2d");
-
-  if (!context) {
-    throw new Error("Canvas context unavailable");
-  }
-
-  context.drawImage(image, 0, 0);
-
-  for (const annotation of annotations) {
-    const structure = structuresById.get(annotation.structureId);
-    if (!structure) {
-      continue;
-    }
-
-    const group = structure.groupId ? groupsById.get(structure.groupId) : null;
-    const color =
-      group?.colorHex || annotation.colorHex || DEFAULT_ANNOTATION_COLOR;
-    const overlayColor = annotation.overlayColorHex || color;
-    const leaderColor = annotation.leaderColorHex || color;
-
-    if (annotation.polygonPoints.length >= 3) {
-      context.save();
-      context.fillStyle = applyAlpha(
-        overlayColor,
-        annotation.overlayOpacity * overlayOpacity,
-      );
-      context.strokeStyle = overlayColor;
-      context.lineWidth = 2;
-      context.beginPath();
-      annotation.polygonPoints.forEach((point, index) => {
-        const x = point.x * canvas.width;
-        const y = point.y * canvas.height;
-        if (index === 0) {
-          context.moveTo(x, y);
-        } else {
-          context.lineTo(x, y);
-        }
-      });
-      context.closePath();
-      context.fill();
-      context.stroke();
-      context.restore();
-    }
-
-    context.save();
-    context.strokeStyle = leaderColor;
-    context.fillStyle = color;
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(
-      annotation.anchorX * canvas.width,
-      annotation.anchorY * canvas.height,
-    );
-    context.lineTo(
-      annotation.labelX * canvas.width,
-      annotation.labelY * canvas.height,
-    );
-    context.stroke();
-    context.beginPath();
-    context.arc(
-      annotation.anchorX * canvas.width,
-      annotation.anchorY * canvas.height,
-      6,
-      0,
-      Math.PI * 2,
-    );
-    context.fill();
-
-    if (
-      showLabels &&
-      !pinsOnly &&
-      (!practiceMode || selectedStructureId === structure.id)
-    ) {
-      context.font = "24px system-ui";
-      context.fillText(
-        annotation.titleOverride || structure.title,
-        annotation.labelX * canvas.width,
-        annotation.labelY * canvas.height,
-      );
-    }
-    context.restore();
-  }
-
-  return canvas.toDataURL("image/png");
-}
-
-function applyAlpha(color: string, alpha: number) {
-  const normalized = color.replace("#", "");
-  if (normalized.length !== 6) {
-    return color;
-  }
-
-  const red = Number.parseInt(normalized.slice(0, 2), 16);
-  const green = Number.parseInt(normalized.slice(2, 4), 16);
-  const blue = Number.parseInt(normalized.slice(4, 6), 16);
-
-  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
-}
-
-function loadImage(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new window.Image();
-    image.crossOrigin = "anonymous";
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
-  });
-}

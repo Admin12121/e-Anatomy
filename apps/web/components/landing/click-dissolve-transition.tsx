@@ -398,7 +398,7 @@ function drawLandingBackdrop(
   context.fillStyle = baseGradient;
   context.fillRect(0, 0, width, height);
 
-  const cyanGlowLeft = context.createRadialGradient(
+  const indigoGlowLeft = context.createRadialGradient(
     width * 0.18,
     height * 0.2,
     0,
@@ -406,12 +406,12 @@ function drawLandingBackdrop(
     height * 0.2,
     width * 0.34,
   );
-  cyanGlowLeft.addColorStop(0, "rgba(14,165,233,0.22)");
-  cyanGlowLeft.addColorStop(1, "rgba(14,165,233,0)");
-  context.fillStyle = cyanGlowLeft;
+  indigoGlowLeft.addColorStop(0, "rgba(14,165,233,0.22)");
+  indigoGlowLeft.addColorStop(1, "rgba(14,165,233,0)");
+  context.fillStyle = indigoGlowLeft;
   context.fillRect(0, 0, width, height);
 
-  const cyanGlowRight = context.createRadialGradient(
+  const indigoGlowRight = context.createRadialGradient(
     width * 0.76,
     height * 0.16,
     0,
@@ -419,9 +419,9 @@ function drawLandingBackdrop(
     height * 0.16,
     width * 0.28,
   );
-  cyanGlowRight.addColorStop(0, "rgba(125,211,252,0.16)");
-  cyanGlowRight.addColorStop(1, "rgba(125,211,252,0)");
-  context.fillStyle = cyanGlowRight;
+  indigoGlowRight.addColorStop(0, "rgba(125,211,252,0.16)");
+  indigoGlowRight.addColorStop(1, "rgba(125,211,252,0)");
+  context.fillStyle = indigoGlowRight;
   context.fillRect(0, 0, width, height);
 
   context.save();

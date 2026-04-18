@@ -1,32 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
-  CircleIcon,
   CrosshairIcon,
   EyeIcon,
   EyeOffIcon,
   FlipHorizontal2 as FlipHorizontal2Icon,
   FlipVertical2 as FlipVertical2Icon,
   GripVertical,
-  Layers2Icon,
   LoaderCircleIcon,
   PinIcon,
   PlusIcon,
   RotateCcw,
   RotateCcwIcon,
   RotateCwIcon,
-  SparklesIcon,
   Trash2Icon,
-  Undo2Icon,
-  XIcon,
 } from "lucide-react";
-import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Group } from "@/components/ui/group";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverPopup, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -34,20 +27,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import type {
-  ViewerAccessLevel,
-  ViewerAnnotation,
   ViewerStructure,
   ViewerStructureGroup,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 import {
-  DEFAULT_ANNOTATION_COLOR,
   DEFAULT_GROUP_COLOR,
   EMPTY_ANNOTATION_FORM,
   type AnnotationFormState,
-  type FontScaleMode,
   type GroupFormState,
   type StructureFormState,
   type ViewerCanvasMode,
@@ -68,7 +56,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { ProjectRichTextEditor } from "@/components/anatomy/project-rich-text";
+import { AnatomicalAreaColorPicker } from "./modality-viewer/right-panel/anatomical-area-color-picker";
+import { AnatomicalPartEditorWindow } from "./modality-viewer/right-panel/anatomical-part-editor-window";
+import {
+  type PartInteractionMode,
+  PART_INTERACTION_MARKER,
+  parsePartInteractionModeFromDraft,
+  parsePartInteractionModeFromStructure,
+} from "./modality-viewer/right-panel/shared";
+import {
+  formatWeightingLabel,
+  toColorInputValue,
+} from "./modality-viewer/right-panel/utils";
+import { ViewerSidebarSection } from "./modality-viewer/right-panel/viewer-sidebar-section";
 
 type UpdateAnnotationForm = <Key extends keyof AnnotationFormState>(
   key: Key,
@@ -89,62 +89,29 @@ type RightPanelProps = {
   activeWeighting: string;
   annotationForm: AnnotationFormState;
   busy: boolean;
-  canEditAnnotationDetails: boolean;
-  canEditPinArea: boolean;
   canvasFlipHorizontal: boolean;
   canvasFlipVertical: boolean;
-  canvasMode: ViewerCanvasMode;
-  currentAnnotations: ViewerAnnotation[];
   currentAsset: ZoneModalityAsset | null;
-  darkMode: boolean;
-  fontScaleMode: FontScaleMode;
   groupForm: GroupFormState;
   groups: ViewerStructureGroup[];
   groupsById: Map<string, ViewerStructureGroup>;
-  isAuthoringMode: boolean;
-  modalityId: string;
-  overlayOpacity: number;
-  pinsOnly: boolean;
-  pointAnimation: boolean;
-  practiceMode: boolean;
-  reverseScroll: boolean;
-  selectedAnnotationId: string | null;
-  selectedGroupId: string | null;
-  selectedStructure: ViewerStructure | null;
   selectedStructureId: string | null;
-  showCrossReferences: boolean;
   showLabels: boolean;
-  showOrientation: boolean;
-  showStructureAdvanced: boolean;
   structureForm: StructureFormState;
   structures: ViewerStructure[];
-  structuresById: Map<string, ViewerStructure>;
-  targetedLabeling: boolean;
   visibleGroupIds: string[];
   weightings: string[];
-  zoneId: string;
   onAnnotationFormChange: UpdateAnnotationForm;
   onCanvasModeChange: (mode: ViewerCanvasMode) => void;
-  onCaptureSnapshot: () => void | Promise<void>;
   onClearPolygonDraft: () => void;
-  onDarkModeChange: (value: boolean) => void;
-  onDeleteAnnotation: (annotationId: string) => void | Promise<void>;
   onDeleteGroup: (groupId: string) => void | Promise<void>;
   onDeleteStructure: (structureId: string) => void | Promise<void>;
   onFlipCanvasHorizontal: () => void;
   onFlipCanvasVertical: () => void;
-  onFontScaleModeChange: (mode: FontScaleMode) => void;
   onGroupFormChange: UpdateGroupForm;
   onGroupVisibilityChange: (groupId: string, nextVisible: boolean) => void;
-  onNavigateNext: () => void;
-  onNavigatePrevious: () => void;
-  onOverlayOpacityChange: (value: number) => void;
-  onPinsOnlyChange: (value: boolean) => void;
-  onPointAnimationChange: (value: boolean) => void;
-  onPracticeModeChange: (value: boolean) => void;
   onResetGroup: () => void;
   onResetStructure: () => void;
-  onReverseScrollChange: (value: boolean) => void;
   onRotateCanvasLeft: () => void;
   onRotateCanvasRight: () => void;
   onSaveAnnotation: (options?: {
@@ -155,100 +122,14 @@ type RightPanelProps = {
     | ViewerStructure
     | null
     | Promise<ViewerStructure | null>;
-  onSelectAnnotation: (annotationId: string, structureId: string) => void;
   onSelectGroup: (groupId: string) => void;
   onSelectStructure: (structureId: string, groupId: string | null) => void;
-  onShowCrossReferencesChange: (value: boolean) => void;
   onShowLabelsChange: (value: boolean) => void;
-  onShowOrientationChange: (value: boolean) => void;
-  onStructureAdvancedToggle: () => void;
   onStructureFormChange: UpdateStructureForm;
-  onTargetedLabelingChange: (value: boolean) => void;
-  onUndoPolygonPoint: () => void;
   onVisibleGroupIdsChange: (groupIds: string[]) => void;
   onWeightingChange: (weighting: string) => void;
   handleReset: () => void;
 };
-
-type PartInteractionMode = "pointer" | "area";
-
-const PART_INTERACTION_MARKER = "interaction:";
-const PART_EDITOR_MIN_WIDTH = 680;
-const PART_EDITOR_MIN_HEIGHT = 440;
-const PART_EDITOR_RESPONSIVE_MIN_WIDTH = 360;
-const PART_EDITOR_RESPONSIVE_MIN_HEIGHT = 280;
-const PART_EDITOR_VIEWPORT_MARGIN = 8;
-const PART_EDITOR_DEFAULT_RECT = {
-  height: 620,
-  width: 980,
-  x: 120,
-  y: 84,
-};
-
-type PartEditorWindowRect = {
-  height: number;
-  width: number;
-  x: number;
-  y: number;
-};
-
-function getPartEditorViewportBounds() {
-  const maxWidth = Math.max(
-    PART_EDITOR_RESPONSIVE_MIN_WIDTH,
-    window.innerWidth - PART_EDITOR_VIEWPORT_MARGIN * 2,
-  );
-  const maxHeight = Math.max(
-    PART_EDITOR_RESPONSIVE_MIN_HEIGHT,
-    window.innerHeight - PART_EDITOR_VIEWPORT_MARGIN * 2,
-  );
-
-  return {
-    maxHeight,
-    maxWidth,
-    minHeight: Math.min(PART_EDITOR_MIN_HEIGHT, maxHeight),
-    minWidth: Math.min(PART_EDITOR_MIN_WIDTH, maxWidth),
-  };
-}
-
-function clampPartEditorRect(rect: PartEditorWindowRect): PartEditorWindowRect {
-  const bounds = getPartEditorViewportBounds();
-  const width = clampNumber(rect.width, bounds.minWidth, bounds.maxWidth);
-  const height = clampNumber(rect.height, bounds.minHeight, bounds.maxHeight);
-  const x = clampNumber(
-    rect.x,
-    PART_EDITOR_VIEWPORT_MARGIN,
-    Math.max(
-      PART_EDITOR_VIEWPORT_MARGIN,
-      window.innerWidth - width - PART_EDITOR_VIEWPORT_MARGIN,
-    ),
-  );
-  const y = clampNumber(
-    rect.y,
-    PART_EDITOR_VIEWPORT_MARGIN,
-    Math.max(
-      PART_EDITOR_VIEWPORT_MARGIN,
-      window.innerHeight - height - PART_EDITOR_VIEWPORT_MARGIN,
-    ),
-  );
-
-  return {
-    height,
-    width,
-    x,
-    y,
-  };
-}
-
-function getMaximizedPartEditorRect(): PartEditorWindowRect {
-  const bounds = getPartEditorViewportBounds();
-
-  return {
-    height: bounds.maxHeight,
-    width: bounds.maxWidth,
-    x: PART_EDITOR_VIEWPORT_MARGIN,
-    y: PART_EDITOR_VIEWPORT_MARGIN,
-  };
-}
 
 function getCanvasModeFromPartInteraction(
   mode: PartInteractionMode,
@@ -284,77 +165,38 @@ export function ModalityViewerRightPanel({
   activeWeighting,
   annotationForm,
   busy,
-  canEditAnnotationDetails,
-  canEditPinArea,
   canvasFlipHorizontal,
   canvasFlipVertical,
-  canvasMode,
-  currentAnnotations,
   currentAsset,
-  darkMode,
-  fontScaleMode,
   groupForm,
   groups,
   groupsById,
-  isAuthoringMode,
-  modalityId,
-  overlayOpacity,
-  pinsOnly,
-  pointAnimation,
-  practiceMode,
-  reverseScroll,
-  selectedAnnotationId,
-  selectedGroupId,
-  selectedStructure,
   selectedStructureId,
-  showCrossReferences,
   showLabels,
-  showOrientation,
-  showStructureAdvanced,
   structureForm,
   structures,
-  structuresById,
-  targetedLabeling,
   visibleGroupIds,
   weightings,
-  zoneId,
   onAnnotationFormChange,
   onCanvasModeChange,
-  onCaptureSnapshot,
   onClearPolygonDraft,
-  onDarkModeChange,
-  onDeleteAnnotation,
   onDeleteGroup,
   onDeleteStructure,
   onFlipCanvasHorizontal,
   onFlipCanvasVertical,
-  onFontScaleModeChange,
   onGroupFormChange,
   onGroupVisibilityChange,
-  onNavigateNext,
-  onNavigatePrevious,
-  onOverlayOpacityChange,
-  onPinsOnlyChange,
-  onPointAnimationChange,
-  onPracticeModeChange,
   onResetGroup,
   onResetStructure,
-  onReverseScrollChange,
   onRotateCanvasLeft,
   onRotateCanvasRight,
   onSaveAnnotation,
   onSaveGroup,
   onSaveStructure,
-  onSelectAnnotation,
   onSelectGroup,
   onSelectStructure,
-  onShowCrossReferencesChange,
   onShowLabelsChange,
-  onShowOrientationChange,
-  onStructureAdvancedToggle,
   onStructureFormChange,
-  onTargetedLabelingChange,
-  onUndoPolygonPoint,
   onVisibleGroupIdsChange,
   onWeightingChange,
   handleReset,
@@ -386,6 +228,7 @@ export function ModalityViewerRightPanel({
 
   useEffect(() => {
     if (selectedAnatomicalPartId && !groupsById.has(selectedAnatomicalPartId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedAnatomicalPartId(null);
       setShowCreatePartFrame(false);
       setShowPartEditorWindow(false);
@@ -394,6 +237,7 @@ export function ModalityViewerRightPanel({
 
   useEffect(() => {
     if (!showCreatePartFrame) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowPartEditorWindow(false);
     }
   }, [showCreatePartFrame]);
@@ -418,6 +262,7 @@ export function ModalityViewerRightPanel({
       return;
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPartInteractionMode(
       parsePartInteractionModeFromDraft(structureForm.learningPoints),
     );
@@ -1050,779 +895,5 @@ export function ModalityViewerRightPanel({
         </>
       ) : null}
     </aside>
-  );
-}
-
-function parsePartInteractionModeFromDraft(
-  learningPointsValue: string | null | undefined,
-): PartInteractionMode {
-  const marker = learningPointsValue
-    ?.split("\n")
-    .map((value) => value.trim())
-    .find((value) => value.startsWith(PART_INTERACTION_MARKER));
-
-  if (marker?.slice(PART_INTERACTION_MARKER.length).trim() === "area") {
-    return "area";
-  }
-
-  return "pointer";
-}
-
-function parsePartInteractionModeFromStructure(
-  structure: ViewerStructure,
-): PartInteractionMode {
-  const marker = structure.learningPoints.find((value) =>
-    value.startsWith(PART_INTERACTION_MARKER),
-  );
-
-  if (marker?.slice(PART_INTERACTION_MARKER.length).trim() === "area") {
-    return "area";
-  }
-
-  return "pointer";
-}
-
-function AnatomicalPartEditorWindow({
-  initialContent,
-  partTitle,
-  onClose,
-  onLongDescriptionChange,
-}: {
-  initialContent: string;
-  partTitle: string;
-  onClose: () => void;
-  onLongDescriptionChange: (value: string) => void;
-}) {
-  const [isMinimized, setIsMinimized] = useState(false);
-  const [isMaximized, setIsMaximized] = useState(false);
-  const [windowRect, setWindowRect] = useState<PartEditorWindowRect>(() => {
-    if (typeof window === "undefined") {
-      return PART_EDITOR_DEFAULT_RECT;
-    }
-
-    return clampPartEditorRect(PART_EDITOR_DEFAULT_RECT);
-  });
-  const previousWindowRectRef = useRef<PartEditorWindowRect>(
-    PART_EDITOR_DEFAULT_RECT,
-  );
-  const dragStateRef = useRef<{
-    originX: number;
-    originY: number;
-    pointerId: number;
-    startX: number;
-    startY: number;
-  } | null>(null);
-  const resizeStateRef = useRef<{
-    height: number;
-    pointerId: number;
-    startX: number;
-    startY: number;
-    width: number;
-  } | null>(null);
-  const [editorDraft, setEditorDraft] = useState(initialContent);
-
-  useEffect(() => {
-    setEditorDraft(initialContent);
-  }, [initialContent]);
-
-  const persistEditorDraft = () => {
-    onLongDescriptionChange(editorDraft.trim());
-  };
-
-  useEffect(() => {
-    const syncWindowRectToViewport = () => {
-      setWindowRect((current) =>
-        isMaximized
-          ? getMaximizedPartEditorRect()
-          : clampPartEditorRect(current),
-      );
-    };
-
-    syncWindowRectToViewport();
-    window.addEventListener("resize", syncWindowRectToViewport);
-
-    return () => {
-      window.removeEventListener("resize", syncWindowRectToViewport);
-    };
-  }, [isMaximized]);
-
-  const handleWindowClose = () => {
-    persistEditorDraft();
-    onClose();
-  };
-
-  const handleWindowMinimize = () => {
-    persistEditorDraft();
-    setIsMinimized(true);
-  };
-
-  const handleWindowMaximizeToggle = () => {
-    if (isMaximized) {
-      setWindowRect(clampPartEditorRect(previousWindowRectRef.current));
-      setIsMaximized(false);
-      return;
-    }
-
-    previousWindowRectRef.current = windowRect;
-    setIsMaximized(true);
-  };
-
-  if (isMinimized) {
-    return (
-      <div className="pointer-events-auto fixed bottom-4 right-4 z-90">
-        <div className="flex items-center gap-2 rounded-xl border border-white/15 bg-black/85 p-2 shadow-2xl backdrop-blur-md">
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => setIsMinimized(false)}
-          >
-            Restore Editor
-          </Button>
-          <div className="max-w-52 truncate text-xs text-white/70">
-            {partTitle.trim() || "New Anatomical Part"}
-          </div>
-          <Button
-            type="button"
-            size="icon"
-            variant="secondary"
-            onClick={handleWindowClose}
-          >
-            <XIcon className="size-4" />
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="pointer-events-none fixed inset-0 z-90">
-      <div
-        className="pointer-events-auto absolute"
-        style={{
-          height: windowRect.height,
-          left: windowRect.x,
-          top: windowRect.y,
-          width: windowRect.width,
-        }}
-      >
-        <div className="relative flex h-full min-h-0 flex-col overflow-visible rounded-xl bg-[#1f1f1f]">
-          <div
-            className={cn(
-              "flex h-8 shrink-0 select-none items-center gap-3 bg-[#151515] px-3 rounded-tl-xl rounded-tr-xl",
-              isMaximized ? "cursor-default" : "cursor-move",
-            )}
-            onPointerCancel={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-              dragStateRef.current = null;
-            }}
-            onPointerDown={(event) => {
-              if (isMaximized) {
-                return;
-              }
-
-              event.preventDefault();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              dragStateRef.current = {
-                originX: windowRect.x,
-                originY: windowRect.y,
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startY: event.clientY,
-              };
-            }}
-            onPointerMove={(event) => {
-              const dragState = dragStateRef.current;
-
-              if (!dragState || dragState.pointerId !== event.pointerId) {
-                return;
-              }
-
-              const deltaX = event.clientX - dragState.startX;
-              const deltaY = event.clientY - dragState.startY;
-              const maxX = Math.max(
-                PART_EDITOR_VIEWPORT_MARGIN,
-                window.innerWidth -
-                  windowRect.width -
-                  PART_EDITOR_VIEWPORT_MARGIN,
-              );
-              const maxY = Math.max(
-                PART_EDITOR_VIEWPORT_MARGIN,
-                window.innerHeight -
-                  windowRect.height -
-                  PART_EDITOR_VIEWPORT_MARGIN,
-              );
-
-              setWindowRect((current) => ({
-                ...current,
-                x: clampNumber(
-                  dragState.originX + deltaX,
-                  PART_EDITOR_VIEWPORT_MARGIN,
-                  maxX,
-                ),
-                y: clampNumber(
-                  dragState.originY + deltaY,
-                  PART_EDITOR_VIEWPORT_MARGIN,
-                  maxY,
-                ),
-              }));
-            }}
-            onPointerUp={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-              dragStateRef.current = null;
-            }}
-          >
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                aria-label="Close editor"
-                type="button"
-                className="size-3 rounded-full border border-black/25 bg-[#ff5f57] transition hover:brightness-95 cursor-pointer"
-                onClick={handleWindowClose}
-                onPointerDown={(event) => event.stopPropagation()}
-              />
-              <button
-                aria-label="Minimize editor"
-                type="button"
-                className="size-3 rounded-full border border-black/25 bg-[#febc2e] transition hover:brightness-95 cursor-pointer"
-                onClick={handleWindowMinimize}
-                onPointerDown={(event) => event.stopPropagation()}
-              />
-              <button
-                aria-label={isMaximized ? "Restore editor" : "Maximize editor"}
-                type="button"
-                className="size-3 rounded-full border border-black/25 bg-[#28c840] transition hover:brightness-95 cursor-pointer"
-                onClick={handleWindowMaximizeToggle}
-                onPointerDown={(event) => event.stopPropagation()}
-              />
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <div className="mx-auto max-w-lg rounded-md border border-white/10 bg-black/30 px-3 py-1 text-center">
-                <span className="block truncate text-[11px] text-white/65">
-                  {partTitle.trim() || "New Anatomical Part"}
-                </span>
-              </div>
-            </div>
-
-            <div className="h-3 w-13 shrink-0" />
-          </div>
-
-          <section className="project-rich-text min-h-0 bg-black/20">
-            <ProjectRichTextEditor
-              className="h-full"
-              variant="workspace"
-              title={partTitle.trim() || "New Anatomical Part"}
-              value={editorDraft}
-              onChange={(value: string) => {
-                setEditorDraft(value);
-                onLongDescriptionChange(value);
-              }}
-            />
-          </section>
-        </div>
-
-        {!isMaximized ? (
-          <div
-            className="absolute bottom-2 right-2 z-30 size-4 cursor-se-resize rounded-sm border border-white/35 bg-black/40"
-            onPointerCancel={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-              resizeStateRef.current = null;
-            }}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              resizeStateRef.current = {
-                height: windowRect.height,
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startY: event.clientY,
-                width: windowRect.width,
-              };
-            }}
-            onPointerMove={(event) => {
-              const resizeState = resizeStateRef.current;
-
-              if (!resizeState || resizeState.pointerId !== event.pointerId) {
-                return;
-              }
-
-              const widthDelta = event.clientX - resizeState.startX;
-              const heightDelta = event.clientY - resizeState.startY;
-              const bounds = getPartEditorViewportBounds();
-              const maxWidth = Math.max(
-                bounds.minWidth,
-                window.innerWidth - windowRect.x - PART_EDITOR_VIEWPORT_MARGIN,
-              );
-              const maxHeight = Math.max(
-                bounds.minHeight,
-                window.innerHeight - windowRect.y - PART_EDITOR_VIEWPORT_MARGIN,
-              );
-
-              setWindowRect((current) => ({
-                ...current,
-                width: clampNumber(
-                  resizeState.width + widthDelta,
-                  bounds.minWidth,
-                  maxWidth,
-                ),
-                height: clampNumber(
-                  resizeState.height + heightDelta,
-                  bounds.minHeight,
-                  maxHeight,
-                ),
-              }));
-            }}
-            onPointerUp={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-              resizeStateRef.current = null;
-            }}
-          />
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-type HsvColor = {
-  h: number;
-  s: number;
-  v: number;
-};
-
-function AnatomicalAreaColorPicker({
-  colorHex,
-  onColorChange,
-}: {
-  colorHex: string;
-  onColorChange: (value: string) => void;
-}) {
-  const [hsvColor, setHsvColor] = useState<HsvColor>(() => hexToHsv(colorHex));
-  const hsvColorRef = useRef(hsvColor);
-  const saturationRef = useRef<HTMLDivElement | null>(null);
-  const hueRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    hsvColorRef.current = hsvColor;
-  }, [hsvColor]);
-
-  useEffect(() => {
-    const nextHsvColor = hexToHsv(colorHex);
-
-    setHsvColor((current) => {
-      const hueDelta = Math.abs(
-        normalizeHue(current.h) - normalizeHue(nextHsvColor.h),
-      );
-      const isCloseHue = Math.min(hueDelta, 360 - hueDelta) < 0.25;
-      const isCloseSaturation = Math.abs(current.s - nextHsvColor.s) < 0.002;
-      const isCloseValue = Math.abs(current.v - nextHsvColor.v) < 0.002;
-
-      if (isCloseHue && isCloseSaturation && isCloseValue) {
-        return current;
-      }
-
-      return nextHsvColor;
-    });
-  }, [colorHex]);
-
-  const commitColor = (next: HsvColor) => {
-    const normalized = normalizeHsv(next);
-    const nextHex = hsvToHex(normalized);
-
-    hsvColorRef.current = normalized;
-    setHsvColor(normalized);
-
-    if (nextHex.toLowerCase() !== colorHex.toLowerCase()) {
-      onColorChange(nextHex);
-    }
-  };
-
-  const updateSaturationValue = (clientX: number, clientY: number) => {
-    const element = saturationRef.current;
-
-    if (!element) {
-      return;
-    }
-
-    const rect = element.getBoundingClientRect();
-    const nextSaturation = clampNumber(
-      (clientX - rect.left) / rect.width,
-      0,
-      1,
-    );
-    const nextValue = clampNumber(1 - (clientY - rect.top) / rect.height, 0, 1);
-    const current = hsvColorRef.current;
-
-    commitColor({
-      h: current.h,
-      s: nextSaturation,
-      v: nextValue,
-    });
-  };
-
-  const updateHue = (clientX: number) => {
-    const element = hueRef.current;
-
-    if (!element) {
-      return;
-    }
-
-    const rect = element.getBoundingClientRect();
-    const ratio = clampNumber((clientX - rect.left) / rect.width, 0, 1);
-    const current = hsvColorRef.current;
-
-    commitColor({
-      h: ratio * 360,
-      s: current.s,
-      v: current.v,
-    });
-  };
-
-  const saturationCursorLeft = `${hsvColor.s * 100}%`;
-  const saturationCursorTop = `${(1 - hsvColor.v) * 100}%`;
-  const hueCursorLeft = `${(normalizeHue(hsvColor.h) / 360) * 100}%`;
-  const hueBaseColor = hsvToHex({ h: hsvColor.h, s: 1, v: 1 });
-  const displayHex = hsvToHex(hsvColor);
-
-  return (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <button type="button" className="flex items-center gap-3 text-left" />
-        }
-      >
-        <span
-          className="size-5 rounded-full"
-          style={{ backgroundColor: displayHex }}
-        />
-        <span className="text-[14px] font-semibold leading-none">
-          Pick a color
-        </span>
-      </PopoverTrigger>
-
-      <PopoverPopup
-        align="start"
-        sideOffset={8}
-        className="w-60 border-none p-0 shadow-none before:hidden [--viewport-inline-padding:0] rounded-2xl"
-        viewport="p-0"
-      >
-        <div className="p-2">
-          <div
-            ref={saturationRef}
-            role="presentation"
-            tabIndex={0}
-            className="relative aspect-square w-full cursor-crosshair touch-none overflow-hidden rounded-2xl outline-none"
-            style={{ backgroundColor: hueBaseColor }}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              updateSaturationValue(event.clientX, event.clientY);
-            }}
-            onPointerMove={(event) => {
-              if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-                return;
-              }
-
-              updateSaturationValue(event.clientX, event.clientY);
-            }}
-            onPointerUp={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-            }}
-            onPointerCancel={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-            }}
-          >
-            <div className="pointer-events-none absolute inset-0 bg-linear-to-r from-white to-transparent" />
-            <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-black to-transparent" />
-            <span
-              className="pointer-events-none absolute size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.55)]"
-              style={{ left: saturationCursorLeft, top: saturationCursorTop }}
-            >
-              <span className="absolute inset-1 rounded-full bg-transparent" />
-            </span>
-          </div>
-
-          <div className="mt-1 flex items-center justify-between px-0.5 text-sm">
-            <span>Hue</span>
-            <span className="tabular-nums">{hsvColor.h.toFixed(2)}°</span>
-          </div>
-
-          <div
-            ref={hueRef}
-            role="presentation"
-            className="relative mt-1 h-5 w-full cursor-ew-resize touch-none overflow-hidden rounded-full border border-white/15"
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              updateHue(event.clientX);
-            }}
-            onPointerMove={(event) => {
-              if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-                return;
-              }
-
-              updateHue(event.clientX);
-            }}
-            onPointerUp={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-            }}
-            onPointerCancel={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.currentTarget.releasePointerCapture(event.pointerId);
-              }
-            }}
-          >
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,#ff0000,#ffff00,#00ff00,#00ffff,#0000ff,#ff00ff,#ff0000)]" />
-            <span
-              className="pointer-events-none absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5)]"
-              style={{ left: hueCursorLeft }}
-            >
-              <span className="absolute inset-1 rounded-full bg-transparent" />
-            </span>
-          </div>
-        </div>
-      </PopoverPopup>
-    </Popover>
-  );
-}
-
-function normalizeHue(value: number) {
-  const normalized = value % 360;
-
-  return normalized < 0 ? normalized + 360 : normalized;
-}
-
-function clampNumber(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function normalizeHsv(color: HsvColor): HsvColor {
-  return {
-    h: normalizeHue(color.h),
-    s: clampNumber(color.s, 0, 1),
-    v: clampNumber(color.v, 0, 1),
-  };
-}
-
-function hsvToHex(color: HsvColor) {
-  const normalized = normalizeHsv(color);
-  const chroma = normalized.v * normalized.s;
-  const hueSection = normalized.h / 60;
-  const component = chroma * (1 - Math.abs((hueSection % 2) - 1));
-  const match = normalized.v - chroma;
-
-  let rPrime = 0;
-  let gPrime = 0;
-  let bPrime = 0;
-
-  if (hueSection >= 0 && hueSection < 1) {
-    rPrime = chroma;
-    gPrime = component;
-  } else if (hueSection < 2) {
-    rPrime = component;
-    gPrime = chroma;
-  } else if (hueSection < 3) {
-    gPrime = chroma;
-    bPrime = component;
-  } else if (hueSection < 4) {
-    gPrime = component;
-    bPrime = chroma;
-  } else if (hueSection < 5) {
-    rPrime = component;
-    bPrime = chroma;
-  } else {
-    rPrime = chroma;
-    bPrime = component;
-  }
-
-  const red = Math.round((rPrime + match) * 255)
-    .toString(16)
-    .padStart(2, "0");
-  const green = Math.round((gPrime + match) * 255)
-    .toString(16)
-    .padStart(2, "0");
-  const blue = Math.round((bPrime + match) * 255)
-    .toString(16)
-    .padStart(2, "0");
-
-  return `#${red}${green}${blue}`.toUpperCase();
-}
-
-function hexToHsv(hex: string): HsvColor {
-  const normalizedHex = toColorInputValue(hex, DEFAULT_GROUP_COLOR).slice(1);
-  const red = parseInt(normalizedHex.slice(0, 2), 16) / 255;
-  const green = parseInt(normalizedHex.slice(2, 4), 16) / 255;
-  const blue = parseInt(normalizedHex.slice(4, 6), 16) / 255;
-
-  const max = Math.max(red, green, blue);
-  const min = Math.min(red, green, blue);
-  const delta = max - min;
-
-  let hue = 0;
-
-  if (delta !== 0) {
-    if (max === red) {
-      hue = ((green - blue) / delta) % 6;
-    } else if (max === green) {
-      hue = (blue - red) / delta + 2;
-    } else {
-      hue = (red - green) / delta + 4;
-    }
-  }
-
-  const saturation = max === 0 ? 0 : delta / max;
-
-  return normalizeHsv({
-    h: hue * 60,
-    s: saturation,
-    v: max,
-  });
-}
-
-function formatWeightingLabel(value: string) {
-  switch (value) {
-    case "all":
-      return "All";
-    case "t1_gado":
-      return "T1 Gado";
-    case "t2_star":
-      return "T2*";
-    default:
-      return value.toUpperCase();
-  }
-}
-
-function getCanvasModeLabel(mode: ViewerCanvasMode) {
-  switch (mode) {
-    case "create-label":
-      return "Place pin";
-    case "set-anchor":
-      return "Move pin";
-    case "set-label":
-      return "Move name";
-    case "draw-region":
-      return "Draw area";
-    case "browse":
-    default:
-      return "Browse";
-  }
-}
-
-function getCanvasModeDescription(mode: ViewerCanvasMode) {
-  switch (mode) {
-    case "create-label":
-      return "Click once on the image to place a new teaching pin.";
-    case "set-anchor":
-      return "Click the image to move the pin to a better teaching point.";
-    case "set-label":
-      return "Click the image to move the visible name to a clearer position.";
-    case "draw-region":
-      return "Click around the structure to outline the teaching area. Double-click the image when the shape is complete.";
-    case "browse":
-    default:
-      return "Browse the study, select a topic, or start a new pin or area.";
-  }
-}
-
-function toColorInputValue(value: string | null | undefined, fallback: string) {
-  const normalized = value?.trim() ?? "";
-
-  return /^#[0-9a-fA-F]{6}$/.test(normalized) ? normalized : fallback;
-}
-
-function ViewerSidebarSection({
-  actions,
-  children,
-  title,
-  className,
-}: {
-  actions?: ReactNode;
-  children: ReactNode;
-  title: string;
-  className?: string;
-}) {
-  return (
-    <section
-      className={cn(
-        "border-t dark:border-white/8 py-4 first:border-t-0 first:pt-0",
-        className,
-      )}
-    >
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold">{title}</div>
-        {actions ? <div className="shrink-0">{actions}</div> : null}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function TogglePill({
-  active,
-  label,
-  onToggle,
-}: {
-  active: boolean;
-  label: string;
-  onToggle: (value: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        "rounded-xl border px-3 py-2 text-sm transition",
-        active
-          ? "border-cyan-400 bg-cyan-500/10 text-white"
-          : "border-white/10 text-white/60",
-      )}
-      onClick={() => onToggle(!active)}
-    >
-      {label}
-    </button>
-  );
-}
-
-function ToggleRow({
-  active,
-  label,
-  onToggle,
-}: {
-  active: boolean;
-  label: string;
-  onToggle: (value: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="flex w-full items-center justify-between rounded-xl border border-white/8 px-3 py-2 text-sm"
-      onClick={() => onToggle(!active)}
-    >
-      <span>{label}</span>
-      <span
-        className={cn(
-          "inline-flex h-6 w-11 items-center rounded-full p-1 transition",
-          active ? "bg-cyan-500/80" : "bg-white/12",
-        )}
-      >
-        <span
-          className={cn(
-            "h-4 w-4 rounded-full bg-white transition",
-            active ? "translate-x-5" : "translate-x-0",
-          )}
-        />
-      </span>
-    </button>
   );
 }
