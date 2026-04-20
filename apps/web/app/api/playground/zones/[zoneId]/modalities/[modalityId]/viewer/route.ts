@@ -68,6 +68,7 @@ export async function GET(request: Request, context: RouteContext) {
         headers: buildInternalAdminHeaders(result.user),
       },
     )
+    const signedTokenNow = Date.now()
 
     return NextResponse.json({
       ...viewer,
@@ -76,6 +77,7 @@ export async function GET(request: Request, context: RouteContext) {
           ? createDerivedAssetSearchParams({
               accountId: result.user.apiAccountId,
               assetId: asset.id,
+              now: signedTokenNow,
               userId: result.user.id,
               variant: "image",
             })
@@ -84,6 +86,7 @@ export async function GET(request: Request, context: RouteContext) {
           ? createDerivedAssetSearchParams({
               accountId: result.user.apiAccountId,
               assetId: asset.id,
+              now: signedTokenNow,
               userId: result.user.id,
               variant: "thumbnail",
             })

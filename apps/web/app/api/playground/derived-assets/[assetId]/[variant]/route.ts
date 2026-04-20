@@ -68,6 +68,8 @@ export async function GET(request: Request, context: RouteContext) {
         id: userId!,
       }
     : result!.user
+  const ifNoneMatch = request.headers.get("if-none-match")
+  const ifModifiedSince = request.headers.get("if-modified-since")
 
   try {
     const response = await fetch(
@@ -80,10 +82,34 @@ export async function GET(request: Request, context: RouteContext) {
         headers: {
           ...buildInternalAdminHeaders(requestUser),
           Accept: "*/*",
+          ...(ifNoneMatch ? { "if-none-match": ifNoneMatch } : {}),
+          ...(ifModifiedSince
+            ? { "if-modified-since": ifModifiedSince }
+            : {}),
         },
         cache: "no-store",
       },
     )
+
+    const cacheControl = hasSignedAccess
+      ? "private, max-age=31536000, immutable"
+      : response.headers.get("cache-control") ?? "private, max-age=86400"
+    const contentType =
+      response.headers.get("content-type") ?? "application/octet-stream"
+    const contentLength = response.headers.get("content-length")
+    const etag = response.headers.get("etag")
+    const lastModified = response.headers.get("last-modified")
+
+    if (response.status === 304) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          "cache-control": cacheControl,
+          ...(etag ? { etag } : {}),
+          ...(lastModified ? { "last-modified": lastModified } : {}),
+        },
+      })
+    }
 
     if (!response.ok) {
       throw await parseApiError(response)
@@ -92,14 +118,11 @@ export async function GET(request: Request, context: RouteContext) {
     return new NextResponse(response.body, {
       status: response.status,
       headers: {
-        "cache-control": hasSignedAccess
-          ? "private, max-age=31536000, immutable"
-          : response.headers.get("cache-control") ?? "private, max-age=86400",
-        "content-type":
-          response.headers.get("content-type") ?? "application/octet-stream",
-        ...(response.headers.get("content-length")
-          ? { "content-length": response.headers.get("content-length")! }
-          : {}),
+        "cache-control": cacheControl,
+        "content-type": contentType,
+        ...(contentLength ? { "content-length": contentLength } : {}),
+        ...(etag ? { etag } : {}),
+        ...(lastModified ? { "last-modified": lastModified } : {}),
       },
     })
   } catch (error) {

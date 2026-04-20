@@ -15,6 +15,7 @@ type DerivedAssetTokenPayload = {
 }
 
 const DERIVED_ASSET_TOKEN_TTL_SECONDS = 60 * 60 * 8
+const DERIVED_ASSET_TOKEN_CACHE_WINDOW_SECONDS = 60 * 5
 const DERIVED_ASSET_TOKEN_NAMESPACE = "playground-derived-asset-v1"
 
 function signDerivedAssetPayload({
@@ -42,7 +43,14 @@ export function createDerivedAssetSearchParams({
   userId: string
   variant: DerivedAssetVariant
 }) {
-  const expires = Math.floor(now / 1000) + DERIVED_ASSET_TOKEN_TTL_SECONDS
+  const nowSeconds = Math.floor(now / 1000)
+  const cacheWindowBoundarySeconds =
+    Math.floor(nowSeconds / DERIVED_ASSET_TOKEN_CACHE_WINDOW_SECONDS) *
+    DERIVED_ASSET_TOKEN_CACHE_WINDOW_SECONDS
+  const expires =
+    cacheWindowBoundarySeconds +
+    DERIVED_ASSET_TOKEN_CACHE_WINDOW_SECONDS +
+    DERIVED_ASSET_TOKEN_TTL_SECONDS
   const token = signDerivedAssetPayload({
     accountId,
     assetId,
