@@ -1,6 +1,22 @@
-import { ArrowLeft, ArrowRight, LayoutGrid, Redo2, Trash, Undo2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  LayoutGrid,
+  LoaderCircleIcon,
+  Redo2,
+  Trash,
+  Undo2,
+} from "lucide-react";
 import NextImage from "next/image";
-import type { MutableRefObject, WheelEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type MutableRefObject,
+  type MouseEvent as ReactMouseEvent,
+  type WheelEvent,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -30,6 +46,7 @@ type SliceFilmstripProps = {
   filmstripScrollerRef: MutableRefObject<HTMLDivElement | null>;
   hasPendingSliceTimelineChanges: boolean;
   isApplyingSliceChanges: boolean;
+  isAssetLoading: boolean;
   navigationAssetIndex: number;
   pendingDeletedSliceIds: string[];
   pendingSliceSortUpdates: Array<{ asset: ZoneModalityAsset; nextSortOrder: number }>;
@@ -64,6 +81,7 @@ export function SliceFilmstrip({
   filmstripScrollerRef,
   hasPendingSliceTimelineChanges,
   isApplyingSliceChanges,
+  isAssetLoading,
   navigationAssetIndex,
   pendingDeletedSliceIds,
   pendingSliceSortUpdates,
@@ -84,12 +102,103 @@ export function SliceFilmstrip({
   onWheel,
   onRedo,
 }: SliceFilmstripProps) {
+  const onSelectAssetRef = useRef(onSelectAsset);
+
+  useEffect(() => {
+    onSelectAssetRef.current = onSelectAsset;
+  }, [onSelectAsset]);
+
+  const handleSelectAsset = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
+      const assetIndex = Number(event.currentTarget.dataset.assetIndex);
+
+      if (Number.isNaN(assetIndex)) {
+        return;
+      }
+
+      onSelectAssetRef.current(assetIndex);
+    },
+    [],
+  );
+
+  const navigationLabel =
+    navigationAssetIndex >= 0
+      ? `${navigationAssetIndex + 1}/${totalSliceCount}`
+      : `0/${totalSliceCount}`;
+
+  const filmstripButtons = useMemo(
+    () =>
+      filmstripAssets.map(({ asset, assetIndex }) => (
+        <button
+          key={asset.id}
+          data-asset-id={asset.id}
+          data-asset-index={assetIndex}
+          type="button"
+          className={cn(
+            "group relative w-9 shrink-0 overflow-hidden rounded-sm border border-transparent text-left transition",
+            asset.id === activeAssetId
+              ? "bg-indigo-500/20 opacity-100"
+              : "bg-black/20 opacity-60 hover:bg-white/6 hover:opacity-100",
+          )}
+          onClick={handleSelectAsset}
+        >
+          <div className="aspect-square bg-black/40">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt={asset.label}
+              className="h-full w-full object-cover"
+              decoding="async"
+              fetchPriority="low"
+              loading="lazy"
+              src={asset.thumbnailUrl || asset.imageUrl}
+            />
+          </div>
+        </button>
+      )),
+    [activeAssetId, filmstripAssets, handleSelectAsset],
+  );
+
+  const editorButtons = useMemo(
+    () =>
+      filmstripAssets.map(({ asset, assetIndex }) => (
+        <button
+          key={`editor-${asset.id}`}
+          data-asset-id={asset.id}
+          data-asset-index={assetIndex}
+          type="button"
+          className={cn(
+            "relative w-32 shrink-0 overflow-hidden rounded-md border text-left transition",
+            asset.id === activeAssetId
+              ? "border-indigo-600"
+              : "hover:border-white/45",
+          )}
+          onClick={handleSelectAsset}
+        >
+          <div className="aspect-square bg-black/50">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt={asset.label}
+              className="h-full w-full object-cover"
+              decoding="async"
+              fetchPriority="low"
+              loading="lazy"
+              src={asset.thumbnailUrl || asset.imageUrl}
+            />
+          </div>
+          <div className="absolute top-0 px-1.5 py-1 text-[10px] font-semibold">
+            {assetIndex + 1}
+          </div>
+        </button>
+      )),
+    [activeAssetId, filmstripAssets, handleSelectAsset],
+  );
+
   return (
-    <div className="absolute bottom-0 left-0 w-full px-2">
+    <div className="absolute bottom-1 left-0 w-full px-1">
       <div
         className={cn(
           "rounded-sm bg-white/3 backdrop-blur-sm transition-all",
-          showSliceEditorPanel && "pb-2",
+          showSliceEditorPanel && "pb-1",
         )}
       >
         <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 p-1">
@@ -117,34 +226,7 @@ export function SliceFilmstrip({
               className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-[#f4f4f5] p-1 dark:bg-[#121212]"
               onWheel={onWheel}
             >
-              <div className="flex w-max items-end gap-1">
-                {filmstripAssets.map(({ asset, assetIndex }) => (
-                  <button
-                    key={asset.id}
-                    data-asset-id={asset.id}
-                    type="button"
-                    className={cn(
-                      "group relative w-9 shrink-0 overflow-hidden rounded-sm border border-transparent text-left transition",
-                      asset.id === activeAssetId
-                        ? "bg-indigo-500/20 opacity-100"
-                        : "bg-black/20 opacity-60 hover:bg-white/6 hover:opacity-100",
-                    )}
-                    onClick={() => onSelectAsset(assetIndex)}
-                  >
-                    <div className="aspect-square bg-black/40">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        alt={asset.label}
-                        className="h-full w-full object-cover"
-                        decoding="async"
-                        fetchPriority="low"
-                        loading="lazy"
-                        src={asset.thumbnailUrl || asset.imageUrl}
-                      />
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <div className="flex w-max items-end gap-1">{filmstripButtons}</div>
             </div>
           </div>
 
@@ -156,9 +238,14 @@ export function SliceFilmstrip({
               <ArrowLeft />
             </Button>
             <p className="w-24 pr-1 text-center text-sm font-semibold tabular-nums dark:text-white/85">
-              {navigationAssetIndex >= 0
-                ? `${navigationAssetIndex + 1}/${totalSliceCount}`
-                : `0/${totalSliceCount}`}
+              {isAssetLoading ? (
+                <span className="inline-flex items-center justify-center gap-1.5">
+                  <LoaderCircleIcon className="size-3 animate-spin" />
+                  {navigationLabel}
+                </span>
+              ) : (
+                navigationLabel
+              )}
             </p>
             <Button size="icon" onClick={onNext}>
               <ArrowRight />
@@ -252,37 +339,7 @@ export function SliceFilmstrip({
               className="no-scrollbar h-36.25 overflow-x-auto rounded-md bg-black/35 p-2"
               onWheel={onWheel}
             >
-              <div className="flex w-max items-start gap-2">
-                {filmstripAssets.map(({ asset, assetIndex }) => (
-                  <button
-                    key={`editor-${asset.id}`}
-                    data-asset-id={asset.id}
-                    type="button"
-                    className={cn(
-                      "relative w-32 shrink-0 overflow-hidden rounded-md border text-left transition",
-                      asset.id === activeAssetId
-                        ? "border-indigo-600"
-                        : "hover:border-white/45",
-                    )}
-                    onClick={() => onSelectAsset(assetIndex)}
-                  >
-                    <div className="aspect-square bg-black/50">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        alt={asset.label}
-                        className="h-full w-full object-cover"
-                        decoding="async"
-                        fetchPriority="low"
-                        loading="lazy"
-                        src={asset.thumbnailUrl || asset.imageUrl}
-                      />
-                    </div>
-                    <div className="absolute top-0 px-1.5 py-1 text-[10px] font-semibold">
-                      {assetIndex + 1}
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <div className="flex w-max items-start gap-2">{editorButtons}</div>
             </div>
           </div>
         ) : null}

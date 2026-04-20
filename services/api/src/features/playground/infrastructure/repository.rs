@@ -701,6 +701,41 @@ impl PlaygroundRepository {
         Ok(deleted_rows.rows_affected() > 0)
     }
 
+    pub async fn delete_zone_modality_assets(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        asset_ids: &[Uuid],
+    ) -> Result<u64, sqlx::Error> {
+        if asset_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let deleted_rows = sqlx::query(
+            r#"
+            DELETE FROM anatomy_zone_modality_assets AS asset
+            USING anatomy_zone_modalities AS modality
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE
+                zone.account_id = $1
+                AND modality.zone_id = $2
+                AND modality.id = $3
+                AND asset.id = ANY($4::uuid[])
+                AND asset.modality_id = modality.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .bind(asset_ids)
+        .execute(pool)
+        .await?;
+
+        Ok(deleted_rows.rows_affected())
+    }
+
     pub async fn get_zone_modality_detail(
         &self,
         pool: &PgPool,

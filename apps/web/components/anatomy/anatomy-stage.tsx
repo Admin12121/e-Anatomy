@@ -971,15 +971,12 @@ function AnatomyAssembly({
                 } satisfies HoverZoneUserData
               }
               onPointerMove={(event) => {
-                event.stopPropagation();
                 onHoveredLayerChange(resolveHoveredLayer(event));
               }}
               onPointerOut={(event) => {
-                event.stopPropagation();
                 onHoveredLayerChange(resolveHoveredLayer(event));
               }}
               onPointerOver={(event) => {
-                event.stopPropagation();
                 onHoveredLayerChange(resolveHoveredLayer(event));
               }}
             >
@@ -1459,43 +1456,58 @@ function ZoneMarker({
   selected: boolean;
   tone?: "draft" | "saved";
 }) {
-  const markerColor =
-    tone === "draft" ? "#f59e0b" : selected ? "#f97316" : "#fb7185";
-  const ringColor =
-    tone === "draft" ? "#fcd34d" : selected ? "#fdba74" : "#fecdd3";
+  const [hovered, setHovered] = useState(false);
+  const isInteractive = Boolean(onClick);
+  const emphasized = selected || hovered;
+  const coreClass =
+    tone === "draft"
+      ? "bg-orange-400"
+      : emphasized
+        ? "bg-[#7caeff85]"
+        : "bg-[#8fb6ff85]";
+  const showLabel = hovered || selected || tone === "draft";
 
   return (
     <group position={[position.x, position.y, position.z]}>
-      <mesh
-        onClick={
-          onClick
-            ? (event) => {
-                event.stopPropagation();
-                onClick();
-              }
-            : undefined
-        }
-      >
-        <sphereGeometry args={[9000, 24, 24]} />
-        <meshBasicMaterial color={markerColor} depthWrite={false} />
-      </mesh>
-      <mesh scale={selected ? 1.9 : 1.55}>
-        <ringGeometry args={[6800, 8400, 32]} />
-        <meshBasicMaterial
-          color={ringColor}
-          depthWrite={false}
-          opacity={selected ? 0.92 : 0.8}
-          side={DoubleSide}
-          transparent
-        />
-      </mesh>
-      {selected ? (
-        <Html distanceFactor={14} position={[26000, 6000, 0]}>
-          <div className="rounded-sm border border-white/15 bg-black/70 px-2 py-1 text-sm font-medium text-white shadow-lg backdrop-blur">
-            {label}
-          </div>
-        </Html>
-      ) : null}
+      <Html center distanceFactor={14}>
+        <div className="relative pointer-events-none">
+          <button
+            type="button"
+            className={cn(
+              "relative pointer-events-auto flex size-5 items-center justify-center rounded-full transition-transform duration-150",
+              emphasized && "scale-105",
+              !isInteractive && "cursor-default",
+            )}
+            onClick={
+              onClick
+                ? (event) => {
+                    event.stopPropagation();
+                    onClick();
+                  }
+                : undefined
+            }
+            onMouseEnter={() => {
+              setHovered(true);
+            }}
+            onMouseLeave={() => {
+              setHovered(false);
+            }}
+          >
+            <span
+              className={cn(
+                "absolute size-4 rounded-full border border-white/50",
+                coreClass,
+              )}
+            />
+            <span className="absolute size-[0.28rem] rounded-full bg-white/80" />
+          </button>
+          {showLabel ? (
+            <div className="pointer-events-none absolute left-full top-1/2 ml-1 -translate-y-1/2 whitespace-nowrap rounded-sm border border-white/20 bg-black/62 px-1.5 py-1 text-[10px] font-medium leading-none text-white">
+              {label}
+            </div>
+          ) : null}
+        </div>
+      </Html>
     </group>
   );
 }
@@ -1507,4 +1519,3 @@ function roundAnchorValue(value: number) {
 for (const layer of ANATOMY_LAYERS) {
   useGLTF.preload(layer.src);
 }
-

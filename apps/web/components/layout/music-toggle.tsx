@@ -17,6 +17,7 @@ export default function MusicToggle() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const waveRef = useRef({ ...WAVE_CONFIG })
   const rafRef = useRef<number | null>(null)
+  const renderWaveRef = useRef<(() => void) | null>(null)
   const timeRef = useRef(0)
   const [isPlaying, setIsPlaying] = useState(false)
 
@@ -50,14 +51,11 @@ export default function MusicToggle() {
     const wave = waveRef.current
     const midY = size / 2
 
-    function render() {
-      rafRef.current = window.requestAnimationFrame(render)
-
+    renderWaveRef.current = () => {
       context2d.clearRect(0, 0, size, size)
       context2d.strokeStyle = getComputedStyle(canvasElement).getPropertyValue("color")
       context2d.lineWidth = 1.5
 
-      timeRef.current += 1
       context2d.beginPath()
 
       let increment = 0
@@ -78,18 +76,48 @@ export default function MusicToggle() {
       context2d.stroke()
     }
 
-    render()
+    renderWaveRef.current()
 
     return () => {
+      renderWaveRef.current = null
+
       if (rafRef.current !== null) {
         window.cancelAnimationFrame(rafRef.current)
       }
     }
   }, [])
 
+  useEffect(() => {
+    if (!isPlaying) {
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+
+      renderWaveRef.current?.()
+      return
+    }
+
+    const renderFrame = () => {
+      timeRef.current += 1
+      renderWaveRef.current?.()
+      rafRef.current = window.requestAnimationFrame(renderFrame)
+    }
+
+    renderFrame()
+
+    return () => {
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+  }, [isPlaying])
+
   function handleToggle() {
     const audio = audioRef.current
     const wave = waveRef.current
+    const syncWaveFrame = () => renderWaveRef.current?.()
 
     if (!audio) {
       return
@@ -108,6 +136,7 @@ export default function MusicToggle() {
           stretch: 10,
           duration: 0.6,
           ease: "power2.out",
+          onUpdate: syncWaveFrame,
         })
       })
       gsap.to(wave, {
@@ -115,6 +144,7 @@ export default function MusicToggle() {
         stretch: 5,
         duration: 0.4,
         ease: "power2.out",
+        onUpdate: syncWaveFrame,
       })
       return
     }
@@ -125,6 +155,7 @@ export default function MusicToggle() {
       stretch: 10,
       duration: 0.6,
       ease: "power2.out",
+      onUpdate: syncWaveFrame,
     })
   }
 

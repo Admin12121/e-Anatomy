@@ -1,13 +1,16 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import {
+  AlertCircleIcon,
   FileArchiveIcon,
-  FolderOpenIcon,
+  ImageUpIcon,
   LoaderCircleIcon,
   SaveIcon,
   Trash2Icon,
   UploadIcon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -20,13 +23,14 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   analyzeModalityUploadFiles,
   formatSourceKindLabel,
+  isLikelyDicomFilename,
+  isZipFilename,
   type DetectedModalityUpload,
   ModalityUploadValidationError,
 } from "@/lib/playground/modality-upload-shared";
 import type {
   ModalityType,
   UpdateZoneModalityInput,
-  ZoneDetail,
   ZoneModality,
   ZoneModalityListResponse,
 } from "@/lib/playground/types";
@@ -75,12 +79,110 @@ type FileWithRelativePath = File & {
   webkitRelativePath?: string;
 };
 
+type FileSystemEntryWithWebkitApi = {
+  isDirectory?: boolean;
+  isFile?: boolean;
+};
+
+type FileSystemFileEntryWithWebkitApi = FileSystemEntryWithWebkitApi & {
+  file?: (
+    success: (file: File) => void,
+    error?: (error: unknown) => void,
+  ) => void;
+};
+
+type FileSystemDirectoryReaderWithWebkitApi = {
+  readEntries?: (
+    success: (entries: FileSystemEntryWithWebkitApi[]) => void,
+    error?: (error: unknown) => void,
+  ) => void;
+};
+
+type FileSystemDirectoryEntryWithWebkitApi = FileSystemEntryWithWebkitApi & {
+  createReader?: () => FileSystemDirectoryReaderWithWebkitApi;
+};
+
+type DataTransferItemWithWebkitEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntryWithWebkitApi | null;
+};
+
 type StudyUploadProgressState = {
   loadedBytes: number;
   phase: "uploading" | "processing";
   percent: number | null;
   totalBytes: number | null;
 };
+
+const UPLOAD_READY_PREVIEW_SRC = "/upload%20_ready.png";
+const MAX_UPLOAD_PATH_LENGTH = 260;
+const MAX_UPLOAD_FILES = 512;
+const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
+const DANGEROUS_PATH_PATTERN = /(^|[\\/])\.\.($|[\\/])/;
+
+function isSuspiciousUploadPath(pathValue: string) {
+  const normalized = pathValue.trim();
+
+  if (!normalized) {
+    return true;
+  }
+
+  if (normalized.length > MAX_UPLOAD_PATH_LENGTH) {
+    return true;
+  }
+
+  if (
+    normalized.startsWith("/") ||
+    normalized.startsWith("\\") ||
+    normalized.includes(":") ||
+    DANGEROUS_PATH_PATTERN.test(normalized) ||
+    CONTROL_CHAR_PATTERN.test(normalized)
+  ) {
+    return true;
+  }
+
+  return normalized
+    .split(/[\\/]/)
+    .map((segment) => segment.trim())
+    .some((segment) => !segment || segment === "." || segment === "..");
+}
+
+function getClientUploadValidationError(files: File[]) {
+  if (files.length === 0) {
+    return null;
+  }
+
+  if (files.length > MAX_UPLOAD_FILES) {
+    return "Too many files were dropped. Split the upload into smaller batches.";
+  }
+
+  const hasZip = files.some((file) => isZipFilename(file.name));
+
+  if (hasZip && files.length !== 1) {
+    return "ZIP packages must be uploaded by themselves.";
+  }
+
+  if (!hasZip && files.some((file) => !isLikelyDicomFilename(file.name))) {
+    return "Only one ZIP package or DICOM files are allowed.";
+  }
+
+  for (const file of files) {
+    if (file.size <= 0) {
+      return "Empty files are not allowed.";
+    }
+
+    if (isSuspiciousUploadPath(file.name)) {
+      return "A suspicious file name was detected. Upload was blocked.";
+    }
+
+    const relativePath = (file as FileWithRelativePath).webkitRelativePath?.trim();
+
+    if (relativePath && isSuspiciousUploadPath(relativePath)) {
+      return "A suspicious folder path was detected. Upload was blocked.";
+    }
+  }
+
+  return null;
+}
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -240,9 +342,109 @@ async function uploadStudyIntakeWithProgress({
   });
 }
 
-export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
+function readDirectoryBatch(
+  reader: FileSystemDirectoryReaderWithWebkitApi,
+): Promise<FileSystemEntryWithWebkitApi[]> {
+  return new Promise((resolve, reject) => {
+    if (!reader.readEntries) {
+      resolve([]);
+      return;
+    }
+
+    reader.readEntries(resolve, reject);
+  });
+}
+
+function readFileEntry(
+  entry: FileSystemFileEntryWithWebkitApi,
+): Promise<File | null> {
+  return new Promise((resolve) => {
+    if (!entry.file) {
+      resolve(null);
+      return;
+    }
+
+    entry.file(
+      (file) => resolve(file),
+      () => resolve(null),
+    );
+  });
+}
+
+async function collectFilesFromEntry(
+  entry: FileSystemEntryWithWebkitApi,
+): Promise<File[]> {
+  if (entry.isFile) {
+    const file = await readFileEntry(entry as FileSystemFileEntryWithWebkitApi);
+    return file ? [file] : [];
+  }
+
+  if (!entry.isDirectory) {
+    return [];
+  }
+
+  const directoryEntry = entry as FileSystemDirectoryEntryWithWebkitApi;
+  const reader = directoryEntry.createReader?.();
+
+  if (!reader) {
+    return [];
+  }
+
+  const files: File[] = [];
+
+  while (true) {
+    const entries = await readDirectoryBatch(reader);
+
+    if (!entries.length) {
+      break;
+    }
+
+    for (const childEntry of entries) {
+      const childFiles = await collectFilesFromEntry(childEntry);
+      files.push(...childFiles);
+    }
+  }
+
+  return files;
+}
+
+async function extractFilesFromDroppedItems(
+  items: DataTransferItem[],
+  fallbackFiles: File[],
+) {
+  if (!items.length) {
+    return fallbackFiles;
+  }
+
+  const extractedFiles: File[] = [];
+
+  for (const item of items) {
+    if (item.kind !== "file") {
+      continue;
+    }
+
+    const itemWithEntry = item as DataTransferItemWithWebkitEntry;
+    const entry = itemWithEntry.webkitGetAsEntry?.() ?? null;
+
+    if (entry) {
+      const entryFiles = await collectFilesFromEntry(entry);
+      extractedFiles.push(...entryFiles);
+      continue;
+    }
+
+    const file = item.getAsFile();
+
+    if (file) {
+      extractedFiles.push(file);
+    }
+  }
+
+  return extractedFiles.length > 0 ? extractedFiles : fallbackFiles;
+}
+
+export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   const dispatch = useAppDispatch();
-  const { data, isLoading } = useGetZoneModalitiesQuery(zone.id);
+  const { data, isLoading } = useGetZoneModalitiesQuery(zoneId);
   const modalities = data?.items ?? EMPTY_MODALITIES;
   const [editorMode, setEditorMode] = useState<EditorMode>("edit");
   const [activeModalityId, setActiveModalityId] = useState<string | null>(null);
@@ -258,14 +460,18 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   const [selectedSourceFiles, setSelectedSourceFiles] = useState<File[]>([]);
   const [isAnalyzingSource, setIsAnalyzingSource] = useState(false);
   const [isCreatingFromStudy, setIsCreatingFromStudy] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [showReadyPreview, setShowReadyPreview] = useState(false);
   const [uploadProgress, setUploadProgress] =
     useState<StudyUploadProgressState | null>(null);
   const [updateModality, { isLoading: isUpdating }] =
     useUpdateZoneModalityMutation();
   const [deleteModality, { isLoading: isDeleting }] =
     useDeleteZoneModalityMutation();
-  const dicomFolderInputRef = useRef<HTMLInputElement | null>(null);
-  const zipPackageInputRef = useRef<HTMLInputElement | null>(null);
+  const dragCounterRef = useRef(0);
+  const sourceInputRef = useRef<HTMLInputElement | null>(null);
+  const sourceFolderInputRef = useRef<HTMLInputElement | null>(null);
   const resolvedActiveModalityId =
     activeModalityId &&
     modalities.some((modality) => modality.id === activeModalityId)
@@ -286,7 +492,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
     }
 
     const stream = new EventSource(
-      `/api/playground/zones/${zone.id}/modalities/stream`,
+      `/api/playground/zones/${zoneId}/modalities/stream`,
     );
 
     function handleModalitiesEvent(event: MessageEvent<string>) {
@@ -295,7 +501,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
         dispatch(
           playgroundApi.util.updateQueryData(
             "getZoneModalities",
-            zone.id,
+            zoneId,
             (draft) => {
               draft.total = payload.total;
               draft.items.splice(0, draft.items.length, ...payload.items);
@@ -325,38 +531,68 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
       stream.removeEventListener("done", handleDoneEvent as EventListener);
       stream.close();
     };
-  }, [dispatch, hasActiveIngest, zone.id]);
+  }, [dispatch, hasActiveIngest, zoneId]);
 
   useEffect(() => {
-    const input = dicomFolderInputRef.current as
+    const folderInput = sourceFolderInputRef.current as
       | (HTMLInputElement & { webkitdirectory?: boolean })
       | null;
 
-    if (!input) {
+    if (!folderInput) {
       return;
     }
 
-    input.setAttribute("webkitdirectory", "");
-    input.setAttribute("directory", "");
-    input.webkitdirectory = true;
+    folderInput.setAttribute("webkitdirectory", "");
+    folderInput.setAttribute("directory", "");
+    folderInput.webkitdirectory = true;
   }, []);
 
-  function resetCreateState() {
-    setCreateName("");
-    setCreateNotes("");
+  useEffect(() => {
+    const sourceInput = sourceInputRef.current;
+
+    if (!sourceInput) {
+      return;
+    }
+
+    const handleCancel = () => {
+      if (isPending || selectedSourceFiles.length > 0) {
+        return;
+      }
+
+      sourceFolderInputRef.current?.click();
+    };
+
+    sourceInput.addEventListener("cancel", handleCancel as EventListener);
+
+    return () => {
+      sourceInput.removeEventListener("cancel", handleCancel as EventListener);
+    };
+  }, [isPending, selectedSourceFiles.length]);
+
+  function clearSelectedSource() {
     setCreateDetectedUpload(null);
     setCreateModalityTypeOverride("other");
     setSelectedSourceLabel(null);
     setSelectedSourceFiles([]);
+    setShowReadyPreview(false);
     setUploadProgress(null);
+    setUploadErrors([]);
+    setIsDragging(false);
+    dragCounterRef.current = 0;
 
-    if (dicomFolderInputRef.current) {
-      dicomFolderInputRef.current.value = "";
+    if (sourceInputRef.current) {
+      sourceInputRef.current.value = "";
     }
 
-    if (zipPackageInputRef.current) {
-      zipPackageInputRef.current.value = "";
+    if (sourceFolderInputRef.current) {
+      sourceFolderInputRef.current.value = "";
     }
+  }
+
+  function resetCreateState() {
+    setCreateName("");
+    setCreateNotes("");
+    clearSelectedSource();
   }
 
   function startCreateMode() {
@@ -369,15 +605,24 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
     setEditorMode("edit");
   }
 
-  async function handleSourceSelection(nextFiles: FileList | null) {
-    const files = Array.from(nextFiles ?? []);
+  async function processSelectedSourceFiles(files: File[]) {
+    const clientValidationError = getClientUploadValidationError(files);
+
+    if (clientValidationError) {
+      clearSelectedSource();
+      setUploadErrors([clientValidationError]);
+      toast.error(clientValidationError);
+      return;
+    }
+
     setSelectedSourceFiles(files);
     const sourceLabel = getSelectedSourceLabel(files);
     setSelectedSourceLabel(sourceLabel);
+    setUploadErrors([]);
+    setShowReadyPreview(false);
 
     if (files.length === 0) {
-      setCreateDetectedUpload(null);
-      setCreateModalityTypeOverride("other");
+      clearSelectedSource();
       return;
     }
 
@@ -387,17 +632,72 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
       const detectedUpload = await analyzeModalityUploadFiles(files);
       setCreateDetectedUpload(detectedUpload);
       setCreateModalityTypeOverride(detectedUpload.detectedModalityType);
+      setShowReadyPreview(true);
     } catch (error) {
       setCreateDetectedUpload(null);
       setCreateModalityTypeOverride("other");
-      toast.error(
+      const message =
         error instanceof ModalityUploadValidationError
           ? error.message
-          : "Select one ZIP package or a folder of DICOM files.",
-      );
+          : "Select one ZIP package or a folder of DICOM files.";
+      setUploadErrors([message]);
+      setShowReadyPreview(false);
+      toast.error(message);
     } finally {
       setIsAnalyzingSource(false);
     }
+  }
+
+  async function handleSourceSelection(nextFiles: FileList | null) {
+    const files = Array.from(nextFiles ?? []);
+    await processSelectedSourceFiles(files);
+  }
+
+  function openFileDialog() {
+    if (isPending) {
+      return;
+    }
+
+    sourceInputRef.current?.click();
+  }
+
+  function handleDragEnter(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current += 1;
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+
+    if (dragCounterRef.current === 0) {
+      setIsDragging(false);
+    }
+  }
+
+  function handleDragOver(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    const droppedItems = Array.from(event.dataTransfer.items ?? []);
+    const droppedFiles = Array.from(event.dataTransfer.files ?? []);
+
+    void (async () => {
+      const resolvedFiles = await extractFilesFromDroppedItems(
+        droppedItems,
+        droppedFiles,
+      );
+      await processSelectedSourceFiles(resolvedFiles);
+    })();
   }
 
   async function handleCreateModality() {
@@ -450,27 +750,32 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
       const createdModality = await uploadStudyIntakeWithProgress({
         formData,
         onProgress: setUploadProgress,
-        zoneId: zone.id,
+        zoneId,
       });
       dispatch(
-        playgroundApi.util.updateQueryData("getZoneModalities", zone.id, (draft) => {
-          const existingIndex = draft.items.findIndex(
-            (item) => item.id === createdModality.id,
-          );
+        playgroundApi.util.updateQueryData(
+          "getZoneModalities",
+          zoneId,
+          (draft) => {
+            const existingIndex = draft.items.findIndex(
+              (item) => item.id === createdModality.id,
+            );
 
-          if (existingIndex >= 0) {
-            draft.items[existingIndex] = createdModality;
-            return;
-          }
+            if (existingIndex >= 0) {
+              draft.items[existingIndex] = createdModality;
+              return;
+            }
 
-          draft.items.unshift(createdModality);
-          draft.total += 1;
-        }),
+            draft.items.unshift(createdModality);
+            draft.total += 1;
+          },
+        ),
       );
 
       toast.success(
         "Upload finished. Study intake is processing in the background.",
       );
+      setShowReadyPreview(true);
       setActiveModalityId(createdModality.id);
       setEditorMode("edit");
       resetCreateState();
@@ -490,7 +795,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   ) {
     try {
       await updateModality({
-        zoneId: zone.id,
+        zoneId,
         modalityId: modality.id,
         input,
       }).unwrap();
@@ -504,7 +809,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   async function handleDeleteModality(modality: ZoneModality) {
     try {
       await deleteModality({
-        zoneId: zone.id,
+        zoneId,
         modalityId: modality.id,
       }).unwrap();
 
@@ -520,8 +825,8 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="p-1">
+    <div className="flex gap-3 flex-col">
+      <div className="p-1 m-0">
         <Frame className="shrink-0 outline-offset-2 outline outline-border/50">
           <FrameHeader className="p-2 flex items-center justify-between flex-row">
             <FrameTitle>Modalities</FrameTitle>
@@ -608,7 +913,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
           </FrameHeader>
           <FramePanel>
             <input
-              ref={dicomFolderInputRef}
+              ref={sourceInputRef}
               type="file"
               multiple
               className="sr-only"
@@ -617,9 +922,9 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
               }}
             />
             <input
-              ref={zipPackageInputRef}
+              ref={sourceFolderInputRef}
               type="file"
-              accept=".zip,application/zip"
+              multiple
               className="sr-only"
               onChange={(event) => {
                 void handleSourceSelection(event.target.files);
@@ -629,35 +934,118 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
             <FieldGroup className="gap-4">
               <Field>
                 <FieldLabel>Choose source study</FieldLabel>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="justify-start"
-                    onClick={() => dicomFolderInputRef.current?.click()}
+                <div className="relative">
+                  <div
+                    className="relative flex min-h-52 flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-input p-4 transition-colors hover:bg-accent/50 data-[dragging=true]:bg-accent/50"
+                    data-dragging={isDragging || undefined}
+                    onClick={openFileDialog}
+                    onDragEnter={handleDragEnter}
+                    onDragLeave={handleDragLeave}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                    role="button"
+                    tabIndex={-1}
                   >
-                    <FolderOpenIcon />
-                    Choose DICOM folder
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="justify-start"
-                    onClick={() => zipPackageInputRef.current?.click()}
-                  >
-                    <FileArchiveIcon />
-                    Choose ZIP package
-                  </Button>
+                    {showReadyPreview ? (
+                      <div className="absolute inset-0">
+                        <Image
+                          alt="Upload ready"
+                          className="size-full object-cover"
+                          src={UPLOAD_READY_PREVIEW_SRC}
+                          fill
+                          sizes="(max-width: 1280px) 100vw, 30rem"
+                        />
+                      </div>
+                    ) : (
+                      <div className="relative z-10 flex flex-col items-center justify-center px-4 py-3 text-center">
+                        <div
+                          aria-hidden="true"
+                          className="mb-2 flex size-11 shrink-0 items-center justify-center rounded-full border bg-background"
+                        >
+                          <ImageUpIcon className="size-4 opacity-60" />
+                        </div>
+                        <p className="mb-1.5 text-sm font-medium">
+                          Drop study files here or click to browse
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          ZIP packages or DICOM files, max size: 512MB
+                        </p>
+                        {selectedSourceLabel ? (
+                          <p className="mt-2 max-w-xs truncate text-xs text-muted-foreground">
+                            {selectedSourceLabel}
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {selectedSourceFiles.length > 0 ? (
+                      <div className="absolute right-4 top-4 z-20">
+                        <button
+                          aria-label="Remove selected upload"
+                          className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            clearSelectedSource();
+                          }}
+                          type="button"
+                        >
+                          <XIcon aria-hidden="true" className="size-4" />
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {uploadProgress ? (
+                      <div className="absolute inset-x-3 bottom-3 z-20 rounded-lg border border-border/70 bg-background/85 p-2 backdrop-blur">
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-medium text-foreground">
+                            {uploadProgress.phase === "uploading"
+                              ? `Uploading ${Math.round(uploadProgress.percent ?? 0)}%`
+                              : "Queueing study..."}
+                          </span>
+                          <span className="text-muted-foreground">
+                            {uploadProgress.phase === "uploading" &&
+                            uploadProgress.totalBytes
+                              ? `${formatBytes(uploadProgress.loadedBytes)} / ${formatBytes(uploadProgress.totalBytes)}`
+                              : "Preparing ingest job"}
+                          </span>
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary transition-[width]"
+                            style={{
+                              width: `${Math.max(
+                                6,
+                                uploadProgress.percent ??
+                                  (uploadProgress.phase === "processing"
+                                    ? 100
+                                    : 0),
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
+
+                {uploadErrors.length > 0 ? (
+                  <div
+                    className="mt-2 flex items-center gap-1 text-xs text-destructive"
+                    role="alert"
+                  >
+                    <AlertCircleIcon className="size-3 shrink-0" />
+                    <span>{uploadErrors[0]}</span>
+                  </div>
+                ) : null}
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
                 <Field>
-                  <FieldLabel htmlFor={`modality-name-${zone.id}`}>
+                  <FieldLabel htmlFor={`modality-name-${zoneId}`}>
                     Modality name
                   </FieldLabel>
                   <Input
-                    id={`modality-name-${zone.id}`}
+                    id={`modality-name-${zoneId}`}
                     value={createName}
                     onChange={(event) => setCreateName(event.target.value)}
                     placeholder={
@@ -668,11 +1056,11 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                 </Field>
 
                 <Field>
-                  <FieldLabel htmlFor={`modality-type-${zone.id}`}>
+                  <FieldLabel htmlFor={`modality-type-${zoneId}`}>
                     Modality type
                   </FieldLabel>
                   <PlaygroundSelect
-                    id={`modality-type-${zone.id}`}
+                    id={`modality-type-${zoneId}`}
                     options={MODALITY_TYPE_OPTIONS}
                     value={createModalityTypeOverride}
                     onValueChange={setCreateModalityTypeOverride}
@@ -681,11 +1069,11 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
               </div>
 
               <Field>
-                <FieldLabel htmlFor={`modality-notes-${zone.id}`}>
+                <FieldLabel htmlFor={`modality-notes-${zoneId}`}>
                   Internal notes
                 </FieldLabel>
                 <Textarea
-                  id={`modality-notes-${zone.id}`}
+                  id={`modality-notes-${zoneId}`}
                   value={createNotes}
                   onChange={(event) => setCreateNotes(event.target.value)}
                   placeholder="Internal guidance about this uploaded study or series."
@@ -704,11 +1092,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
                 ) : (
                   <FileArchiveIcon />
                 )}
-                {uploadProgress?.phase === "uploading"
-                  ? `Uploading ${Math.round(uploadProgress.percent ?? 0)}%`
-                  : uploadProgress?.phase === "processing"
-                    ? "Queueing study..."
-                    : "Create modality draft"}
+                Create modality draft
               </Button>
               <Button
                 type="button"
@@ -723,49 +1107,6 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
               </Button>
             </div>
 
-            {uploadProgress ? (
-              <div className="rounded-xl border border-border/70 bg-background/60 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-medium text-foreground">
-                    {uploadProgress.phase === "uploading"
-                      ? "Uploading source study"
-                      : "Handing off to background processing"}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {uploadProgress.phase === "uploading" &&
-                    uploadProgress.totalBytes
-                      ? `${formatBytes(uploadProgress.loadedBytes)} / ${formatBytes(uploadProgress.totalBytes)}`
-                      : "Preparing ingest job"}
-                  </div>
-                </div>
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-primary transition-[width]"
-                    style={{
-                      width: `${Math.max(
-                        6,
-                        uploadProgress.percent ??
-                          (uploadProgress.phase === "processing" ? 100 : 0),
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <p className="mt-3 text-xs leading-5 text-muted-foreground">
-                  {uploadProgress.phase === "uploading"
-                    ? "Keep this page open until the upload completes."
-                    : "The modality is being created now. Slice derivation continues after the response returns."}
-                </p>
-              </div>
-            ) : null}
-          </FramePanel>
-        </Frame>
-      ) : isLoading ? (
-        <Frame>
-          <FramePanel className="flex min-h-[14rem] items-center justify-center px-6 py-10">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircleIcon className="size-4 animate-spin" />
-              Loading modality details...
-            </div>
           </FramePanel>
         </Frame>
       ) : (
@@ -775,7 +1116,7 @@ export function ZoneModalitiesManager({ zone }: { zone: ZoneDetail }) {
             modality={activeModality}
             onDelete={handleDeleteModality}
             pending={isPending}
-            zoneId={zone.id}
+            zoneId={zoneId}
             onSave={handleSaveModalityChanges}
           />
         )
@@ -805,6 +1146,11 @@ function ZoneModalityEditorCard({
     modality.modalityType,
   );
   const [notes, setNotes] = useState(modality.notes ?? "");
+  const isViewerReady = modality.processingStatus === "ready";
+  const isViewerPreparing =
+    modality.processingStatus === "uploaded" ||
+    modality.processingStatus === "processing";
+  const viewerHref = `/playground/zones/${zoneId}/modalities/${modality.id}/viewer`;
   const hasChanges =
     name.trim() !== modality.name ||
     modalityType !== modality.modalityType ||
@@ -834,13 +1180,16 @@ function ZoneModalityEditorCard({
     <Frame>
       <FrameHeader className="p-2 flex flex-row justify-between items-center">
         <FrameTitle className="text-base">Edit Modality</FrameTitle>
-        <Button asChild size="sm" variant="link">
-          <Link
-            href={`/playground/zones/${zoneId}/modalities/${modality.id}/viewer`}
-          >
-            Open viewer
-          </Link>
-        </Button>
+        {isViewerReady ? (
+          <Link href={viewerHref}>Open viewer</Link>
+        ) : (
+          <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            {isViewerPreparing ? (
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            ) : null}
+            {isViewerPreparing ? "Preparing viewer..." : "Viewer not ready"}
+          </span>
+        )}
       </FrameHeader>
       <FramePanel>
         <FieldGroup className="gap-4">

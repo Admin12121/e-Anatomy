@@ -9,6 +9,12 @@ import { requireAdminApiSession } from "@/lib/auth/session"
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
+const MAX_INTAKE_FILE_COUNT = 512
+const MAX_INTAKE_TOTAL_BYTES = 512 * 1024 * 1024
+const MAX_INTAKE_SINGLE_FILE_BYTES = 64 * 1024 * 1024
+const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/
+const DANGEROUS_PATH_PATTERN = /(^|[\\/])\.\.($|[\\/])/
+
 function jsonError(status: number, code: string, message: string) {
   return NextResponse.json(
     {
@@ -19,6 +25,135 @@ function jsonError(status: number, code: string, message: string) {
     },
     { status },
   )
+}
+
+function isSuspiciousUploadPath(pathValue: string) {
+  const normalized = pathValue.trim()
+
+  if (!normalized) {
+    return true
+  }
+
+  if (
+    normalized.startsWith("/") ||
+    normalized.startsWith("\\") ||
+    normalized.includes(":") ||
+    DANGEROUS_PATH_PATTERN.test(normalized) ||
+    CONTROL_CHAR_PATTERN.test(normalized)
+  ) {
+    return true
+  }
+
+  return normalized
+    .split(/[\\/]/)
+    .map((segment) => segment.trim())
+    .some((segment) => !segment || segment === "." || segment === "..")
+}
+
+function isZipFilename(name: string) {
+  return name.trim().toLowerCase().endsWith(".zip")
+}
+
+function validateIntakeFormData(formData: FormData) {
+  const sourceKind = String(formData.get("sourceKind") ?? "").trim()
+
+  if (sourceKind !== "zip" && sourceKind !== "dicom_files") {
+    return "Invalid source kind for modality intake."
+  }
+
+  const files = formData
+    .getAll("file")
+    .filter((entry): entry is File => entry instanceof File)
+
+  if (files.length === 0) {
+    return "Upload one ZIP package or one or more DICOM files."
+  }
+
+  if (files.length > MAX_INTAKE_FILE_COUNT) {
+    return "Too many files were uploaded for modality intake."
+  }
+
+  let totalBytes = 0
+
+  for (const file of files) {
+    totalBytes += file.size
+
+    if (file.size <= 0) {
+      return "Empty files are not allowed."
+    }
+
+    if (isSuspiciousUploadPath(file.name)) {
+      return "Suspicious file names were detected in upload payload."
+    }
+
+    if (sourceKind === "dicom_files" && file.size > MAX_INTAKE_SINGLE_FILE_BYTES) {
+      return "One of the uploaded files exceeds the allowed size limit."
+    }
+  }
+
+  if (totalBytes > MAX_INTAKE_TOTAL_BYTES) {
+    return "Upload is too large for modality intake."
+  }
+
+  if (sourceKind === "zip") {
+    if (files.length !== 1) {
+      return "ZIP packages must be uploaded by themselves."
+    }
+
+    if (!isZipFilename(files[0]?.name ?? "")) {
+      return "Upload a valid ZIP package."
+    }
+  } else if (files.some((file) => isZipFilename(file.name))) {
+    return "ZIP packages must be uploaded by themselves."
+  }
+
+  const relativePathsValue = String(formData.get("relativePathsJson") ?? "").trim()
+
+  if (relativePathsValue) {
+    let relativePaths: unknown
+
+    try {
+      relativePaths = JSON.parse(relativePathsValue)
+    } catch {
+      return "Relative-path manifest is invalid."
+    }
+
+    if (!Array.isArray(relativePaths)) {
+      return "Relative-path manifest is invalid."
+    }
+
+    if (relativePaths.length > files.length) {
+      return "Relative-path manifest does not match uploaded files."
+    }
+
+    for (const pathValue of relativePaths) {
+      const normalizedPath = String(pathValue ?? "").trim()
+
+      if (!normalizedPath) {
+        continue
+      }
+
+      if (isSuspiciousUploadPath(normalizedPath)) {
+        return "Suspicious folder paths were detected in upload payload."
+      }
+    }
+  }
+
+  const declaredSourceFileCountRaw = String(formData.get("sourceFileCount") ?? "").trim()
+
+  if (declaredSourceFileCountRaw && sourceKind === "dicom_files") {
+    const declaredSourceFileCount = Number.parseInt(declaredSourceFileCountRaw, 10)
+
+    if (
+      Number.isNaN(declaredSourceFileCount) ||
+      declaredSourceFileCount <= 0 ||
+      declaredSourceFileCount !== files.length
+    ) {
+      return "Declared source file count does not match uploaded files."
+    }
+  }
+
+  return null
 }
 
 type RouteContext = {
@@ -43,14 +178,11 @@ export async function POST(request: Request, context: RouteContext) {
   const { zoneId } = await context.params
 
   try {
-    if (!request.body) {
-      return jsonError(400, "bad_request", "Upload body is required.")
-    }
+    const formData = await request.formData()
+    const validationError = validateIntakeFormData(formData)
 
-    const contentType = request.headers.get("content-type")
-
-    if (!contentType) {
-      return jsonError(400, "bad_request", "Multipart content type is required.")
+    if (validationError) {
+      return jsonError(400, "bad_request", validationError)
     }
 
     const response = await fetch(
@@ -63,12 +195,10 @@ export async function POST(request: Request, context: RouteContext) {
         headers: {
           ...buildInternalAdminHeaders(result.user),
           Accept: "application/json",
-          "content-type": contentType,
         },
-        body: request.body,
+        body: formData,
         cache: "no-store",
-        duplex: "half",
-      } as RequestInit & { duplex: "half" },
+      },
     )
 
     if (!response.ok) {

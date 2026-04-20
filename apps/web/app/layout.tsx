@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
-import { Toaster } from "sonner";
 import { Inter, Oxanium } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { StoreProvider } from "@/lib/store/provider";
 
 import "./globals.css";
 import { cn } from "@/lib/utils";
@@ -39,19 +38,17 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full bg-background font-sans text-foreground">
-        <StoreProvider>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          disableTransitionOnChange
+        >
           <TooltipProvider>
-            <ThemeProvider
-              attribute="class"
-              defaultTheme="system"
-              enableSystem
-              disableTransitionOnChange
-            >
-              {children}
-              <Toaster />
-            </ThemeProvider>
+            {children}
+            <Toaster />
           </TooltipProvider>
-        </StoreProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

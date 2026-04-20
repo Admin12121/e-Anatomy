@@ -4,7 +4,6 @@ import dynamic from "next/dynamic";
 import { skipToken } from "@reduxjs/toolkit/query";
 import {
   LoaderCircleIcon,
-  MapPinnedIcon,
   SaveIcon,
   Sparkle,
 } from "lucide-react";
@@ -16,7 +15,6 @@ import {
   Field,
   FieldGroup,
   FieldLabel,
-  FieldSeparator,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,13 +33,21 @@ import {
   useUpdateZoneMutation,
 } from "@/lib/store/services/playground-api";
 import { ZoneModalitiesManager } from "./zone-modalities-manager";
-import { ZoneCombobox } from "./zone-combobox";
 import {
   Frame,
   FrameHeader,
   FramePanel,
   FrameTitle,
 } from "@/components/ui/frame";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import Loader from "@/components/ui/loader";
 
 const AnatomyStage = dynamic(
   () =>
@@ -51,8 +57,8 @@ const AnatomyStage = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="rounded-xl w-full h-[calc(100vh-65px)] flex items-center justify-center bg-[#0a0b0d] text-sm text-white/75">
-        Loading anatomy playground...
+      <div className="rounded-xl w-full h-[calc(100vh-65px)] flex items-center justify-center bg-[#7e80fc] text-sm text-white/75">
+        <Loader />
       </div>
     ),
   },
@@ -81,9 +87,9 @@ export function AnatomyPlayground() {
     selectedZoneId && zones.some((zone) => zone.id === selectedZoneId)
       ? selectedZoneId
       : null;
-  const { data: selectedZone, isFetching: isZoneLoading } =
-    useGetZoneDetailQuery(activeSelectedZoneId ?? skipToken);
-  const hasEditableZone = mode === "browse" && Boolean(selectedZone);
+  const { data: selectedZone, isFetching: isSelectedZoneFetching } = useGetZoneDetailQuery(
+    activeSelectedZoneId ?? skipToken,
+  );
 
   function getErrorMessage(error: unknown, fallback: string) {
     if (typeof error === "object" && error !== null) {
@@ -205,50 +211,82 @@ export function AnatomyPlayground() {
       </div>
 
       <aside className="xl:sticky xl:top-0 flex h-full min-h-0 flex-col gap-3 self-start overflow-y-auto overscroll-contain pr-1">
-        <Frame className="shrink-0">
-          <FrameHeader className="p-2">
-            <FrameTitle>Zone Library</FrameTitle>
-          </FrameHeader>
-          <FramePanel className="space-y-4 pt-4">
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="zone-selector">Select zone</FieldLabel>
-                <ZoneCombobox
-                  disabled={isZonesFetching || isCreatingZone || isUpdatingZone}
-                  items={zones}
-                  selectedZoneId={activeSelectedZoneId}
-                  onSelect={handleSelectZone}
-                />
-              </Field>
-            </FieldGroup>
-            <FieldSeparator className="dark:data-[slot=field-separator-content]:bg-[#262629] mt-1">
-              Or
-            </FieldSeparator>
-            <FieldGroup className="mt-5">
-              <Field>
-                <Button
-                  type="button"
-                  size={"lg"}
-                  className="shrink-0 w-full"
-                  disabled={isCreatingZone || isUpdatingZone}
-                  onClick={handleStartCreate}
-                >
-                  <Sparkle className="h-4 w-4 rounded-full bg-white fill-primary text-white" />
-                  Create zone
-                </Button>
-              </Field>
-            </FieldGroup>
-          </FramePanel>
-        </Frame>
+        <div className="p-1">
+          <Frame className="shrink-0 outline-offset-2 outline outline-border/50">
+            <FrameHeader className="p-2 flex items-center justify-between flex-row">
+              <FrameTitle>Zone Library</FrameTitle>
+              <Button
+                type="button"
+                size="sm"
+                disabled={isCreatingZone || isUpdatingZone || mode === "create"}
+                onClick={handleStartCreate}
+              >
+                <Sparkle className="h-4 w-4 rounded-full bg-white fill-primary text-white" />
+                Create zone
+              </Button>
+            </FrameHeader>
+          </Frame>
+        </div>
 
         <Frame className="shrink-0">
-          <FrameHeader className="p-2">
-            <FrameTitle>
-              {mode === "create" ? "Create Zone" : "Zone Details"}
-            </FrameTitle>
-          </FrameHeader>
-          <FramePanel>
-            {mode === "create" ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Zone</TableHead>
+                <TableHead className="text-right">Body View</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isZonesFetching ? (
+                <TableRow>
+                  <TableCell colSpan={2} className="h-20">
+                    <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                      <LoaderCircleIcon className="size-4 animate-spin" />
+                      Loading zones...
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : zones.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={2}
+                    className="h-20 text-center text-sm text-muted-foreground"
+                  >
+                    No zones are available yet.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                zones.map((zone) => {
+                  const isActive =
+                    mode === "browse" && activeSelectedZoneId === zone.id;
+
+                  return (
+                    <TableRow
+                      key={zone.id}
+                      className="cursor-pointer"
+                      data-state={isActive ? "selected" : undefined}
+                      onClick={() => handleSelectZone(zone.id)}
+                    >
+                      <TableCell className="font-medium text-foreground">
+                        {zone.name}
+                      </TableCell>
+                      <TableCell className="text-right capitalize text-muted-foreground">
+                        {zone.bodyView}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </Frame>
+
+        {mode === "create" ? (
+          <Frame className="shrink-0">
+            <FrameHeader className="p-2">
+              <FrameTitle>Create Zone</FrameTitle>
+            </FrameHeader>
+            <FramePanel>
               <FieldGroup className="gap-5">
                 <Field>
                   <FieldLabel htmlFor="draft-zone-name">Zone name</FieldLabel>
@@ -300,33 +338,41 @@ export function AnatomyPlayground() {
                   </Button>
                 </div>
               </FieldGroup>
-            ) : hasEditableZone && selectedZone ? (
-              <ZoneDetailEditor
-                key={selectedZone.id}
-                pending={isUpdatingZone}
-                zone={selectedZone}
-                onSave={handleSaveZoneChanges}
-              />
-            ) : (
-              <div className="flex h-full min-h-64 flex-col items-center justify-center px-6 text-center">
-                {isZoneLoading ? (
-                  <LoaderCircleIcon className="size-5 animate-spin text-muted-foreground" />
-                ) : (
-                  <MapPinnedIcon className="size-5 text-muted-foreground" />
-                )}
-                <p className="mt-3 text-sm font-medium text-foreground">
-                  Select a zone to inspect it
-                </p>
-                <p className="mt-1 max-w-xs text-xs leading-5 text-muted-foreground">
-                  Choose an existing zone from the combobox or click a marker in
-                  the 3D scene.
-                </p>
-              </div>
-            )}
-          </FramePanel>
-        </Frame>
+            </FramePanel>
+          </Frame>
+        ) : mode === "browse" && activeSelectedZoneId ? (
+          <Frame className="shrink-0">
+            <FrameHeader className="p-2">
+              <FrameTitle>Zone Details</FrameTitle>
+            </FrameHeader>
+            <FramePanel>
+              {selectedZone?.id === activeSelectedZoneId ? (
+                <ZoneDetailEditor
+                  key={selectedZone.id}
+                  pending={isUpdatingZone}
+                  zone={selectedZone}
+                  onSave={handleSaveZoneChanges}
+                />
+              ) : (
+                <div className="flex h-20 items-center justify-center gap-2 text-sm text-muted-foreground">
+                  {isSelectedZoneFetching ? (
+                    <LoaderCircleIcon className="size-4 animate-spin" />
+                  ) : null}
+                  {isSelectedZoneFetching
+                    ? "Loading zone details..."
+                    : "Zone details are unavailable."}
+                </div>
+              )}
+            </FramePanel>
+          </Frame>
+        ) : null}
 
-        {selectedZone && <ZoneModalitiesManager zone={selectedZone} />}
+        {mode === "browse" && activeSelectedZoneId ? (
+          <ZoneModalitiesManager
+            key={`zone-modalities-${activeSelectedZoneId}`}
+            zoneId={activeSelectedZoneId}
+          />
+        ) : null}
       </aside>
     </div>
   );

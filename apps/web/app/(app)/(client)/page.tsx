@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, type ElementRef } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ElementRef,
+} from "react";
 import dynamic from "next/dynamic";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
@@ -18,17 +24,33 @@ import {
 } from "lucide-react";
 
 import type { HighlightableLayerId } from "@/components/anatomy/anatomy-stage";
-import { ClickDissolveTransition } from "@/components/landing/click-dissolve-transition";
 import { SkullFluidReveal } from "@/components/landing/skull-fluid-reveal";
 import { PulsatingButton } from "@/components/layout/pulsating-button";
 import { cn } from "@/lib/utils";
 
 gsap.registerPlugin(useGSAP);
 
+const loadAnatomyStage = () => import("@/components/anatomy/anatomy-stage");
+const loadClickDissolveTransition = () =>
+  import("@/components/landing/click-dissolve-transition");
+
+function warmExperienceModules() {
+  void loadAnatomyStage();
+  void loadClickDissolveTransition();
+}
+
 const AnatomyStage = dynamic(
+  () => loadAnatomyStage().then((module) => module.AnatomyStage),
+  {
+    ssr: false,
+    loading: () => <div className="h-full w-full bg-[#7e80fc]" />,
+  },
+);
+
+const ClickDissolveTransition = dynamic(
   () =>
-    import("@/components/anatomy/anatomy-stage").then(
-      (module) => module.AnatomyStage,
+    loadClickDissolveTransition().then(
+      (module) => module.ClickDissolveTransition,
     ),
   {
     ssr: false,
@@ -129,6 +151,29 @@ export default function HomePage() {
       ) ?? null,
     [hoveredCategoryId],
   );
+  const shouldRenderExperienceStage = hasStartedExperience || isExitingExperience;
+  const shouldRenderTransition = transitionRunId > 0;
+
+  useEffect(() => {
+    const requestIdleCallback = window.requestIdleCallback?.bind(window);
+    const cancelIdleCallback = window.cancelIdleCallback?.bind(window);
+
+    if (requestIdleCallback && cancelIdleCallback) {
+      const idleCallbackId = requestIdleCallback(warmExperienceModules, {
+        timeout: 1600,
+      });
+
+      return () => {
+        cancelIdleCallback(idleCallbackId);
+      };
+    }
+
+    const timeoutId = globalThis.setTimeout(warmExperienceModules, 1200);
+
+    return () => {
+      globalThis.clearTimeout(timeoutId);
+    };
+  }, []);
 
   useGSAP(
     () => {
@@ -394,6 +439,7 @@ export default function HomePage() {
       return;
     }
 
+    warmExperienceModules();
     setTransitionDirection("enter");
     setHasStartedExperience(true);
     setTransitionRunId((currentRunId) => currentRunId + 1);
@@ -406,6 +452,7 @@ export default function HomePage() {
       return;
     }
 
+    warmExperienceModules();
     setTransitionDirection("exit");
     setIsExitingExperience(true);
     setTransitionRunId((currentRunId) => currentRunId + 1);
@@ -431,19 +478,23 @@ export default function HomePage() {
             : "pointer-events-none",
         )}
       >
-        <AnatomyStage
-          focusLayer={activeCategory?.focusLayer ?? null}
-          modelOffsetY={-0.35}
-          previewLayer={previewCategory?.focusLayer ?? null}
-          targetModelHeight={5.5}
-        />
+        {shouldRenderExperienceStage ? (
+          <AnatomyStage
+            focusLayer={activeCategory?.focusLayer ?? null}
+            modelOffsetY={-0.35}
+            previewLayer={previewCategory?.focusLayer ?? null}
+            targetModelHeight={5.5}
+          />
+        ) : null}
       </div>
 
-      <ClickDissolveTransition
-        runId={transitionRunId}
-        sourceRootRef={transitionDirection === "enter" ? skullRef : stageRef}
-        targetRootRef={transitionDirection === "enter" ? stageRef : skullRef}
-      />
+      {shouldRenderTransition ? (
+        <ClickDissolveTransition
+          runId={transitionRunId}
+          sourceRootRef={transitionDirection === "enter" ? skullRef : stageRef}
+          targetRootRef={transitionDirection === "enter" ? stageRef : skullRef}
+        />
+      ) : null}
 
       <button
         ref={backButtonRef}
@@ -536,6 +587,8 @@ export default function HomePage() {
                 pulseColor="#ffffff63"
                 className="bg-white text-xl text-indigo-900"
                 disabled={hasStartedExperience}
+                onFocus={warmExperienceModules}
+                onMouseEnter={warmExperienceModules}
                 onClick={handleStartExperience}
               >
                 Start Experience

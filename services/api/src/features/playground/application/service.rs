@@ -26,6 +26,7 @@ use crate::features::playground::{
     domain::models::{
         CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
         CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
+        DeleteZoneModalityAssetsInput, DeleteZoneModalityAssetsResponse,
         ModalitySourceAsset,
         UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput, UpdateViewerStructureInput,
         UpdateZoneInput, UpdateZoneModalityAssetInput, UpdateZoneModalityInput,
@@ -820,6 +821,49 @@ impl PlaygroundService {
         }
 
         Ok(())
+    }
+
+    pub async fn delete_zone_modality_assets(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        input: DeleteZoneModalityAssetsInput,
+    ) -> Result<DeleteZoneModalityAssetsResponse, AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        if input.asset_ids.is_empty() {
+            return Err(AppError::bad_request("At least one asset id is required"));
+        }
+
+        let mut parsed_asset_ids = Vec::with_capacity(input.asset_ids.len());
+
+        for asset_id in input.asset_ids {
+            let parsed_asset_id = Uuid::parse_str(&asset_id)
+                .map_err(|_| AppError::bad_request("Asset id is invalid"))?;
+            parsed_asset_ids.push(parsed_asset_id);
+        }
+
+        parsed_asset_ids.sort_unstable();
+        parsed_asset_ids.dedup();
+
+        let requested_count = parsed_asset_ids.len();
+        let deleted_count = self
+            .repo
+            .delete_zone_modality_assets(
+                &self.pool,
+                account_id,
+                zone_id,
+                modality_id,
+                &parsed_asset_ids,
+            )
+            .await?;
+
+        Ok(DeleteZoneModalityAssetsResponse {
+            requested_count,
+            deleted_count: deleted_count as usize,
+        })
     }
 
     pub async fn get_zone_modality_viewer_manifest(

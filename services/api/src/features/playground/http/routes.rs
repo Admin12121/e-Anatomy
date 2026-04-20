@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::features::playground::domain::models::{
     CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
     CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
+    DeleteZoneModalityAssetsInput,
     UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput, UpdateViewerStructureInput,
     UpdateZoneInput, UpdateZoneModalityAssetInput, UpdateZoneModalityInput,
 };
@@ -36,6 +37,9 @@ use crate::infrastructure::{
 };
 
 const MAX_STUDY_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
+const MAX_STUDY_UPLOAD_FILE_COUNT: usize = 512;
+const MAX_STUDY_UPLOAD_SINGLE_FILE_BYTES: i64 = 64 * 1024 * 1024;
+const MAX_UPLOAD_PATH_LENGTH: usize = 260;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -61,6 +65,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/assets",
             get(list_zone_modality_assets).post(create_zone_modality_asset),
+        )
+        .route(
+            "/zones/{zone_id}/modalities/{modality_id}/assets/bulk-delete",
+            axum::routing::post(delete_zone_modality_assets),
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/assets/{asset_id}",
@@ -397,6 +405,22 @@ async fn delete_zone_modality_asset(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_zone_modality_assets(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(input): Json<DeleteZoneModalityAssetsInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    let response = state
+        .playground_service
+        .delete_zone_modality_assets(actor.account_id, zone_id, modality_id, input)
+        .await?;
+
+    Ok((StatusCode::OK, Json(response)))
 }
 
 async fn get_zone_modality_viewer_manifest(
@@ -743,6 +767,13 @@ async fn parse_study_upload_multipart(
                     .file_name()
                     .map(str::to_string)
                     .unwrap_or_else(|| format!("upload-{}", files.len()));
+
+                if has_suspicious_upload_path(&original_file_name) {
+                    return Err(AppError::bad_request(
+                        "Suspicious upload file name detected.",
+                    ));
+                }
+
                 let extension = std::path::Path::new(&original_file_name)
                     .extension()
                     .and_then(|value| value.to_str())
@@ -772,6 +803,13 @@ async fn parse_study_upload_multipart(
                     ))
                 })? {
                     size_bytes += i64::try_from(chunk.len()).unwrap_or(i64::MAX);
+
+                    if size_bytes > MAX_STUDY_UPLOAD_SINGLE_FILE_BYTES {
+                        return Err(AppError::bad_request(
+                            "One of the uploaded files exceeds the allowed size limit.",
+                        ));
+                    }
+
                     hasher.update(&chunk);
                     output.write_all(&chunk).await.map_err(|error| {
                         AppError::internal(format!("Unable to write uploaded file: {error}"))
@@ -795,11 +833,29 @@ async fn parse_study_upload_multipart(
         }
     }
 
+    if files.len() > MAX_STUDY_UPLOAD_FILE_COUNT {
+        return Err(AppError::bad_request(
+            "Too many files were uploaded for modality intake.",
+        ));
+    }
+
+    if relative_paths.len() > files.len() {
+        return Err(AppError::bad_request(
+            "Relative-path manifest does not match uploaded files.",
+        ));
+    }
+
     for (index, relative_path) in relative_paths.into_iter().enumerate() {
         if let Some(file) = files.get_mut(index) {
             let normalized = relative_path.trim();
 
             if !normalized.is_empty() {
+                if has_suspicious_upload_path(normalized) {
+                    return Err(AppError::bad_request(
+                        "Suspicious folder paths were detected in upload payload.",
+                    ));
+                }
+
                 file.relative_path = Some(normalized.to_string());
             }
         }
@@ -826,6 +882,31 @@ fn format_error_chain(error: &dyn std::error::Error) -> String {
     }
 
     chain.join(" | caused by: ")
+}
+
+fn has_suspicious_upload_path(value: &str) -> bool {
+    let normalized = value.trim();
+
+    if normalized.is_empty() || normalized.len() > MAX_UPLOAD_PATH_LENGTH {
+        return true;
+    }
+
+    if normalized.starts_with('/')
+        || normalized.starts_with('\\')
+        || normalized.contains(':')
+        || normalized.contains("../")
+        || normalized.contains("..\\")
+        || normalized
+            .chars()
+            .any(|character| character.is_control() && !character.is_whitespace())
+    {
+        return true;
+    }
+
+    normalized
+        .split(['/', '\\'])
+        .map(str::trim)
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
 }
 
 fn has_active_modality_ingest(

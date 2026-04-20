@@ -3,6 +3,7 @@ import {
   ArrowRight,
   CrosshairIcon,
   Layers2Icon,
+  LoaderCircleIcon,
   Move,
   SearchIcon,
 } from "lucide-react";
@@ -16,6 +17,7 @@ type ViewerToolbarProps = {
   activeAreaToolSize: number;
   areaEditTool: AreaEditTool;
   canvasMode: "browse" | "draw-region" | "create-label" | "set-anchor" | "set-label";
+  isAssetLoading: boolean;
   mainInteractionTool: MainInteractionTool;
   showControlPanel: boolean;
   showCrossReferences: boolean;
@@ -33,6 +35,7 @@ export function ViewerToolbar({
   activeAreaToolSize,
   areaEditTool,
   canvasMode,
+  isAssetLoading,
   mainInteractionTool,
   showControlPanel,
   showCrossReferences,
@@ -51,6 +54,12 @@ export function ViewerToolbar({
         aria-label="Viewer controls"
         className="absolute right-3 top-3 z-30 rounded-sm p-0.5"
       >
+        {isAssetLoading ? (
+          <div className="mr-1 inline-flex items-center gap-1 rounded-md bg-black/75 px-2 py-1 text-[11px] text-white/90">
+            <LoaderCircleIcon className="size-3 animate-spin" />
+            Loading slice
+          </div>
+        ) : null}
         <Button
           aria-label={showStudyPanel ? "Hide study panel" : "Show study panel"}
           type="button"

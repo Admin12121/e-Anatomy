@@ -30,9 +30,9 @@ import {
   useCreateViewerAnnotationMutation,
   useCreateViewerStructureGroupMutation,
   useCreateViewerStructureMutation,
+  useDeleteZoneModalityAssetsBulkMutation,
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
-  useDeleteZoneModalityAssetMutation,
   useGetZoneModalityViewerManifestQuery,
   useUpdateViewerAnnotationMutation,
   useUpdateViewerStructureGroupMutation,
@@ -96,8 +96,8 @@ const TERMINAL_INGEST_STATUSES = new Set([
 ]);
 
 const IMAGE_PRELOAD_RADIUS = 16;
-const IMMEDIATE_PRELOAD_BURST = 10;
-const STACK_PRELOAD_CONCURRENCY = 12;
+const IMMEDIATE_PRELOAD_BURST = 6;
+const STACK_PRELOAD_CONCURRENCY = 4;
 const FILMSTRIP_SCROLL_DURATION_SECONDS = 0.26;
 const LOADING_INDICATOR_DELAY_MS = 260;
 const WHEEL_LOADING_INDICATOR_DELAY_MS = 700;
@@ -155,7 +155,7 @@ export function DraftModalityViewer({
   const [deleteStructure, { isLoading: isDeletingStructure }] =
     useDeleteViewerStructureMutation();
   const [updateModalityAsset] = useUpdateZoneModalityAssetMutation();
-  const [deleteModalityAsset] = useDeleteZoneModalityAssetMutation();
+  const [deleteModalityAssetsBulk] = useDeleteZoneModalityAssetsBulkMutation();
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
   const [currentAssetId, setCurrentAssetId] = useState<string | null>(null);
@@ -237,6 +237,7 @@ export function DraftModalityViewer({
   const imagePreloadPromiseCacheRef = useRef<Map<string, Promise<void>>>(
     new Map(),
   );
+  const queuedNavigationAssetIdRef = useRef<string | null>(null);
   const navigationRequestIdRef = useRef(0);
   const lastNavigationSourceRef = useRef<NavigationSource>("button");
 
@@ -500,12 +501,20 @@ export function DraftModalityViewer({
 
   const requestAssetNavigation = useCallback(
     (asset: ZoneModalityAsset, source: NavigationSource) => {
+      if (pendingAssetId && pendingAssetId !== asset.id) {
+        queuedNavigationAssetIdRef.current = asset.id;
+        return;
+      }
+
+      queuedNavigationAssetIdRef.current = null;
+
       if (pendingAssetId === asset.id) {
         return;
       }
 
       if (currentAsset?.id === asset.id) {
         navigationRequestIdRef.current += 1;
+        setLoadingIndicatorAssetId(null);
         setPendingAssetId(null);
         return;
       }
@@ -515,6 +524,7 @@ export function DraftModalityViewer({
       if (readyAssetIdCacheRef.current.has(asset.id)) {
         const cachedImage = imageElementCacheRef.current.get(asset.id) ?? null;
         navigationRequestIdRef.current += 1;
+        setLoadingIndicatorAssetId(null);
         setPendingAssetId(null);
         setCurrentAssetId(asset.id);
         setCurrentImageElement(cachedImage);
@@ -523,24 +533,8 @@ export function DraftModalityViewer({
 
       const requestId = navigationRequestIdRef.current + 1;
       navigationRequestIdRef.current = requestId;
+      setLoadingIndicatorAssetId(null);
       setPendingAssetId(asset.id);
-
-      const targetIndex = activeAssets.findIndex(
-        (activeAsset) => activeAsset.id === asset.id,
-      );
-
-      if (targetIndex >= 0) {
-        const burstAssets = buildImmediatePreloadOrder(
-          activeAssets,
-          targetIndex,
-          lastNavigationDirectionRef.current,
-          IMMEDIATE_PRELOAD_BURST,
-        );
-
-        void Promise.all(
-          burstAssets.map((burstAsset) => preloadAsset(burstAsset, "high")),
-        );
-      }
 
       void preloadAsset(asset, "high").then(() => {
         if (navigationRequestIdRef.current !== requestId) {
@@ -548,6 +542,7 @@ export function DraftModalityViewer({
         }
 
         if (!readyAssetIdCacheRef.current.has(asset.id)) {
+          setLoadingIndicatorAssetId(null);
           setPendingAssetId(null);
           return;
         }
@@ -555,11 +550,34 @@ export function DraftModalityViewer({
         const cachedImage = imageElementCacheRef.current.get(asset.id) ?? null;
         setCurrentAssetId(asset.id);
         setCurrentImageElement(cachedImage);
+        setLoadingIndicatorAssetId(null);
         setPendingAssetId(null);
       });
     },
-    [activeAssets, currentAsset?.id, pendingAssetId, preloadAsset],
+    [currentAsset?.id, pendingAssetId, preloadAsset],
   );
+
+  useEffect(() => {
+    if (pendingAssetId) {
+      return;
+    }
+
+    const queuedAssetId = queuedNavigationAssetIdRef.current;
+
+    if (!queuedAssetId) {
+      return;
+    }
+
+    queuedNavigationAssetIdRef.current = null;
+
+    const queuedAsset = assets.find((asset) => asset.id === queuedAssetId);
+
+    if (!queuedAsset || queuedAsset.id === currentAsset?.id) {
+      return;
+    }
+
+    void requestAssetNavigation(queuedAsset, "wheel");
+  }, [assets, currentAsset?.id, pendingAssetId, requestAssetNavigation]);
 
   const selectedStructure = selectedStructureId
     ? (structuresById.get(selectedStructureId) ?? null)
@@ -829,7 +847,11 @@ export function DraftModalityViewer({
   ]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || navigationAssetIndex < 0) {
+    if (
+      typeof window === "undefined" ||
+      navigationAssetIndex < 0 ||
+      pendingAsset
+    ) {
       return;
     }
 
@@ -838,18 +860,26 @@ export function DraftModalityViewer({
       navigationAssetIndex,
       lastNavigationDirectionRef.current,
       Math.max(IMAGE_PRELOAD_RADIUS, IMMEDIATE_PRELOAD_BURST),
-    );
+    ).filter((asset) => asset.id !== currentAsset?.id);
+
+    if (immediateAssets.length === 0) {
+      return;
+    }
 
     const timeoutId = window.setTimeout(() => {
-      void Promise.all(
-        immediateAssets.map((asset) => preloadAsset(asset, "high")),
-      );
+      const nearAssets = immediateAssets.slice(0, IMMEDIATE_PRELOAD_BURST);
+      const farAssets = immediateAssets.slice(IMMEDIATE_PRELOAD_BURST);
+
+      void Promise.all([
+        ...nearAssets.map((asset) => preloadAsset(asset, "high")),
+        ...farAssets.map((asset) => preloadAsset(asset, "low")),
+      ]);
     }, 0);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [activeAssets, navigationAssetIndex, preloadAsset]);
+  }, [activeAssets, currentAsset?.id, navigationAssetIndex, pendingAsset, preloadAsset]);
 
   useEffect(() => {
     if (
@@ -983,7 +1013,7 @@ export function DraftModalityViewer({
   const shellGridClass = cn(
     "grid flex-1 gap-2",
     showSliceEditorPanel
-      ? "max-h-[calc(100vh-351px)]"
+      ? "max-h-[calc(100vh-310px)]"
       : "max-h-[calc(100vh-101px)]",
     showStudyPanel &&
       showControlPanel &&
@@ -1015,6 +1045,10 @@ export function DraftModalityViewer({
     ? !readyAssetIds.has(pendingAsset.id) &&
       loadingIndicatorAssetId === pendingAsset.id
     : false;
+  const isAssetLoading = pendingAsset
+    ? !readyAssetIds.has(pendingAsset.id)
+    : false;
+  const activeFilmstripAssetId = currentAsset?.id ?? pendingAsset?.id ?? null;
   const isPreparingInitialAsset = activeAssets.length > 0 && !currentAsset;
   const activeAreaToolSize =
     areaEditTool === "erase" ? areaEraserSize : areaBrushSize;
@@ -1113,12 +1147,12 @@ export function DraftModalityViewer({
 
   const centerActiveFilmstripItem = useCallback(
     (scroller: HTMLDivElement | null) => {
-      if (!scroller || !activeViewerAssetId) {
+      if (!scroller || !activeFilmstripAssetId) {
         return;
       }
 
       const activeButton = scroller.querySelector<HTMLElement>(
-        `[data-asset-id="${activeViewerAssetId}"]`,
+        `[data-asset-id="${activeFilmstripAssetId}"]`,
       );
 
       if (!activeButton) {
@@ -1145,7 +1179,7 @@ export function DraftModalityViewer({
         scrollLeft: targetScrollLeft,
       });
     },
-    [activeViewerAssetId],
+    [activeFilmstripAssetId],
   );
 
   useEffect(() => {
@@ -1221,35 +1255,56 @@ export function DraftModalityViewer({
     void requestAssetNavigation(nextAsset, source);
   }
 
-  function updateAnnotationForm<Key extends keyof AnnotationFormState>(
-    key: Key,
-    value: AnnotationFormState[Key],
-  ) {
-    setAnnotationForm((current) => ({
-      ...current,
-      [key]: value,
-    }));
-  }
+  const updateAnnotationForm = useCallback(
+    function updateAnnotationForm<Key extends keyof AnnotationFormState>(
+      key: Key,
+      value: AnnotationFormState[Key],
+    ) {
+      setAnnotationForm((current) =>
+        Object.is(current[key], value)
+          ? current
+          : {
+              ...current,
+              [key]: value,
+            },
+      );
+    },
+    [],
+  );
 
-  function updateStructureForm<Key extends keyof StructureFormState>(
-    key: Key,
-    value: StructureFormState[Key],
-  ) {
-    setStructureForm((current) => ({
-      ...current,
-      [key]: value,
-    }));
-  }
+  const updateStructureForm = useCallback(
+    function updateStructureForm<Key extends keyof StructureFormState>(
+      key: Key,
+      value: StructureFormState[Key],
+    ) {
+      setStructureForm((current) =>
+        Object.is(current[key], value)
+          ? current
+          : {
+              ...current,
+              [key]: value,
+            },
+      );
+    },
+    [],
+  );
 
-  function updateGroupForm<Key extends keyof GroupFormState>(
-    key: Key,
-    value: GroupFormState[Key],
-  ) {
-    setGroupForm((current) => ({
-      ...current,
-      [key]: value,
-    }));
-  }
+  const updateGroupForm = useCallback(
+    function updateGroupForm<Key extends keyof GroupFormState>(
+      key: Key,
+      value: GroupFormState[Key],
+    ) {
+      setGroupForm((current) =>
+        Object.is(current[key], value)
+          ? current
+          : {
+              ...current,
+              [key]: value,
+            },
+      );
+    },
+    [],
+  );
 
   function clearPolygonDraft() {
     setDraftDisconnectedPolygons([]);
@@ -1992,16 +2047,23 @@ export function DraftModalityViewer({
     let updatedCount = 0;
     let failedCount = 0;
 
-    for (const assetId of pendingDeletedSliceIds) {
+    if (pendingDeletedSliceIds.length > 0) {
       try {
-        await deleteModalityAsset({
-          assetId,
+        const deleteSummary = await deleteModalityAssetsBulk({
           modalityId,
           zoneId,
+          input: {
+            assetIds: pendingDeletedSliceIds,
+          },
         }).unwrap();
-        deletedCount += 1;
+
+        deletedCount += deleteSummary.deletedCount;
+        failedCount += Math.max(
+          0,
+          deleteSummary.requestedCount - deleteSummary.deletedCount,
+        );
       } catch {
-        failedCount += 1;
+        failedCount += pendingDeletedSliceIds.length;
       }
     }
 
@@ -2142,6 +2204,7 @@ export function DraftModalityViewer({
           activeAreaToolSize={activeAreaToolSize}
           areaEditTool={areaEditTool}
           canvasMode={canvasMode}
+          isAssetLoading={isAssetLoading}
           mainInteractionTool={mainInteractionTool}
           showControlPanel={showControlPanel}
           showCrossReferences={showCrossReferences}
@@ -2208,7 +2271,7 @@ export function DraftModalityViewer({
       </main>
 
       <SliceFilmstrip
-        activeAssetId={activeViewerAssetId}
+        activeAssetId={activeFilmstripAssetId}
         activeAssets={activeAssets}
         canDeleteLeftSlices={canDeleteLeftSlices}
         canDeleteRightSlices={canDeleteRightSlices}
@@ -2220,6 +2283,7 @@ export function DraftModalityViewer({
         filmstripScrollerRef={filmstripScrollerRef}
         hasPendingSliceTimelineChanges={hasPendingSliceTimelineChanges}
         isApplyingSliceChanges={isApplyingSliceChanges}
+        isAssetLoading={isAssetLoading}
         navigationAssetIndex={navigationAssetIndex}
         pendingDeletedSliceIds={pendingDeletedSliceIds}
         pendingSliceSortUpdates={pendingSliceSortUpdates}

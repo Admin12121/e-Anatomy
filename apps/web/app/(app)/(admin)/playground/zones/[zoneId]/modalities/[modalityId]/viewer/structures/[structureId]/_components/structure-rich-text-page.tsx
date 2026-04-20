@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import Link from "next/link"
 import type { PartialBlock } from "@blocknote/core"
 import { BlockNoteViewRaw, useCreateBlockNote } from "@blocknote/react"
@@ -12,7 +12,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import type { ViewerAccessLevel } from "@/lib/playground/types"
+import type { ViewerAccessLevel, ViewerStructure } from "@/lib/playground/types"
 import {
   useGetZoneModalityViewerManifestQuery,
   useUpdateViewerStructureMutation,
@@ -40,16 +40,63 @@ export function StructureRichTextPage({
       refetchOnReconnect: true,
     },
   )
-  const [updateStructure, { isLoading: isSaving }] =
-    useUpdateViewerStructureMutation()
   const structure = useMemo(
     () =>
       data?.structures.find((candidate) => candidate.id === structureId) ?? null,
     [data?.structures, structureId],
   )
+
+  if (isLoading && !data) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center text-sm text-white/70">
+        <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
+        Loading topic detail...
+      </div>
+    )
+  }
+
+  if (error || !structure) {
+    return (
+      <div className="space-y-4 rounded-2xl border border-white/10 bg-black/20 p-6 text-white">
+        <p className="text-sm text-white/70">
+          This topic could not be found. Return to the viewer and choose another
+          topic.
+        </p>
+        <Button asChild type="button" variant="secondary">
+          <Link href={viewerHref}>
+            <ArrowLeft className="size-4" />
+            Back to viewer
+          </Link>
+        </Button>
+      </div>
+    )
+  }
+
+  return (
+    <StructureRichTextEditorWorkspace
+      key={structure.id}
+      modalityId={modalityId}
+      structure={structure}
+      viewerHref={viewerHref}
+      zoneId={zoneId}
+    />
+  )
+}
+
+function StructureRichTextEditorWorkspace({
+  modalityId,
+  structure,
+  viewerHref,
+  zoneId,
+}: {
+  modalityId: string
+  structure: ViewerStructure
+  viewerHref: string
+  zoneId: string
+}) {
   const initialBlocks = useMemo(
-    () => toEditorBlocks(structure?.longDescription),
-    [structure?.id, structure?.longDescription, structure?.updatedAt],
+    () => toEditorBlocks(structure.longDescription),
+    [structure.longDescription],
   )
   const editor = useCreateBlockNote(
     {
@@ -57,27 +104,17 @@ export function StructureRichTextPage({
     },
     [initialBlocks],
   )
-
-  const [titleDraft, setTitleDraft] = useState("")
-  const [shortDescriptionDraft, setShortDescriptionDraft] = useState("")
-  const [accessLevelDraft, setAccessLevelDraft] =
-    useState<ViewerAccessLevel>("free")
-
-  useEffect(() => {
-    if (!structure) {
-      return
-    }
-
-    setTitleDraft(structure.title)
-    setShortDescriptionDraft(structure.shortDescription ?? "")
-    setAccessLevelDraft(structure.accessLevel)
-  }, [structure])
+  const [updateStructure, { isLoading: isSaving }] =
+    useUpdateViewerStructureMutation()
+  const [titleDraft, setTitleDraft] = useState(structure.title)
+  const [shortDescriptionDraft, setShortDescriptionDraft] = useState(
+    structure.shortDescription ?? "",
+  )
+  const [accessLevelDraft, setAccessLevelDraft] = useState<ViewerAccessLevel>(
+    structure.accessLevel,
+  )
 
   async function handleSaveStructureDetail() {
-    if (!structure) {
-      return
-    }
-
     if (!titleDraft.trim()) {
       toast.error("Topic title is required.")
       return
@@ -110,32 +147,6 @@ export function StructureRichTextPage({
         readMutationError(mutationError, "Unable to save topic detail."),
       )
     }
-  }
-
-  if (isLoading && !data) {
-    return (
-      <div className="flex min-h-[70vh] items-center justify-center text-sm text-white/70">
-        <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
-        Loading topic detail...
-      </div>
-    )
-  }
-
-  if (error || !structure) {
-    return (
-      <div className="space-y-4 rounded-2xl border border-white/10 bg-black/20 p-6 text-white">
-        <p className="text-sm text-white/70">
-          This topic could not be found. Return to the viewer and choose another
-          topic.
-        </p>
-        <Button asChild type="button" variant="secondary">
-          <Link href={viewerHref}>
-            <ArrowLeft className="size-4" />
-            Back to viewer
-          </Link>
-        </Button>
-      </div>
-    )
   }
 
   return (

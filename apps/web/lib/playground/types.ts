@@ -213,6 +213,15 @@ export type UpdateZoneModalityAssetInput = {
   notes?: string | null
 }
 
+export type DeleteZoneModalityAssetsInput = {
+  assetIds: string[]
+}
+
+export type DeleteZoneModalityAssetsResponse = {
+  requestedCount: number
+  deletedCount: number
+}
+
 export type ViewerAccessLevel = "free" | "subscription"
 
 export type ViewerStructureGroup = {

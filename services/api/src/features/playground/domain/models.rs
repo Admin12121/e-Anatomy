@@ -199,6 +199,19 @@ pub struct UpdateZoneModalityAssetInput {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteZoneModalityAssetsInput {
+    pub asset_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteZoneModalityAssetsResponse {
+    pub requested_count: usize,
+    pub deleted_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewerStructureGroup {

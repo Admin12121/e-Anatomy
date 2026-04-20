@@ -6,6 +6,8 @@ import type {
   CreateViewerAnnotationInput,
   CreateViewerStructureGroupInput,
   CreateViewerStructureInput,
+  DeleteZoneModalityAssetsInput,
+  DeleteZoneModalityAssetsResponse,
   CreateZoneModalityAssetInput,
   CreateZoneModalityInput,
   CreateZoneInput,
@@ -213,6 +215,28 @@ export const playgroundApi = createApi({
         method: "DELETE",
       }),
     }),
+    deleteZoneModalityAssetsBulk: builder.mutation<
+      DeleteZoneModalityAssetsResponse,
+      {
+        zoneId: string
+        modalityId: string
+        input: DeleteZoneModalityAssetsInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId, input }) => [
+        { type: "ZoneModalityAssets", id: `LIST:${modalityId}` },
+        ...input.assetIds.map((assetId) => ({
+          type: "ZoneModalityAssets" as const,
+          id: assetId,
+        })),
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/assets/bulk-delete`,
+        method: "POST",
+        body: input,
+      }),
+    }),
     getZoneModalityViewerManifest: builder.query<
       ZoneModalityViewerManifest,
       {
@@ -392,6 +416,7 @@ export const {
   useDeleteViewerAnnotationMutation,
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
+  useDeleteZoneModalityAssetsBulkMutation,
   useDeleteZoneModalityAssetMutation,
   useDeleteZoneModalityMutation,
   useGetZoneModalityViewerManifestQuery,
