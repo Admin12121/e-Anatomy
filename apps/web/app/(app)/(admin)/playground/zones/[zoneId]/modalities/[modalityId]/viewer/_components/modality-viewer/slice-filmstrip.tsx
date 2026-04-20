@@ -148,8 +148,8 @@ export function SliceFilmstrip({
               alt={asset.label}
               className="h-full w-full object-cover"
               decoding="async"
-              fetchPriority="low"
-              loading="lazy"
+              fetchPriority={asset.id === activeAssetId ? "high" : "low"}
+              loading={asset.id === activeAssetId ? "eager" : "lazy"}
               src={asset.thumbnailUrl || asset.imageUrl}
             />
           </div>
@@ -180,8 +180,8 @@ export function SliceFilmstrip({
               alt={asset.label}
               className="h-full w-full object-cover"
               decoding="async"
-              fetchPriority="low"
-              loading="lazy"
+              fetchPriority={asset.id === activeAssetId ? "high" : "low"}
+              loading={asset.id === activeAssetId ? "eager" : "lazy"}
               src={asset.thumbnailUrl || asset.imageUrl}
             />
           </div>
@@ -194,11 +194,11 @@ export function SliceFilmstrip({
   );
 
   return (
-    <div className="absolute bottom-1 left-0 w-full px-1">
+    <div className="absolute bottom-0 left-0 w-full px-2">
       <div
         className={cn(
           "rounded-sm bg-white/3 backdrop-blur-sm transition-all",
-          showSliceEditorPanel && "pb-1",
+          showSliceEditorPanel && "pb-2",
         )}
       >
         <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 p-1">

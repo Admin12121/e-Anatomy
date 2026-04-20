@@ -4,6 +4,7 @@ import { buildInternalAdminHeaders } from "@/lib/api/admin"
 import { ApiClientError } from "@/lib/api/errors"
 import { serverApiFetch } from "@/lib/api/server"
 import { requireAdminApiSession } from "@/lib/auth/session"
+import { createDerivedAssetSearchParams } from "@/lib/playground/derived-asset-token"
 import type { ZoneModalityViewerManifest } from "@/lib/playground/types"
 
 export const dynamic = "force-dynamic"
@@ -30,13 +31,23 @@ type RouteContext = {
 function rewriteDerivedAssetUrl(
   url: string | null | undefined,
   assetId: string,
+  searchParams?: URLSearchParams,
 ) {
   if (!url?.includes("/playground/derived-assets/")) {
     return url ?? null
   }
 
   const variant = url.endsWith("/thumbnail") ? "thumbnail" : "image"
-  return `/api/playground/derived-assets/${assetId}/${variant}`
+  const nextUrl = new URL(
+    `/api/playground/derived-assets/${assetId}/${variant}`,
+    "http://local",
+  )
+
+  if (searchParams) {
+    nextUrl.search = searchParams.toString()
+  }
+
+  return `${nextUrl.pathname}${nextUrl.search}`
 }
 
 export async function GET(request: Request, context: RouteContext) {
@@ -60,11 +71,36 @@ export async function GET(request: Request, context: RouteContext) {
 
     return NextResponse.json({
       ...viewer,
-      assets: viewer.assets.map((asset) => ({
-        ...asset,
-        imageUrl: rewriteDerivedAssetUrl(asset.imageUrl, asset.id) ?? asset.imageUrl,
-        thumbnailUrl: rewriteDerivedAssetUrl(asset.thumbnailUrl, asset.id),
-      })),
+      assets: viewer.assets.map((asset) => {
+        const imageSearchParams = result.user.apiAccountId
+          ? createDerivedAssetSearchParams({
+              accountId: result.user.apiAccountId,
+              assetId: asset.id,
+              userId: result.user.id,
+              variant: "image",
+            })
+          : undefined
+        const thumbnailSearchParams = result.user.apiAccountId
+          ? createDerivedAssetSearchParams({
+              accountId: result.user.apiAccountId,
+              assetId: asset.id,
+              userId: result.user.id,
+              variant: "thumbnail",
+            })
+          : undefined
+
+        return {
+          ...asset,
+          imageUrl:
+            rewriteDerivedAssetUrl(asset.imageUrl, asset.id, imageSearchParams) ??
+            asset.imageUrl,
+          thumbnailUrl: rewriteDerivedAssetUrl(
+            asset.thumbnailUrl,
+            asset.id,
+            thumbnailSearchParams,
+          ),
+        }
+      }),
       modality: {
         ...viewer.modality,
         coverImageUrl: viewer.modality.coverImageUrl,

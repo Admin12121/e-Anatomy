@@ -78,7 +78,13 @@ import {
   structureMatchesSearch,
 } from "./modality-viewer/utils";
 
-type NavigationSource = "button" | "click" | "search" | "weighting" | "wheel";
+type NavigationSource =
+  | "button"
+  | "click"
+  | "scrub"
+  | "search"
+  | "weighting"
+  | "wheel";
 type PreloadPriority = "high" | "low";
 
 const ACTIVE_INGEST_STATUSES = new Set([
@@ -98,11 +104,14 @@ const TERMINAL_INGEST_STATUSES = new Set([
 const IMAGE_PRELOAD_RADIUS = 16;
 const IMMEDIATE_PRELOAD_BURST = 6;
 const STACK_PRELOAD_CONCURRENCY = 4;
+const PREVIEW_PRELOAD_CONCURRENCY = 16;
 const FILMSTRIP_SCROLL_DURATION_SECONDS = 0.26;
 const LOADING_INDICATOR_DELAY_MS = 260;
 const WHEEL_LOADING_INDICATOR_DELAY_MS = 700;
+const SCRUB_LOADING_INDICATOR_DELAY_MS = 1400;
 const WHEEL_DELTA_THRESHOLD = 120;
 const WHEEL_NAVIGATION_COOLDOWN_MS = 110;
+const SCRUB_PREVIEW_CACHE_MAX_ASSET_COUNT = 240;
 
 function areAssetIdOrdersEqual(left: string[], right: string[]) {
   if (left.length !== right.length) {
@@ -119,7 +128,7 @@ export function DraftModalityViewer({
   modalityId: string;
   zoneId: string;
 }) {
-  const [viewerPollingIntervalMs, setViewerPollingIntervalMs] = useState(2500);
+  const [viewerPollingIntervalMs, setViewerPollingIntervalMs] = useState(0);
 
   const {
     data,
@@ -233,11 +242,16 @@ export function DraftModalityViewer({
   const lastNavigationDirectionRef = useRef<-1 | 0 | 1>(0);
   const readyAssetIdCacheRef = useRef<Set<string>>(new Set());
   const imageElementCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const previewImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const pendingImagePreloadCacheRef = useRef<Set<string>>(new Set());
   const imagePreloadPromiseCacheRef = useRef<Map<string, Promise<void>>>(
     new Map(),
   );
+  const previewImagePromiseCacheRef = useRef<
+    Map<string, Promise<HTMLImageElement | null>>
+  >(new Map());
   const queuedNavigationAssetIdRef = useRef<string | null>(null);
+  const queuedNavigationSourceRef = useRef<NavigationSource>("wheel");
   const navigationRequestIdRef = useRef(0);
   const lastNavigationSourceRef = useRef<NavigationSource>("button");
 
@@ -441,6 +455,106 @@ export function DraftModalityViewer({
     [],
   );
 
+  const cachePreviewImage = useCallback(
+    (assetId: string, imageElement: HTMLImageElement) => {
+      const cache = previewImageCacheRef.current;
+
+      if (cache.has(assetId)) {
+        cache.delete(assetId);
+      }
+
+      cache.set(assetId, imageElement);
+
+      while (cache.size > SCRUB_PREVIEW_CACHE_MAX_ASSET_COUNT) {
+        const oldestAssetId = cache.keys().next().value;
+
+        if (!oldestAssetId) {
+          break;
+        }
+
+        cache.delete(oldestAssetId);
+      }
+    },
+    [],
+  );
+
+  const preloadAssetPreview = useCallback(
+    (asset: ZoneModalityAsset) => {
+      const fullImage = imageElementCacheRef.current.get(asset.id);
+
+      if (fullImage) {
+        return Promise.resolve(fullImage);
+      }
+
+      const cachedPreview = previewImageCacheRef.current.get(asset.id);
+
+      if (cachedPreview) {
+        return Promise.resolve(cachedPreview);
+      }
+
+      const existingPreviewPromise = previewImagePromiseCacheRef.current.get(
+        asset.id,
+      );
+
+      if (existingPreviewPromise) {
+        return existingPreviewPromise;
+      }
+
+      const previewUrl = asset.thumbnailUrl || asset.imageUrl;
+
+      if (!previewUrl) {
+        return Promise.resolve(null);
+      }
+
+      const previewPromise = new Promise<HTMLImageElement | null>((resolve) => {
+        if (typeof window === "undefined") {
+          resolve(null);
+          return;
+        }
+
+        const image = new window.Image();
+        image.decoding = "async";
+        image.fetchPriority = "low";
+
+        const finalize = (imageElement: HTMLImageElement | null) => {
+          if (imageElement) {
+            cachePreviewImage(asset.id, imageElement);
+          }
+
+          const cachedPromise = previewImagePromiseCacheRef.current.get(asset.id);
+
+          if (cachedPromise === previewPromise) {
+            previewImagePromiseCacheRef.current.delete(asset.id);
+          }
+
+          resolve(imageElement);
+        };
+
+        image.onload = () => {
+          if (typeof image.decode === "function") {
+            void image
+              .decode()
+              .catch(() => undefined)
+              .finally(() => finalize(image));
+            return;
+          }
+
+          finalize(image);
+        };
+
+        image.onerror = () => {
+          finalize(null);
+        };
+
+        image.src = previewUrl;
+      });
+
+      previewImagePromiseCacheRef.current.set(asset.id, previewPromise);
+      return previewPromise;
+    },
+    [cachePreviewImage],
+  );
+
   const preloadAsset = useCallback(
     (asset: ZoneModalityAsset, priority: PreloadPriority = "low") => {
       if (
@@ -502,8 +616,13 @@ export function DraftModalityViewer({
   const requestAssetNavigation = useCallback(
     (asset: ZoneModalityAsset, source: NavigationSource) => {
       if (pendingAssetId && pendingAssetId !== asset.id) {
-        queuedNavigationAssetIdRef.current = asset.id;
-        return;
+        if (source === "scrub") {
+          queuedNavigationAssetIdRef.current = null;
+        } else {
+          queuedNavigationAssetIdRef.current = asset.id;
+          queuedNavigationSourceRef.current = source;
+          return;
+        }
       }
 
       queuedNavigationAssetIdRef.current = null;
@@ -531,6 +650,35 @@ export function DraftModalityViewer({
         return;
       }
 
+      if (source === "scrub") {
+        const requestId = navigationRequestIdRef.current + 1;
+        navigationRequestIdRef.current = requestId;
+        setLoadingIndicatorAssetId(null);
+        setPendingAssetId(null);
+        setCurrentAssetId(asset.id);
+
+        const cachedPreviewImage = previewImageCacheRef.current.get(asset.id);
+
+        if (cachedPreviewImage) {
+          setCurrentImageElement(cachedPreviewImage);
+          return;
+        }
+
+        void preloadAssetPreview(asset).then((previewImage) => {
+          if (navigationRequestIdRef.current !== requestId) {
+            return;
+          }
+
+          if (!previewImage || readyAssetIdCacheRef.current.has(asset.id)) {
+            return;
+          }
+
+          setCurrentImageElement(previewImage);
+        });
+
+        return;
+      }
+
       const requestId = navigationRequestIdRef.current + 1;
       navigationRequestIdRef.current = requestId;
       setLoadingIndicatorAssetId(null);
@@ -554,7 +702,7 @@ export function DraftModalityViewer({
         setPendingAssetId(null);
       });
     },
-    [currentAsset?.id, pendingAssetId, preloadAsset],
+    [currentAsset?.id, pendingAssetId, preloadAsset, preloadAssetPreview],
   );
 
   useEffect(() => {
@@ -567,17 +715,49 @@ export function DraftModalityViewer({
     if (!queuedAssetId) {
       return;
     }
-
-    queuedNavigationAssetIdRef.current = null;
+    const queuedSource = queuedNavigationSourceRef.current;
 
     const queuedAsset = assets.find((asset) => asset.id === queuedAssetId);
+    queuedNavigationAssetIdRef.current = null;
 
     if (!queuedAsset || queuedAsset.id === currentAsset?.id) {
       return;
     }
 
-    void requestAssetNavigation(queuedAsset, "wheel");
+    void requestAssetNavigation(queuedAsset, queuedSource);
   }, [assets, currentAsset?.id, pendingAssetId, requestAssetNavigation]);
+
+  useEffect(() => {
+    const activeAssetIds = new Set(assets.map((asset) => asset.id));
+
+    for (const assetId of previewImageCacheRef.current.keys()) {
+      if (!activeAssetIds.has(assetId)) {
+        previewImageCacheRef.current.delete(assetId);
+      }
+    }
+
+    for (const assetId of previewImagePromiseCacheRef.current.keys()) {
+      if (!activeAssetIds.has(assetId)) {
+        previewImagePromiseCacheRef.current.delete(assetId);
+      }
+    }
+  }, [assets]);
+
+  useEffect(() => {
+    if (!currentAssetId || !readyAssetIds.has(currentAssetId)) {
+      return;
+    }
+
+    const cachedImage = imageElementCacheRef.current.get(currentAssetId) ?? null;
+
+    if (!cachedImage) {
+      return;
+    }
+
+    setCurrentImageElement((current) =>
+      current === cachedImage ? current : cachedImage,
+    );
+  }, [currentAssetId, readyAssetIds]);
 
   const selectedStructure = selectedStructureId
     ? (structuresById.get(selectedStructureId) ?? null)
@@ -882,6 +1062,36 @@ export function DraftModalityViewer({
   }, [activeAssets, currentAsset?.id, navigationAssetIndex, pendingAsset, preloadAsset]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || activeAssets.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    let cursor = 0;
+
+    async function worker() {
+      while (!cancelled) {
+        const asset = activeAssets[cursor];
+        cursor += 1;
+
+        if (!asset) {
+          return;
+        }
+
+        await preloadAssetPreview(asset);
+      }
+    }
+
+    const workerCount = Math.min(PREVIEW_PRELOAD_CONCURRENCY, activeAssets.length);
+
+    void Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAssets, preloadAssetPreview]);
+
+  useEffect(() => {
     if (
       typeof window === "undefined" ||
       activeAssets.length === 0 ||
@@ -1135,6 +1345,8 @@ export function DraftModalityViewer({
     const delayMs =
       lastNavigationSourceRef.current === "wheel"
         ? WHEEL_LOADING_INDICATOR_DELAY_MS
+        : lastNavigationSourceRef.current === "scrub"
+          ? SCRUB_LOADING_INDICATOR_DELAY_MS
         : LOADING_INDICATOR_DELAY_MS;
     const timeoutId = window.setTimeout(() => {
       setLoadingIndicatorAssetId(assetId);
@@ -1829,7 +2041,7 @@ export function DraftModalityViewer({
       return;
     }
 
-    navigateToAsset(nextIndex, "wheel");
+    navigateToAsset(nextIndex, "scrub");
   }
 
   function handleFilmstripHorizontalWheel(event: WheelEvent<HTMLDivElement>) {
@@ -2204,7 +2416,6 @@ export function DraftModalityViewer({
           activeAreaToolSize={activeAreaToolSize}
           areaEditTool={areaEditTool}
           canvasMode={canvasMode}
-          isAssetLoading={isAssetLoading}
           mainInteractionTool={mainInteractionTool}
           showControlPanel={showControlPanel}
           showCrossReferences={showCrossReferences}

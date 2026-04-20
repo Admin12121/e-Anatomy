@@ -45,7 +45,7 @@ export function ReferenceCard({
             decoding="async"
             fetchPriority="low"
             loading="lazy"
-            src={asset.imageUrl}
+            src={asset.thumbnailUrl || asset.imageUrl}
           />
         </div>
       </div>

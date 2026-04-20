@@ -186,6 +186,8 @@ export function ViewerCanvas({
     startIndex: number;
     startY: number;
   } | null>(null);
+  const layerScrubFrameRef = useRef<number | null>(null);
+  const layerScrubQueuedIndexRef = useRef<number | null>(null);
   const panDragRef = useRef<{
     pointerId: number;
     startPanX: number;
@@ -256,6 +258,17 @@ export function ViewerCanvas({
     },
     [measureLabelTextWidth],
   );
+
+  useEffect(() => {
+    return () => {
+      if (
+        typeof window !== "undefined" &&
+        layerScrubFrameRef.current !== null
+      ) {
+        window.cancelAnimationFrame(layerScrubFrameRef.current);
+      }
+    };
+  }, []);
 
   const fitLabelText = useCallback(
     (text: string, fontSize: number, fontWeight: 500 | 700) => {
@@ -898,6 +911,15 @@ export function ViewerCanvas({
     DEFAULT_ANNOTATION_COLOR;
 
   function clearMainInteractionDragState() {
+    if (
+      typeof window !== "undefined" &&
+      layerScrubFrameRef.current !== null
+    ) {
+      window.cancelAnimationFrame(layerScrubFrameRef.current);
+      layerScrubFrameRef.current = null;
+    }
+
+    layerScrubQueuedIndexRef.current = null;
     layerScrubDragRef.current = null;
     panDragRef.current = null;
     zoomDragRef.current = null;
@@ -954,7 +976,32 @@ export function ViewerCanvas({
       const indexDelta = Math.round((deltaY / stageHeight) * range);
       const nextIndex = clamp(layerDrag.startIndex + indexDelta, 0, range);
 
-      onLayerScrubNavigate(nextIndex);
+      if (layerScrubQueuedIndexRef.current === nextIndex) {
+        return;
+      }
+
+      layerScrubQueuedIndexRef.current = nextIndex;
+
+      if (typeof window === "undefined") {
+        onLayerScrubNavigate(nextIndex);
+        return;
+      }
+
+      if (layerScrubFrameRef.current !== null) {
+        return;
+      }
+
+      layerScrubFrameRef.current = window.requestAnimationFrame(() => {
+        layerScrubFrameRef.current = null;
+        const queuedIndex = layerScrubQueuedIndexRef.current;
+        layerScrubQueuedIndexRef.current = null;
+
+        if (queuedIndex === null || queuedIndex === currentAssetIndex) {
+          return;
+        }
+
+        onLayerScrubNavigate(queuedIndex);
+      });
       return;
     }
 
@@ -993,6 +1040,24 @@ export function ViewerCanvas({
       zoomDragRef.current?.pointerId !== event.pointerId
     ) {
       return;
+    }
+
+    if (
+      layerScrubDragRef.current?.pointerId === event.pointerId &&
+      layerScrubFrameRef.current !== null &&
+      typeof window !== "undefined"
+    ) {
+      window.cancelAnimationFrame(layerScrubFrameRef.current);
+      layerScrubFrameRef.current = null;
+    }
+
+    if (layerScrubDragRef.current?.pointerId === event.pointerId) {
+      const queuedIndex = layerScrubQueuedIndexRef.current;
+      layerScrubQueuedIndexRef.current = null;
+
+      if (queuedIndex !== null && queuedIndex !== currentAssetIndex) {
+        onLayerScrubNavigate(queuedIndex);
+      }
     }
 
     clearMainInteractionDragState();

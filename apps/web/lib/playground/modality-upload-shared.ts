@@ -25,7 +25,6 @@ const ENDOSCOPY_HINTS = ["endo", "endoscopy", "fibroscopy"]
 const DICOM_EXTENSIONS = [".dcm", ".dicom", ".ima"] as const
 
 export const MAX_DICOM_FILES = 512
-export const MAX_SINGLE_FILE_BYTES = 64 * 1024 * 1024
 export const MAX_TOTAL_UPLOAD_BYTES = 512 * 1024 * 1024
 
 export class ModalityUploadValidationError extends Error {
@@ -102,12 +101,6 @@ export async function analyzeModalityUploadFiles(
   if (files.some((file) => isZipFilename(file.name))) {
     throw new ModalityUploadValidationError(
       "ZIP packages must be uploaded by themselves.",
-    )
-  }
-
-  if (files.some((file) => file.size > MAX_SINGLE_FILE_BYTES)) {
-    throw new ModalityUploadValidationError(
-      "One of the selected files is too large.",
     )
   }
 
