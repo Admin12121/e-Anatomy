@@ -1042,7 +1042,6 @@ impl PlaygroundRepository {
         user_id: &str,
         processing_status: &str,
         cover_image_url: Option<&str>,
-        inferred_weighting_code: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
@@ -1051,7 +1050,6 @@ impl PlaygroundRepository {
                 latest_ingest_job_id = $2,
                 processing_status = $4,
                 cover_image_url = COALESCE($5, cover_image_url),
-                weighting_code = COALESCE(weighting_code, $6),
                 updated_by_user_id = $3,
                 updated_at = NOW()
             WHERE id = $1
@@ -1062,7 +1060,6 @@ impl PlaygroundRepository {
         .bind(user_id)
         .bind(processing_status)
         .bind(cover_image_url)
-        .bind(inferred_weighting_code)
         .execute(pool)
         .await?;
 

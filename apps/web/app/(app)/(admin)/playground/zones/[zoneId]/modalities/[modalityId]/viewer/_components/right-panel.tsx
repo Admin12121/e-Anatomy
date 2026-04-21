@@ -380,7 +380,7 @@ export function ModalityViewerRightPanel({
           {weightings.length > 1 ? (
             <ViewerSidebarSection title="Slice Weighting">
               <p className="mb-2 text-xs text-white/55">
-                Auto-detected from slice metadata. This filters the stack only.
+                Filter slices by assigned weighting.
               </p>
               <Select
                 value={activeWeighting}

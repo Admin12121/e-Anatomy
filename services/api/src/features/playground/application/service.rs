@@ -401,7 +401,6 @@ impl PlaygroundService {
                 user_id,
                 "processing",
                 None,
-                None,
             )
             .await?;
 
@@ -600,8 +599,6 @@ impl PlaygroundService {
                     .clone()
                     .or_else(|| Some(asset.image_url.clone()))
             });
-            let inferred_modality_weighting_code =
-                infer_modality_weighting_code(&persisted_assets);
 
             self.repo
                 .attach_ingest_job_to_modality(
@@ -611,7 +608,6 @@ impl PlaygroundService {
                     &user_id,
                     "ready",
                     cover_image_url.as_deref(),
-                    inferred_modality_weighting_code.as_deref(),
                 )
                 .await?;
 
@@ -648,7 +644,6 @@ impl PlaygroundService {
                         ingest_job_id,
                         &user_id,
                         "failed",
-                        None,
                         None,
                     )
                     .await;
@@ -2198,11 +2193,6 @@ async fn derive_slice_candidate(
             .and_then(|value| value.parse::<i32>().ok())
             .unwrap_or(fallback_index as i32);
         let slice_index = instance_number.max(0);
-        let weighting_code = infer_weighting_code(
-            series_description.as_deref(),
-            sequence_name.as_deref(),
-            study_file.source_relative_path.as_deref(),
-        );
         let orientation_code = infer_orientation_code(
             series_description.as_deref(),
             sequence_name.as_deref(),
@@ -2211,7 +2201,6 @@ async fn derive_slice_candidate(
         let series_label = series_description
             .clone()
             .or(sequence_name.clone())
-            .or_else(|| weighting_code.clone().map(|value| value.to_uppercase()))
             .or_else(|| orientation_code.clone().map(|value| value.to_uppercase()))
             .or_else(|| Some("Series".to_string()));
 
@@ -2243,7 +2232,7 @@ async fn derive_slice_candidate(
                 series_label,
                 instance_uid,
                 slice_index,
-                weighting_code,
+                weighting_code: None,
                 orientation_code,
             },
             atlas_source_image,
@@ -2711,47 +2700,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn infer_weighting_code(
-    series_description: Option<&str>,
-    sequence_name: Option<&str>,
-    source_relative_path: Option<&str>,
-) -> Option<String> {
-    let haystack = [series_description, sequence_name, source_relative_path]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase();
-
-    if haystack.is_empty() {
-        return None;
-    }
-
-    if haystack.contains("t1 gado") || haystack.contains("t1+c") || haystack.contains("post") {
-        return Some("t1_gado".to_string());
-    }
-    if haystack.contains("t2*") || haystack.contains("t2 star") || haystack.contains("gre") {
-        return Some("t2_star".to_string());
-    }
-    if haystack.contains("flair") {
-        return Some("flair".to_string());
-    }
-    if haystack.contains("adc") {
-        return Some("adc".to_string());
-    }
-    if haystack.contains("dwi") {
-        return Some("dwi".to_string());
-    }
-    if haystack.contains("t2") {
-        return Some("t2".to_string());
-    }
-    if haystack.contains("t1") {
-        return Some("t1".to_string());
-    }
-
-    None
-}
-
 fn infer_orientation_code(
     series_description: Option<&str>,
     sequence_name: Option<&str>,
@@ -2821,19 +2769,6 @@ fn build_viewer_manifest_json(
             .into_iter()
             .collect::<Vec<_>>(),
     })
-}
-
-fn infer_modality_weighting_code(assets: &[ZoneModalityAsset]) -> Option<String> {
-    let distinct_weightings = assets
-        .iter()
-        .filter_map(|asset| asset.weighting_code.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-
-    if distinct_weightings.len() == 1 {
-        return distinct_weightings.into_iter().next();
-    }
-
-    None
 }
 
 fn count_distinct_series(assets: &[ZoneModalityAsset]) -> usize {

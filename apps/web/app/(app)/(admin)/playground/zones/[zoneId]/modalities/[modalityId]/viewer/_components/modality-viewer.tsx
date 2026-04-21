@@ -354,7 +354,6 @@ export function DraftModalityViewer({
     () => new Map(annotations.map((annotation) => [annotation.id, annotation])),
     [annotations],
   );
-  const modalityWeightingCode = data?.modality.weightingCode ?? null;
   const baseSliceAssets = useMemo(
     () =>
       assets
@@ -420,35 +419,31 @@ export function DraftModalityViewer({
     [normalizedSliceTimelineIds, sliceAssetById],
   );
   const weightings = useMemo<string[]>(() => {
-    const effectiveValues = Array.from(
+    const specificValues = Array.from(
       new Set(
-        orderedSliceAssets.map(
-          (asset) => asset.weightingCode ?? modalityWeightingCode ?? "all",
+        orderedSliceAssets.flatMap((asset) =>
+          asset.weightingCode ? [asset.weightingCode] : [],
         ),
       ),
     );
 
-    if (effectiveValues.length <= 1) {
+    if (specificValues.length === 0) {
       return ["all"];
     }
 
-    const specificValues = effectiveValues.filter((value) => value !== "all");
-
     return ["all", ...specificValues];
-  }, [modalityWeightingCode, orderedSliceAssets]);
+  }, [orderedSliceAssets]);
   const activeAssets = useMemo(() => {
     if (activeWeighting === "all") {
       return orderedSliceAssets;
     }
 
     const weighted = orderedSliceAssets.filter(
-      (asset) =>
-        (asset.weightingCode ?? modalityWeightingCode ?? "all") ===
-        activeWeighting,
+      (asset) => (asset.weightingCode ?? "all") === activeWeighting,
     );
 
     return weighted.length > 0 ? weighted : orderedSliceAssets;
-  }, [activeWeighting, modalityWeightingCode, orderedSliceAssets]);
+  }, [activeWeighting, orderedSliceAssets]);
   const viewerSliceItems = useMemo<ViewerSliceItem[]>(
     () =>
       activeAssets.map((asset, assetIndex) => {
@@ -2139,7 +2134,7 @@ export function DraftModalityViewer({
 
     startTransition(() => {
       setSelectedAnnotationId(nextAnnotation.id);
-      setActiveWeighting(nextAsset.weightingCode ?? modalityWeightingCode ?? "all");
+      setActiveWeighting(nextAsset.weightingCode ?? "all");
     });
     lastNavigationDirectionRef.current = 0;
     void requestAssetNavigation(nextAsset, "search");
