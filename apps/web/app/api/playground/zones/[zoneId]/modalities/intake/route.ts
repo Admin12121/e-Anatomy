@@ -11,7 +11,7 @@ export const runtime = "nodejs"
 
 const MAX_INTAKE_FILE_COUNT = 512
 const MAX_INTAKE_TOTAL_BYTES = 512 * 1024 * 1024
-const MAX_INTAKE_SINGLE_FILE_BYTES = 64 * 1024 * 1024
+const MAX_INTAKE_SINGLE_FILE_BYTES = MAX_INTAKE_TOTAL_BYTES
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/
 const DANGEROUS_PATH_PATTERN = /(^|[\\/])\.\.($|[\\/])/
 

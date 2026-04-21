@@ -62,6 +62,7 @@ pub struct ZoneModality {
     pub id: String,
     pub name: String,
     pub modality_type: String,
+    pub weighting_code: Option<String>,
     pub cover_image_url: Option<String>,
     pub source_kind: String,
     pub source_label: Option<String>,
@@ -118,6 +119,7 @@ pub struct ZoneModalityListResponse {
 pub struct CreateZoneModalityInput {
     pub name: String,
     pub modality_type: String,
+    pub weighting_code: Option<String>,
     pub cover_image_url: Option<String>,
     pub source_kind: Option<String>,
     pub source_label: Option<String>,
@@ -131,6 +133,7 @@ pub struct CreateZoneModalityInput {
 pub struct UpdateZoneModalityInput {
     pub name: String,
     pub modality_type: String,
+    pub weighting_code: Option<String>,
     pub cover_image_url: Option<String>,
     pub source_kind: Option<String>,
     pub source_label: Option<String>,
@@ -166,6 +169,27 @@ pub struct ZoneModalityAsset {
     pub orientation_code: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoneModalityAtlasPage {
+    pub id: String,
+    pub image_url: String,
+    pub width: i32,
+    pub height: i32,
+    pub slice_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoneModalityAtlasFrame {
+    pub asset_id: String,
+    pub atlas_id: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -388,6 +412,8 @@ pub struct ZoneModalityViewerManifest {
     pub ingest_job: Option<ModalityIngestJob>,
     pub source_assets: Vec<ModalitySourceAsset>,
     pub assets: Vec<ZoneModalityAsset>,
+    pub atlases: Vec<ZoneModalityAtlasPage>,
+    pub atlas_frames: Vec<ZoneModalityAtlasFrame>,
     pub structure_groups: Vec<ViewerStructureGroup>,
     pub structures: Vec<ViewerStructure>,
     pub annotations: Vec<ViewerAnnotation>,

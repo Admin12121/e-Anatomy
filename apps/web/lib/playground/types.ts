@@ -67,6 +67,7 @@ export type ZoneModality = {
   id: string
   name: string
   modalityType: ModalityType
+  weightingCode: ModalityWeightingCode | null
   coverImageUrl: string | null
   sourceKind: ModalitySourceKind
   sourceLabel: string | null
@@ -125,6 +126,7 @@ export type ZoneModalityListResponse = {
 export type CreateZoneModalityInput = {
   name: string
   modalityType: ModalityType
+  weightingCode?: ModalityWeightingCode | null
   coverImageUrl?: string | null
   sourceKind?: ModalitySourceKind
   sourceLabel?: string | null
@@ -136,6 +138,7 @@ export type CreateZoneModalityInput = {
 export type UpdateZoneModalityInput = {
   name: string
   modalityType: ModalityType
+  weightingCode?: ModalityWeightingCode | null
   coverImageUrl?: string | null
   sourceKind?: ModalitySourceKind
   sourceLabel?: string | null
@@ -186,6 +189,23 @@ export type ZoneModalityAsset = {
   orientationCode: string | null
   createdAt: string
   updatedAt: string
+}
+
+export type ZoneModalityAtlasPage = {
+  id: string
+  imageUrl: string
+  width: number
+  height: number
+  sliceCount: number
+}
+
+export type ZoneModalityAtlasFrame = {
+  assetId: string
+  atlasId: string
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 export type ZoneModalityAssetListResponse = {
@@ -290,6 +310,8 @@ export type ZoneModalityViewerManifest = {
   ingestJob: ModalityIngestJob | null
   sourceAssets: ModalitySourceAsset[]
   assets: ZoneModalityAsset[]
+  atlases: ZoneModalityAtlasPage[]
+  atlasFrames: ZoneModalityAtlasFrame[]
   structureGroups: ViewerStructureGroup[]
   structures: ViewerStructure[]
   annotations: ViewerAnnotation[]

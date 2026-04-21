@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MutableRefObject,
   type MouseEvent as ReactMouseEvent,
   type WheelEvent,
@@ -21,7 +22,11 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ZoneModalityAsset } from "@/lib/playground/types";
+import type {
+  ZoneModalityAsset,
+  ZoneModalityAtlasFrame,
+  ZoneModalityAtlasPage,
+} from "@/lib/playground/types";
 
 import {
   DeleteAllLeftIcon,
@@ -33,6 +38,8 @@ type SliceItem = {
   asset: ZoneModalityAsset;
   assetId: string;
   assetIndex: number;
+  atlasFrame: ZoneModalityAtlasFrame | null;
+  atlasPage: ZoneModalityAtlasPage | null;
   thumbnailSrc: string;
 };
 
@@ -48,6 +55,42 @@ const COMPACT_OVERSCAN = 14;
 const EDITOR_ITEM_WIDTH_PX = 128;
 const EDITOR_GAP_PX = 8;
 const EDITOR_OVERSCAN = 8;
+
+function buildAtlasThumbnailStyle(
+  atlasPage: ZoneModalityAtlasPage,
+  atlasFrame: ZoneModalityAtlasFrame,
+  thumbnailSizePx: number,
+): CSSProperties | null {
+  if (
+    atlasPage.width <= 0 ||
+    atlasPage.height <= 0 ||
+    atlasFrame.width <= 0 ||
+    atlasFrame.height <= 0 ||
+    thumbnailSizePx <= 0
+  ) {
+    return null;
+  }
+
+  const scale = Math.max(
+    thumbnailSizePx / atlasFrame.width,
+    thumbnailSizePx / atlasFrame.height,
+  );
+  const atlasScaledWidth = atlasPage.width * scale;
+  const atlasScaledHeight = atlasPage.height * scale;
+  const frameScaledWidth = atlasFrame.width * scale;
+  const frameScaledHeight = atlasFrame.height * scale;
+  const offsetX =
+    -(atlasFrame.x * scale) - (frameScaledWidth - thumbnailSizePx) / 2;
+  const offsetY =
+    -(atlasFrame.y * scale) - (frameScaledHeight - thumbnailSizePx) / 2;
+
+  return {
+    backgroundImage: `url(${atlasPage.imageUrl})`,
+    backgroundPosition: `${offsetX}px ${offsetY}px`,
+    backgroundRepeat: "no-repeat",
+    backgroundSize: `${atlasScaledWidth}px ${atlasScaledHeight}px`,
+  };
+}
 
 function buildVirtualSliceWindow({
   activeIndex,
@@ -221,9 +264,14 @@ export function SliceFilmstrip({
       return;
     }
 
+    let rafId: number | null = null;
+
     const updateViewport = () => {
+      rafId = null;
+
       const nextState = {
-        scrollLeft: scroller.scrollLeft,
+        // Round sub-pixel scroll values to avoid feedback loops from tiny tween deltas.
+        scrollLeft: Math.round(scroller.scrollLeft),
         width: scroller.clientWidth,
       };
 
@@ -235,18 +283,34 @@ export function SliceFilmstrip({
       );
     };
 
-    updateViewport();
-    scroller.addEventListener("scroll", updateViewport, { passive: true });
+    const scheduleViewportUpdate = () => {
+      if (rafId !== null) {
+        return;
+      }
+
+      rafId = window.requestAnimationFrame(updateViewport);
+    };
+
+    scheduleViewportUpdate();
+    scroller.addEventListener("scroll", scheduleViewportUpdate, {
+      passive: true,
+    });
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(updateViewport);
+      resizeObserver = new ResizeObserver(() => {
+        scheduleViewportUpdate();
+      });
       resizeObserver.observe(scroller);
     }
 
     return () => {
-      scroller.removeEventListener("scroll", updateViewport);
+      scroller.removeEventListener("scroll", scheduleViewportUpdate);
       resizeObserver?.disconnect();
+
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
     };
   }, [filmstripScrollerRef, sliceItems.length]);
 
@@ -261,9 +325,14 @@ export function SliceFilmstrip({
       return;
     }
 
+    let rafId: number | null = null;
+
     const updateViewport = () => {
+      rafId = null;
+
       const nextState = {
-        scrollLeft: scroller.scrollLeft,
+        // Round sub-pixel scroll values to avoid feedback loops from tiny tween deltas.
+        scrollLeft: Math.round(scroller.scrollLeft),
         width: scroller.clientWidth,
       };
 
@@ -275,18 +344,34 @@ export function SliceFilmstrip({
       );
     };
 
-    updateViewport();
-    scroller.addEventListener("scroll", updateViewport, { passive: true });
+    const scheduleViewportUpdate = () => {
+      if (rafId !== null) {
+        return;
+      }
+
+      rafId = window.requestAnimationFrame(updateViewport);
+    };
+
+    scheduleViewportUpdate();
+    scroller.addEventListener("scroll", scheduleViewportUpdate, {
+      passive: true,
+    });
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(updateViewport);
+      resizeObserver = new ResizeObserver(() => {
+        scheduleViewportUpdate();
+      });
       resizeObserver.observe(scroller);
     }
 
     return () => {
-      scroller.removeEventListener("scroll", updateViewport);
+      scroller.removeEventListener("scroll", scheduleViewportUpdate);
       resizeObserver?.disconnect();
+
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
     };
   }, [showSliceEditorPanel, sliceEditorScrollerRef, sliceItems.length]);
 
@@ -325,12 +410,20 @@ export function SliceFilmstrip({
 
   const createSliceButton = useCallback(
     (sliceItem: SliceItem, variant: "compact" | "editor") => {
-      const { asset, assetId, assetIndex, thumbnailSrc } = sliceItem;
+      const { asset, assetId, assetIndex, atlasFrame, atlasPage, thumbnailSrc } =
+        sliceItem;
       const isActive = assetId === activeAssetId;
+      const thumbnailSizePx =
+        variant === "compact" ? COMPACT_ITEM_WIDTH_PX : EDITOR_ITEM_WIDTH_PX;
+      const atlasThumbnailStyle =
+        atlasFrame && atlasPage
+          ? buildAtlasThumbnailStyle(atlasPage, atlasFrame, thumbnailSizePx)
+          : null;
 
       return (
         <button
           key={variant === "compact" ? assetId : `editor-${assetId}`}
+          aria-label={asset.label}
           data-asset-id={assetId}
           data-asset-index={assetIndex}
           type="button"
@@ -354,15 +447,19 @@ export function SliceFilmstrip({
               variant === "compact" ? "bg-black/40" : "bg-black/50",
             )}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt={asset.label}
-              className="h-full w-full object-cover"
-              decoding="async"
-              fetchPriority={isActive ? "high" : "low"}
-              loading={isActive ? "eager" : "lazy"}
-              src={thumbnailSrc}
-            />
+            {atlasThumbnailStyle ? (
+              <div className="h-full w-full" style={atlasThumbnailStyle} />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                alt={asset.label}
+                className="h-full w-full object-cover"
+                decoding="async"
+                fetchPriority={isActive ? "high" : "low"}
+                loading={isActive ? "eager" : "lazy"}
+                src={thumbnailSrc}
+              />
+            )}
           </div>
           {variant === "editor" ? (
             <div className="absolute top-0 px-1.5 py-1 text-[10px] font-semibold">

@@ -12,6 +12,7 @@ import { LoaderCircleIcon } from "lucide-react";
 
 import Loader from "@/components/ui/loader";
 import type {
+  ZoneModalityAtlasFrame,
   ViewerAnnotation,
   ViewerAnnotationPoint,
   ViewerStructure,
@@ -77,6 +78,7 @@ type ViewerCanvasProps = {
   canvasRotationQuarterTurns: number;
   currentAsset: ZoneModalityAsset | null;
   currentAssetIndex: number;
+  currentAtlasFrame: ZoneModalityAtlasFrame | null;
   currentImageElement: HTMLImageElement | null;
   darkMode: boolean;
   draftStructureTitle: string;
@@ -130,6 +132,7 @@ export function ViewerCanvas({
   canvasRotationQuarterTurns,
   currentAsset,
   currentAssetIndex,
+  currentAtlasFrame,
   currentImageElement,
   darkMode,
   draftStructureTitle,
@@ -362,15 +365,10 @@ export function ViewerCanvas({
     Math.abs(annotationForm.labelX - EMPTY_ANNOTATION_FORM.labelX) > 0.0005 ||
     Math.abs(annotationForm.labelY - EMPTY_ANNOTATION_FORM.labelY) > 0.0005;
   const showDraftPointer =
-    !selectedAnnotationId &&
-    canvasMode !== "draw-region" &&
-    draftPointerMovedFromDefault;
+    !selectedAnnotationId && draftPointerMovedFromDefault;
   const draftPointerColor =
     annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
-  const draftPointerLabel =
-    annotationForm.titleOverride.trim() ||
-    draftStructureTitle.trim() ||
-    "Draft";
+  const draftPointerLabel = draftStructureTitle.trim() || "Draft";
   const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
   const canvasSurfaceTransform = `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale}) rotate(${normalizedCanvasRotation * 90}deg) scaleX(${canvasFlipHorizontal ? -1 : 1}) scaleY(${canvasFlipVertical ? -1 : 1})`;
 
@@ -734,10 +732,12 @@ export function ViewerCanvas({
     }
 
     const width =
+      currentAtlasFrame?.width ??
       currentAsset?.width ??
       currentImageElement.naturalWidth ??
       currentImageElement.width;
     const height =
+      currentAtlasFrame?.height ??
       currentAsset?.height ??
       currentImageElement.naturalHeight ??
       currentImageElement.height;
@@ -756,8 +756,24 @@ export function ViewerCanvas({
     }
 
     context.clearRect(0, 0, width, height);
+    if (currentAtlasFrame) {
+      context.drawImage(
+        currentImageElement,
+        currentAtlasFrame.x,
+        currentAtlasFrame.y,
+        currentAtlasFrame.width,
+        currentAtlasFrame.height,
+        0,
+        0,
+        width,
+        height,
+      );
+      return;
+    }
+
     context.drawImage(currentImageElement, 0, 0, width, height);
   }, [
+    currentAtlasFrame,
     currentAsset?.height,
     currentAsset?.id,
     currentAsset?.width,

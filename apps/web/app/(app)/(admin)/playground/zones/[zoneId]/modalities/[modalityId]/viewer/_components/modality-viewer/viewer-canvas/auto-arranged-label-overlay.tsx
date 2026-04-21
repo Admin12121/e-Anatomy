@@ -110,10 +110,7 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
         const leaderColor = isSelected
           ? annotationForm.leaderColorHex || color
           : annotation.leaderColorHex || color;
-        const label =
-          (isSelected
-            ? annotationForm.titleOverride.trim()
-            : annotation.titleOverride) || structure.title;
+        const label = annotation.titleOverride || structure.title;
         const textVisible =
           showLabels &&
           !pinsOnly &&

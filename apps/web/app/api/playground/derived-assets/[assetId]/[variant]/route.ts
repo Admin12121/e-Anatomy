@@ -33,7 +33,7 @@ type RouteContext = {
 export async function GET(request: Request, context: RouteContext) {
   const { assetId, variant } = await context.params
 
-  if (variant !== "image" && variant !== "thumbnail") {
+  if (variant !== "image") {
     return jsonError(404, "not_found", "Derived asset variant was not found.")
   }
 

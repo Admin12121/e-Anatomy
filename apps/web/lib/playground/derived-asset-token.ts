@@ -4,7 +4,7 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 
 import { AUTH_SECRET } from "@/lib/auth/runtime-config"
 
-export type DerivedAssetVariant = "image" | "thumbnail"
+export type DerivedAssetVariant = "image"
 
 type DerivedAssetTokenPayload = {
   accountId: string

@@ -20,15 +20,15 @@ use tokio::{fs, io::AsyncWriteExt};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::features::playground::application::service::{
+    CreateZoneModalityStudyUploadInput, DerivedAssetBinaryVariant, UploadedSourceFile,
+};
 use crate::features::playground::domain::models::{
     CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
     CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
-    DeleteZoneModalityAssetsInput,
-    UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput, UpdateViewerStructureInput,
-    UpdateZoneInput, UpdateZoneModalityAssetInput, UpdateZoneModalityInput,
-};
-use crate::features::playground::application::service::{
-    CreateZoneModalityStudyUploadInput, DerivedAssetBinaryVariant, UploadedSourceFile,
+    DeleteZoneModalityAssetsInput, UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput,
+    UpdateViewerStructureInput, UpdateZoneInput, UpdateZoneModalityAssetInput,
+    UpdateZoneModalityInput,
 };
 use crate::infrastructure::{
     error::AppError,
@@ -38,7 +38,7 @@ use crate::infrastructure::{
 
 const MAX_STUDY_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
 const MAX_STUDY_UPLOAD_FILE_COUNT: usize = 512;
-const MAX_STUDY_UPLOAD_SINGLE_FILE_BYTES: i64 = 64 * 1024 * 1024;
+const MAX_STUDY_UPLOAD_SINGLE_FILE_BYTES: i64 = MAX_STUDY_UPLOAD_BYTES as i64;
 const MAX_UPLOAD_PATH_LENGTH: usize = 260;
 
 pub fn routes() -> Router<AppState> {
@@ -79,6 +79,10 @@ pub fn routes() -> Router<AppState> {
             get(get_zone_modality_viewer_manifest),
         )
         .route(
+            "/zones/{zone_id}/modalities/{modality_id}/viewer/atlases/rebuild",
+            axum::routing::post(rebuild_zone_modality_atlases),
+        )
+        .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/structure-groups",
             axum::routing::post(create_viewer_structure_group),
         )
@@ -107,10 +111,6 @@ pub fn routes() -> Router<AppState> {
             "/derived-assets/{asset_id}/image",
             get(get_derived_asset_image),
         )
-        .route(
-            "/derived-assets/{asset_id}/thumbnail",
-            get(get_derived_asset_thumbnail),
-        )
 }
 
 async fn list_zones(
@@ -134,7 +134,10 @@ async fn get_zone(
 ) -> Result<impl IntoResponse, AppError> {
     let zone = state
         .playground_service
-        .get_zone_detail(resolve_admin_account_id(&state, &jar, &headers).await?, zone_id)
+        .get_zone_detail(
+            resolve_admin_account_id(&state, &jar, &headers).await?,
+            zone_id,
+        )
         .await?;
 
     Ok((StatusCode::OK, Json(zone)))
@@ -179,7 +182,10 @@ async fn list_zone_modalities(
 ) -> Result<impl IntoResponse, AppError> {
     let response = state
         .playground_service
-        .list_zone_modalities(resolve_admin_account_id(&state, &jar, &headers).await?, zone_id)
+        .list_zone_modalities(
+            resolve_admin_account_id(&state, &jar, &headers).await?,
+            zone_id,
+        )
         .await?;
 
     Ok((StatusCode::OK, Json(response)))
@@ -281,12 +287,7 @@ async fn create_zone_modality_from_study_upload(
     let input = parse_study_upload_multipart(&state, multipart).await?;
     let modality = state
         .playground_service
-        .create_zone_modality_from_study_upload(
-            actor.account_id,
-            zone_id,
-            &actor.user_id,
-            input,
-        )
+        .create_zone_modality_from_study_upload(actor.account_id, zone_id, &actor.user_id, input)
         .await?;
 
     Ok((StatusCode::CREATED, Json(modality)))
@@ -439,6 +440,32 @@ async fn get_zone_modality_viewer_manifest(
         .await?;
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+async fn rebuild_zone_modality_atlases(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    let assets = state
+        .playground_service
+        .list_zone_modality_assets(actor.account_id, zone_id, modality_id)
+        .await?;
+
+    let _ = state
+        .playground_service
+        .rebuild_modality_atlases(
+            actor.account_id,
+            zone_id,
+            modality_id,
+            &actor.user_id,
+            &assets.items,
+        )
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn create_viewer_structure_group(
@@ -637,22 +664,6 @@ async fn get_derived_asset_image(
     .await
 }
 
-async fn get_derived_asset_thumbnail(
-    State(state): State<AppState>,
-    Path(asset_id): Path<Uuid>,
-    jar: CookieJar,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    serve_derived_asset_binary(
-        state,
-        asset_id,
-        jar,
-        headers,
-        DerivedAssetBinaryVariant::Thumbnail,
-    )
-    .await
-}
-
 async fn serve_derived_asset_binary(
     state: AppState,
     asset_id: Uuid,
@@ -684,12 +695,13 @@ async fn parse_study_upload_multipart(
         .join("playground")
         .join("tmp")
         .join(Uuid::new_v4().to_string());
-    fs::create_dir_all(&temp_root)
-        .await
-        .map_err(|error| AppError::internal(format!("Unable to create temp upload directory: {error}")))?;
+    fs::create_dir_all(&temp_root).await.map_err(|error| {
+        AppError::internal(format!("Unable to create temp upload directory: {error}"))
+    })?;
 
     let mut name: Option<String> = None;
     let mut modality_type: Option<String> = None;
+    let mut weighting_code: Option<String> = None;
     let mut notes: Option<String> = None;
     let mut source_kind: Option<String> = None;
     let mut source_label: Option<String> = None;
@@ -701,50 +713,39 @@ async fn parse_study_upload_multipart(
         let detail = format_error_chain(&error);
         warn!(detail = %detail, "playground modality intake multipart.next_field failed");
         AppError::bad_request(format!("Invalid upload body: {}", error.body_text()))
-    })?
-    {
+    })? {
         let field_name = field.name().unwrap_or_default().to_string();
 
         match field_name.as_str() {
             "name" => {
-                name = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|error| AppError::bad_request(format!("Invalid modality name: {error}")))?,
-                );
+                name = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid modality name: {error}"))
+                })?);
             }
             "modalityType" => {
-                modality_type = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|error| AppError::bad_request(format!("Invalid modality type: {error}")))?,
-                );
+                modality_type = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid modality type: {error}"))
+                })?);
+            }
+            "weightingCode" => {
+                weighting_code = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid weighting code: {error}"))
+                })?);
             }
             "notes" => {
-                notes = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|error| AppError::bad_request(format!("Invalid notes field: {error}")))?,
-                );
+                notes = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid notes field: {error}"))
+                })?);
             }
             "sourceKind" => {
-                source_kind = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|error| AppError::bad_request(format!("Invalid source kind: {error}")))?,
-                );
+                source_kind = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid source kind: {error}"))
+                })?);
             }
             "sourceLabel" => {
-                source_label = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|error| AppError::bad_request(format!("Invalid source label: {error}")))?,
-                );
+                source_label = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid source label: {error}"))
+                })?);
             }
             "sourceFileCount" => {
                 let value = field.text().await.map_err(|error| {
@@ -758,9 +759,10 @@ async fn parse_study_upload_multipart(
                 let payload = field.text().await.map_err(|error| {
                     AppError::bad_request(format!("Invalid relative-path manifest: {error}"))
                 })?;
-                relative_paths = serde_json::from_str::<Vec<String>>(&payload).map_err(|error| {
-                    AppError::bad_request(format!("Relative-path manifest is invalid: {error}"))
-                })?;
+                relative_paths =
+                    serde_json::from_str::<Vec<String>>(&payload).map_err(|error| {
+                        AppError::bad_request(format!("Relative-path manifest is invalid: {error}"))
+                    })?;
             }
             "file" => {
                 let original_file_name = field
@@ -864,6 +866,7 @@ async fn parse_study_upload_multipart(
     Ok(CreateZoneModalityStudyUploadInput {
         name: name.unwrap_or_default(),
         modality_type: modality_type.unwrap_or_default(),
+        weighting_code,
         notes,
         source_kind: source_kind.unwrap_or_default(),
         source_label,

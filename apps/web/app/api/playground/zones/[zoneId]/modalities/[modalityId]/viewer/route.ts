@@ -82,26 +82,32 @@ export async function GET(request: Request, context: RouteContext) {
               variant: "image",
             })
           : undefined
-        const thumbnailSearchParams = result.user.apiAccountId
+        const imageUrl =
+          rewriteDerivedAssetUrl(asset.imageUrl, asset.id, imageSearchParams) ??
+          asset.imageUrl
+
+        return {
+          ...asset,
+          imageUrl,
+          thumbnailUrl: imageUrl,
+        }
+      }),
+      atlases: viewer.atlases.map((atlas) => {
+        const imageSearchParams = result.user.apiAccountId
           ? createDerivedAssetSearchParams({
               accountId: result.user.apiAccountId,
-              assetId: asset.id,
+              assetId: atlas.id,
               now: signedTokenNow,
               userId: result.user.id,
-              variant: "thumbnail",
+              variant: "image",
             })
           : undefined
 
         return {
-          ...asset,
+          ...atlas,
           imageUrl:
-            rewriteDerivedAssetUrl(asset.imageUrl, asset.id, imageSearchParams) ??
-            asset.imageUrl,
-          thumbnailUrl: rewriteDerivedAssetUrl(
-            asset.thumbnailUrl,
-            asset.id,
-            thumbnailSearchParams,
-          ),
+            rewriteDerivedAssetUrl(atlas.imageUrl, atlas.id, imageSearchParams) ??
+            atlas.imageUrl,
         }
       }),
       modality: {

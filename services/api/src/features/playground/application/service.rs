@@ -7,18 +7,15 @@ use std::{
 };
 
 use anyhow::Context;
-use dicom::{
-    object::open_file,
-    pixeldata::PixelDecoder,
+use dicom::{object::open_file, pixeldata::PixelDecoder};
+use image::{
+    ExtendedColorType, ImageBuffer, ImageEncoder, Rgba, RgbaImage, codecs::avif::AvifEncoder,
+    imageops::overlay,
 };
-use image::{DynamicImage, imageops::FilterType};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::{
-    fs,
-    sync::broadcast,
-};
+use tokio::{fs, sync::broadcast, task::JoinSet};
 use tracing::error;
 use uuid::Uuid;
 
@@ -26,13 +23,12 @@ use crate::features::playground::{
     domain::models::{
         CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
         CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
-        DeleteZoneModalityAssetsInput, DeleteZoneModalityAssetsResponse,
-        ModalitySourceAsset,
+        DeleteZoneModalityAssetsInput, DeleteZoneModalityAssetsResponse, ModalitySourceAsset,
         UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput, UpdateViewerStructureInput,
         UpdateZoneInput, UpdateZoneModalityAssetInput, UpdateZoneModalityInput,
-        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneDetail,
-        ZoneListResponse, ZoneModality, ZoneModalityAsset, ZoneModalityAssetListResponse,
-        ZoneModalityListResponse, ZoneModalityViewerManifest,
+        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneDetail, ZoneListResponse,
+        ZoneModality, ZoneModalityAsset, ZoneModalityAssetListResponse, ZoneModalityAtlasFrame,
+        ZoneModalityAtlasPage, ZoneModalityListResponse, ZoneModalityViewerManifest,
     },
     infrastructure::repository::PlaygroundRepository,
 };
@@ -81,6 +77,7 @@ pub struct UploadedSourceFile {
 pub struct CreateZoneModalityStudyUploadInput {
     pub name: String,
     pub modality_type: String,
+    pub weighting_code: Option<String>,
     pub notes: Option<String>,
     pub source_kind: String,
     pub source_label: Option<String>,
@@ -111,13 +108,43 @@ struct DerivedSliceCandidate {
     orientation_code: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct DerivedSliceBuild {
+    candidate: DerivedSliceCandidate,
+    atlas_source_image: RgbaImage,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AtlasFrameMetadata {
+    asset_id: String,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AtlasPageMetadata {
+    width: i32,
+    height: i32,
+    frames: Vec<AtlasFrameMetadata>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum DerivedAssetBinaryVariant {
     Image,
-    Thumbnail,
 }
 
 const MAX_ACTIVE_MODALITY_INGESTS: i64 = 2;
+const MAX_CONCURRENT_DICOM_DERIVATIONS: usize = 8;
+const AVIF_ENCODER_SPEED: u8 = 8;
+const AVIF_ENCODER_QUALITY: u8 = 80;
+const AVIF_ENCODER_THREADS_PER_IMAGE: usize = 1;
+const MAX_ATLAS_PAGE_EDGE: u32 = 4096;
+const MAX_ATLAS_PAGE_COLUMNS: usize = 8;
+const MAX_ATLAS_SLICES_PER_PAGE: usize = 40;
 
 impl PlaygroundService {
     pub fn new(pool: PgPool, storage_root: impl Into<String>) -> Self {
@@ -129,7 +156,9 @@ impl PlaygroundService {
         }
     }
 
-    pub fn subscribe_zone_modality_events(&self) -> broadcast::Receiver<ZoneModalityListChangedEvent> {
+    pub fn subscribe_zone_modality_events(
+        &self,
+    ) -> broadcast::Receiver<ZoneModalityListChangedEvent> {
         self.events.zone_modality_events.subscribe()
     }
 
@@ -261,6 +290,7 @@ impl PlaygroundService {
 
         let name = normalize_required_name(&input.name, "Modality name is required")?;
         let modality_type = normalize_modality_type(&input.modality_type)?;
+        let weighting_code = normalize_weighting_code(input.weighting_code)?;
         let cover_image_url = normalize_optional_text(input.cover_image_url);
         let source_kind = normalize_source_kind(input.source_kind)?;
         let source_label = normalize_optional_text(input.source_label);
@@ -276,6 +306,7 @@ impl PlaygroundService {
                 user_id,
                 &name,
                 &modality_type,
+                weighting_code.as_deref(),
                 cover_image_url.as_deref(),
                 &source_kind,
                 source_label.as_deref(),
@@ -308,6 +339,7 @@ impl PlaygroundService {
 
         let name = normalize_required_name(&input.name, "Modality name is required")?;
         let modality_type = normalize_modality_type(&input.modality_type)?;
+        let weighting_code = normalize_weighting_code(input.weighting_code)?;
         let source_kind = normalize_source_kind(Some(input.source_kind.clone()))?;
 
         if source_kind == "manual" {
@@ -330,6 +362,7 @@ impl PlaygroundService {
                 user_id,
                 &name,
                 &modality_type,
+                weighting_code.as_deref(),
                 None,
                 &source_kind,
                 source_label.as_deref(),
@@ -368,6 +401,7 @@ impl PlaygroundService {
                 user_id,
                 "processing",
                 None,
+                None,
             )
             .await?;
 
@@ -404,10 +438,7 @@ impl PlaygroundService {
         Ok(modality)
     }
 
-    pub async fn ensure_modality_ingest_capacity(
-        &self,
-        account_id: Uuid,
-    ) -> Result<(), AppError> {
+    pub async fn ensure_modality_ingest_capacity(&self, account_id: Uuid) -> Result<(), AppError> {
         let active_ingests = self
             .repo
             .count_active_modality_ingest_jobs(&self.pool, account_id)
@@ -469,11 +500,11 @@ impl PlaygroundService {
                 )
                 .await?;
 
-            let derived_slices = self
+            let derived_slice_builds = self
                 .derive_study_slices(ingest_job_id, &study_files)
                 .await?;
 
-            if derived_slices.is_empty() {
+            if derived_slice_builds.is_empty() {
                 return Err(AppError::bad_request(
                     "The uploaded study did not produce any viewable DICOM slices.",
                 ));
@@ -487,23 +518,23 @@ impl PlaygroundService {
                     "deriving",
                     &json!({
                         "phase": "deriving",
-                        "derivedSliceCount": derived_slices.len(),
+                        "derivedSliceCount": derived_slice_builds.len(),
                     }),
                     None,
                     false,
                 )
                 .await?;
 
-            let mut persisted_assets = Vec::with_capacity(derived_slices.len());
+            let mut persisted_assets = Vec::with_capacity(derived_slice_builds.len());
 
-            for (sort_order, derived_slice) in derived_slices.iter().enumerate() {
+            for (sort_order, derived_slice_build) in derived_slice_builds.iter().enumerate() {
+                let derived_slice = &derived_slice_build.candidate;
                 let asset_id = Uuid::new_v4();
                 let image_url = format!("/api/v1/playground/derived-assets/{asset_id}/image");
-                let thumbnail_url =
-                    format!("/api/v1/playground/derived-assets/{asset_id}/thumbnail");
-                let label = derived_slice.series_label.clone().unwrap_or_else(|| {
-                    format!("Slice {}", derived_slice.slice_index + 1)
-                });
+                let label = derived_slice
+                    .series_label
+                    .clone()
+                    .unwrap_or_else(|| format!("Slice {}", derived_slice.slice_index + 1));
 
                 let asset = self
                     .repo
@@ -517,13 +548,13 @@ impl PlaygroundService {
                         "slice",
                         derived_slice.weighting_code.as_deref(),
                         &image_url,
-                        Some(&thumbnail_url),
+                        None,
                         sort_order as i32,
                         None,
                         "local_disk",
                         &derived_slice.storage_key,
                         &derived_slice.checksum,
-                        "image/png",
+                        "image/avif",
                         derived_slice.size_bytes,
                         derived_slice.width,
                         derived_slice.height,
@@ -539,7 +570,19 @@ impl PlaygroundService {
                 persisted_assets.push(asset);
             }
 
-            let manifest_json = build_viewer_manifest_json(&persisted_assets);
+            let packed_pages = self
+                .build_atlas_pages_from_slice_builds(
+                    ingest_job_id,
+                    &persisted_assets,
+                    &derived_slice_builds,
+                )
+                .await?;
+            let (atlas_pages, atlas_frames) = self
+                .persist_built_atlas_pages(modality_id, ingest_job_id, &user_id, packed_pages)
+                .await?;
+
+            let manifest_json =
+                build_viewer_manifest_json(&persisted_assets, &atlas_pages, &atlas_frames);
 
             self.repo
                 .upsert_modality_viewer_manifest(
@@ -551,9 +594,14 @@ impl PlaygroundService {
                 )
                 .await?;
 
-            let cover_image_url = persisted_assets
-                .first()
-                .and_then(|asset| asset.thumbnail_url.clone().or_else(|| Some(asset.image_url.clone())));
+            let cover_image_url = persisted_assets.first().and_then(|asset| {
+                asset
+                    .thumbnail_url
+                    .clone()
+                    .or_else(|| Some(asset.image_url.clone()))
+            });
+            let inferred_modality_weighting_code =
+                infer_modality_weighting_code(&persisted_assets);
 
             self.repo
                 .attach_ingest_job_to_modality(
@@ -563,6 +611,7 @@ impl PlaygroundService {
                     &user_id,
                     "ready",
                     cover_image_url.as_deref(),
+                    inferred_modality_weighting_code.as_deref(),
                 )
                 .await?;
 
@@ -600,6 +649,7 @@ impl PlaygroundService {
                         &user_id,
                         "failed",
                         None,
+                        None,
                     )
                     .await;
                 self.notify_zone_modality_list_changed(account_id, zone_id);
@@ -635,6 +685,7 @@ impl PlaygroundService {
 
         let name = normalize_required_name(&input.name, "Modality name is required")?;
         let modality_type = normalize_modality_type(&input.modality_type)?;
+        let weighting_code = normalize_weighting_code(input.weighting_code)?;
         let cover_image_url = normalize_optional_text(input.cover_image_url);
         let source_kind = normalize_source_kind(input.source_kind)?;
         let source_label = normalize_optional_text(input.source_label);
@@ -652,6 +703,7 @@ impl PlaygroundService {
                 user_id,
                 &name,
                 &modality_type,
+                weighting_code.as_deref(),
                 cover_image_url.as_deref(),
                 &source_kind,
                 source_label.as_deref(),
@@ -807,13 +859,7 @@ impl PlaygroundService {
 
         let deleted = self
             .repo
-            .delete_zone_modality_asset(
-                &self.pool,
-                account_id,
-                zone_id,
-                modality_id,
-                asset_id,
-            )
+            .delete_zone_modality_asset(&self.pool, account_id, zone_id, modality_id, asset_id)
             .await?;
 
         if !deleted {
@@ -893,6 +939,11 @@ impl PlaygroundService {
             .repo
             .list_zone_modality_assets(&self.pool, account_id, zone_id, modality_id)
             .await?;
+        let atlas_assets = self
+            .repo
+            .list_zone_modality_atlas_assets(&self.pool, account_id, zone_id, modality_id)
+            .await?;
+        let (atlases, atlas_frames) = self.load_atlas_manifest(&atlas_assets)?;
         let structure_groups = self
             .repo
             .list_viewer_structure_groups(&self.pool, account_id, zone_id, modality_id)
@@ -912,10 +963,41 @@ impl PlaygroundService {
             ingest_job,
             source_assets,
             assets,
+            atlases,
+            atlas_frames,
             structure_groups,
             structures,
             annotations,
         })
+    }
+
+    pub async fn rebuild_modality_atlases(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        user_id: &str,
+        source_assets: &[ZoneModalityAsset],
+    ) -> Result<(Vec<ZoneModalityAtlasPage>, Vec<ZoneModalityAtlasFrame>), AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        let ingest_job_id = source_assets
+            .iter()
+            .find_map(|asset| {
+                asset
+                    .ingest_job_id
+                    .as_deref()
+                    .and_then(|value| Uuid::parse_str(value).ok())
+            })
+            .ok_or_else(|| AppError::not_found("Ingest job was not found"))?;
+
+        self.delete_existing_atlas_assets(account_id, zone_id, modality_id)
+            .await?;
+
+        let packed_pages = self.build_atlas_pages(ingest_job_id, source_assets).await?;
+        self.persist_built_atlas_pages(modality_id, ingest_job_id, user_id, packed_pages)
+            .await
     }
 
     pub async fn create_viewer_structure_group(
@@ -929,8 +1011,7 @@ impl PlaygroundService {
         self.ensure_modality_exists(account_id, zone_id, modality_id)
             .await?;
 
-        let title =
-            normalize_required_name(&input.title, "Structure group title is required")?;
+        let title = normalize_required_name(&input.title, "Structure group title is required")?;
         let description = normalize_optional_text(input.description);
         let color_hex = normalize_color_hex(input.color_hex, "#38bdf8");
         let icon_name = normalize_optional_text(input.icon_name);
@@ -969,8 +1050,7 @@ impl PlaygroundService {
         self.ensure_modality_exists(account_id, zone_id, modality_id)
             .await?;
 
-        let title =
-            normalize_required_name(&input.title, "Structure group title is required")?;
+        let title = normalize_required_name(&input.title, "Structure group title is required")?;
         let description = normalize_optional_text(input.description);
         let color_hex = normalize_color_hex(input.color_hex, "#38bdf8");
         let icon_name = normalize_optional_text(input.icon_name);
@@ -1008,13 +1088,7 @@ impl PlaygroundService {
 
         let deleted = self
             .repo
-            .delete_viewer_structure_group(
-                &self.pool,
-                account_id,
-                zone_id,
-                modality_id,
-                group_id,
-            )
+            .delete_viewer_structure_group(&self.pool, account_id, zone_id, modality_id, group_id)
             .await?;
 
         if !deleted {
@@ -1132,13 +1206,7 @@ impl PlaygroundService {
 
         let deleted = self
             .repo
-            .delete_viewer_structure(
-                &self.pool,
-                account_id,
-                zone_id,
-                modality_id,
-                structure_id,
-            )
+            .delete_viewer_structure(&self.pool, account_id, zone_id, modality_id, structure_id)
             .await?;
 
         if !deleted {
@@ -1159,8 +1227,9 @@ impl PlaygroundService {
         self.ensure_modality_exists(account_id, zone_id, modality_id)
             .await?;
 
-        let asset_id =
-            self.normalize_asset_id(account_id, zone_id, modality_id, &input.asset_id).await?;
+        let asset_id = self
+            .normalize_asset_id(account_id, zone_id, modality_id, &input.asset_id)
+            .await?;
         let structure_id = self
             .normalize_structure_id(account_id, zone_id, modality_id, &input.structure_id)
             .await?;
@@ -1224,8 +1293,9 @@ impl PlaygroundService {
         self.ensure_modality_exists(account_id, zone_id, modality_id)
             .await?;
 
-        let asset_id =
-            self.normalize_asset_id(account_id, zone_id, modality_id, &input.asset_id).await?;
+        let asset_id = self
+            .normalize_asset_id(account_id, zone_id, modality_id, &input.asset_id)
+            .await?;
         let structure_id = self
             .normalize_structure_id(account_id, zone_id, modality_id, &input.structure_id)
             .await?;
@@ -1293,13 +1363,7 @@ impl PlaygroundService {
 
         let deleted = self
             .repo
-            .delete_viewer_annotation(
-                &self.pool,
-                account_id,
-                zone_id,
-                modality_id,
-                annotation_id,
-            )
+            .delete_viewer_annotation(&self.pool, account_id, zone_id, modality_id, annotation_id)
             .await?;
 
         if !deleted {
@@ -1413,21 +1477,10 @@ impl PlaygroundService {
         let mime_type = asset
             .mime_type
             .clone()
-            .unwrap_or_else(|| "image/png".to_string());
+            .unwrap_or_else(|| infer_derived_mime_type(storage_key).to_string());
 
-        let requested_key = match variant {
-            DerivedAssetBinaryVariant::Image => storage_key.to_string(),
-            DerivedAssetBinaryVariant::Thumbnail => thumbnail_storage_key(storage_key),
-        };
-        let requested_path = self.storage_root.join(&requested_key);
-        let fallback_path = self.storage_root.join(storage_key);
-        let binary_path = if matches!(variant, DerivedAssetBinaryVariant::Thumbnail)
-            && !requested_path.exists()
-        {
-            fallback_path
-        } else {
-            requested_path
-        };
+        let _ = variant;
+        let binary_path = self.storage_root.join(storage_key);
         let bytes = fs::read(binary_path)
             .await
             .map_err(|_| AppError::not_found("Derived asset file is unavailable"))?;
@@ -1448,9 +1501,9 @@ impl PlaygroundService {
             .join("playground")
             .join("source")
             .join(ingest_job_id.to_string());
-        fs::create_dir_all(&source_root)
-            .await
-            .map_err(|error| AppError::internal(format!("Unable to create source directory: {error}")))?;
+        fs::create_dir_all(&source_root).await.map_err(|error| {
+            AppError::internal(format!("Unable to create source directory: {error}"))
+        })?;
 
         if source_kind == "zip" {
             if files.len() != 1 {
@@ -1470,7 +1523,8 @@ impl PlaygroundService {
 
             let stored_name = sanitize_file_name(&upload.original_file_name);
             let final_path = source_root.join(&stored_name);
-            self.persist_temp_file(&upload.temp_path, &final_path).await?;
+            self.persist_temp_file(&upload.temp_path, &final_path)
+                .await?;
 
             let storage_key = storage_key_from_absolute(&self.storage_root, &final_path)?;
             let source_asset = self
@@ -1485,10 +1539,7 @@ impl PlaygroundService {
                     "local_disk",
                     &storage_key,
                     &upload.checksum,
-                    upload
-                        .content_type
-                        .as_deref()
-                        .unwrap_or("application/zip"),
+                    upload.content_type.as_deref().unwrap_or("application/zip"),
                     upload.size_bytes,
                 )
                 .await?;
@@ -1498,9 +1549,9 @@ impl PlaygroundService {
                 .join("playground")
                 .join("expanded")
                 .join(ingest_job_id.to_string());
-            fs::create_dir_all(&extracted_root)
-                .await
-                .map_err(|error| AppError::internal(format!("Unable to create extraction directory: {error}")))?;
+            fs::create_dir_all(&extracted_root).await.map_err(|error| {
+                AppError::internal(format!("Unable to create extraction directory: {error}"))
+            })?;
             let study_files = extract_zip_study(&final_path, &extracted_root)
                 .await
                 .map_err(AppError::from)?;
@@ -1524,7 +1575,8 @@ impl PlaygroundService {
                 })?;
             }
 
-            self.persist_temp_file(&upload.temp_path, &final_path).await?;
+            self.persist_temp_file(&upload.temp_path, &final_path)
+                .await?;
 
             let storage_key = storage_key_from_absolute(&self.storage_root, &final_path)?;
             let source_asset = self
@@ -1601,36 +1653,73 @@ impl PlaygroundService {
         &self,
         ingest_job_id: Uuid,
         study_files: &[PreparedStudyFile],
-    ) -> Result<Vec<DerivedSliceCandidate>, AppError> {
+    ) -> Result<Vec<DerivedSliceBuild>, AppError> {
         let derived_root = self
             .storage_root
             .join("playground")
             .join("derived")
             .join(ingest_job_id.to_string());
-        fs::create_dir_all(&derived_root)
-            .await
-            .map_err(|error| AppError::internal(format!("Unable to create derived directory: {error}")))?;
+        fs::create_dir_all(&derived_root).await.map_err(|error| {
+            AppError::internal(format!("Unable to create derived directory: {error}"))
+        })?;
 
         let mut candidates = Vec::new();
+        let worker_limit = recommended_dicom_derivation_concurrency();
+        let mut pending = JoinSet::new();
+        let mut next_index = 0usize;
 
-        for (fallback_index, study_file) in study_files.iter().enumerate() {
-            match derive_slice_candidate(&self.storage_root, &derived_root, study_file, fallback_index)
-                .await
-            {
-                Ok(Some(candidate)) => candidates.push(candidate),
-                Ok(None) => {}
-                Err(_error) => {}
+        while next_index < study_files.len() || !pending.is_empty() {
+            while next_index < study_files.len() && pending.len() < worker_limit {
+                let fallback_index = next_index;
+                let study_file = study_files[next_index].clone();
+                let storage_root = self.storage_root.clone();
+                let derived_root = derived_root.clone();
+                let source_label = study_file
+                    .source_relative_path
+                    .clone()
+                    .unwrap_or_else(|| study_file.original_file_name.clone());
+
+                pending.spawn(async move {
+                    let result = derive_slice_candidate(
+                        &storage_root,
+                        &derived_root,
+                        &study_file,
+                        fallback_index,
+                    )
+                    .await;
+                    (source_label, result)
+                });
+                next_index += 1;
+            }
+
+            let Some(join_result) = pending.join_next().await else {
+                break;
+            };
+
+            match join_result {
+                Ok((_source_label, Ok(Some(candidate)))) => candidates.push(candidate),
+                Ok((_source_label, Ok(None))) => {}
+                Ok((source_label, Err(derive_error))) => {
+                    error!(
+                        source_label,
+                        ?derive_error,
+                        "unable to derive DICOM slice candidate"
+                    );
+                }
+                Err(join_error) => {
+                    error!(?join_error, "DICOM slice derivation task failed");
+                }
             }
         }
 
         candidates.sort_by(|left, right| {
-            let left_series = left.series_uid.as_deref().unwrap_or("");
-            let right_series = right.series_uid.as_deref().unwrap_or("");
+            let left_series = left.candidate.series_uid.as_deref().unwrap_or("");
+            let right_series = right.candidate.series_uid.as_deref().unwrap_or("");
 
             left_series
                 .cmp(right_series)
-                .then_with(|| left.slice_index.cmp(&right.slice_index))
-                .then_with(|| left.storage_key.cmp(&right.storage_key))
+                .then_with(|| left.candidate.slice_index.cmp(&right.candidate.slice_index))
+                .then_with(|| left.candidate.storage_key.cmp(&right.candidate.storage_key))
         });
 
         Ok(candidates)
@@ -1666,13 +1755,7 @@ impl PlaygroundService {
 
         while self
             .repo
-            .structure_group_slug_exists(
-                &self.pool,
-                account_id,
-                zone_id,
-                modality_id,
-                &candidate,
-            )
+            .structure_group_slug_exists(&self.pool, account_id, zone_id, modality_id, &candidate)
             .await?
         {
             candidate = format!("{base}-{suffix}");
@@ -1868,7 +1951,7 @@ fn normalize_asset_kind(value: Option<String>) -> Result<String, AppError> {
         .to_ascii_lowercase();
 
     match normalized.as_str() {
-        "slice" | "cover" | "overview" | "reference" | "derived_slice" => Ok(normalized),
+        "slice" | "cover" | "overview" | "reference" | "derived_slice" | "atlas" => Ok(normalized),
         _ => Err(AppError::bad_request("Asset kind is invalid")),
     }
 }
@@ -1929,7 +2012,8 @@ fn normalize_optional_coordinate(
     value: Option<f64>,
     message: &str,
 ) -> Result<Option<f64>, AppError> {
-    value.map(|current| validate_normalized_coordinate(current, message))
+    value
+        .map(|current| validate_normalized_coordinate(current, message))
         .transpose()
 }
 
@@ -2021,11 +2105,13 @@ fn storage_key_from_absolute(storage_root: &Path, path: &Path) -> Result<String,
     Ok(relative.to_string_lossy().replace('\\', "/"))
 }
 
-fn thumbnail_storage_key(image_storage_key: &str) -> String {
-    if let Some(stripped) = image_storage_key.strip_suffix(".png") {
-        format!("{stripped}-thumb.png")
+fn infer_derived_mime_type(storage_key: &str) -> &'static str {
+    if storage_key.ends_with(".png") {
+        "image/png"
+    } else if storage_key.ends_with(".webp") {
+        "image/webp"
     } else {
-        format!("{image_storage_key}-thumb")
+        "image/avif"
     }
 }
 
@@ -2084,12 +2170,12 @@ async fn derive_slice_candidate(
     derived_root: &Path,
     study_file: &PreparedStudyFile,
     fallback_index: usize,
-) -> anyhow::Result<Option<DerivedSliceCandidate>> {
+) -> anyhow::Result<Option<DerivedSliceBuild>> {
     let storage_root = storage_root.to_path_buf();
     let derived_root = derived_root.to_path_buf();
     let study_file = study_file.clone();
 
-    tokio::task::spawn_blocking(move || -> anyhow::Result<Option<DerivedSliceCandidate>> {
+    tokio::task::spawn_blocking(move || -> anyhow::Result<Option<DerivedSliceBuild>> {
         let object = match open_file(&study_file.file_path) {
             Ok(value) => value,
             Err(_) => return Ok(None),
@@ -2135,39 +2221,282 @@ async fn derive_slice_candidate(
             slice_index,
             study_file.original_file_name
         );
-        let output_name = format!("{:04}-{}.png", slice_index, slugify(&identifier, "slice"));
+        let output_name = format!("{:04}-{}.avif", slice_index, slugify(&identifier, "slice"));
         let image_path = derived_root.join(&output_name);
-        let thumbnail_path = derived_root.join(format!(
-            "{:04}-{}-thumb.png",
-            slice_index,
-            slugify(&identifier, "slice")
-        ));
 
-        let png_bytes = encode_png(&dynamic_image)?;
-        let thumbnail = dynamic_image.resize(320, 320, FilterType::Triangle);
-        let thumbnail_bytes = encode_png(&thumbnail)?;
+        let rgba_image = dynamic_image.to_rgba8();
+        let avif_bytes = encode_avif(&rgba_image)?;
+        let atlas_source_image = build_atlas_source_image(&rgba_image);
 
-        std::fs::write(&image_path, &png_bytes)?;
-        std::fs::write(&thumbnail_path, &thumbnail_bytes)?;
+        std::fs::write(&image_path, &avif_bytes)?;
 
-        Ok(Some(DerivedSliceCandidate {
-            source_relative_path: study_file.source_relative_path.clone(),
-            storage_key: storage_key_from_absolute(&storage_root, &image_path)
-                .map_err(anyhow::Error::from)?,
-            checksum: sha256_hex(&png_bytes),
-            size_bytes: png_bytes.len() as i64,
-            width: i32::try_from(dynamic_image.width()).unwrap_or(i32::MAX),
-            height: i32::try_from(dynamic_image.height()).unwrap_or(i32::MAX),
-            series_uid,
-            series_label,
-            instance_uid,
-            slice_index,
-            weighting_code,
-            orientation_code,
+        Ok(Some(DerivedSliceBuild {
+            candidate: DerivedSliceCandidate {
+                source_relative_path: study_file.source_relative_path.clone(),
+                storage_key: storage_key_from_absolute(&storage_root, &image_path)
+                    .map_err(anyhow::Error::from)?,
+                checksum: sha256_hex(&avif_bytes),
+                size_bytes: avif_bytes.len() as i64,
+                width: i32::try_from(rgba_image.width()).unwrap_or(i32::MAX),
+                height: i32::try_from(rgba_image.height()).unwrap_or(i32::MAX),
+                series_uid,
+                series_label,
+                instance_uid,
+                slice_index,
+                weighting_code,
+                orientation_code,
+            },
+            atlas_source_image,
         }))
     })
     .await
     .map_err(|error| anyhow::anyhow!("DICOM derivation task failed: {error}"))?
+}
+
+#[derive(Debug, Clone)]
+struct BuiltAtlasPage {
+    storage_key: String,
+    checksum: String,
+    size_bytes: i64,
+    width: i32,
+    height: i32,
+    frames: Vec<AtlasFrameMetadata>,
+}
+
+#[derive(Debug, Clone)]
+struct AtlasSourceSlice {
+    asset_id: String,
+    image: RgbaImage,
+}
+
+impl PlaygroundService {
+    async fn prepare_atlas_root(&self, ingest_job_id: Uuid) -> Result<PathBuf, AppError> {
+        let atlas_root = self
+            .storage_root
+            .join("playground")
+            .join("derived")
+            .join(ingest_job_id.to_string())
+            .join("atlases");
+
+        let _ = fs::remove_dir_all(&atlas_root).await;
+        fs::create_dir_all(&atlas_root).await.map_err(|error| {
+            AppError::internal(format!("Unable to create atlas directory: {error}"))
+        })?;
+
+        Ok(atlas_root)
+    }
+
+    async fn delete_existing_atlas_assets(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+    ) -> Result<(), AppError> {
+        let atlas_assets = self
+            .repo
+            .list_zone_modality_atlas_assets(&self.pool, account_id, zone_id, modality_id)
+            .await?;
+
+        if atlas_assets.is_empty() {
+            return Ok(());
+        }
+
+        let atlas_ids = atlas_assets
+            .iter()
+            .filter_map(|asset| Uuid::parse_str(&asset.id).ok())
+            .collect::<Vec<_>>();
+
+        if atlas_ids.is_empty() {
+            return Ok(());
+        }
+
+        let _ = self
+            .repo
+            .delete_zone_modality_assets(&self.pool, account_id, zone_id, modality_id, &atlas_ids)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn persist_built_atlas_pages(
+        &self,
+        modality_id: Uuid,
+        ingest_job_id: Uuid,
+        user_id: &str,
+        packed_pages: Vec<BuiltAtlasPage>,
+    ) -> Result<(Vec<ZoneModalityAtlasPage>, Vec<ZoneModalityAtlasFrame>), AppError> {
+        let mut atlas_pages = Vec::with_capacity(packed_pages.len());
+        let mut atlas_frames = Vec::new();
+
+        for (page_index, packed_page) in packed_pages.into_iter().enumerate() {
+            let atlas_asset_id = Uuid::new_v4();
+            let atlas_label = format!("Atlas {}", page_index + 1);
+            let atlas_asset = self
+                .repo
+                .create_zone_modality_derived_asset(
+                    &self.pool,
+                    atlas_asset_id,
+                    modality_id,
+                    ingest_job_id,
+                    user_id,
+                    &atlas_label,
+                    "atlas",
+                    None,
+                    &format!("/api/v1/playground/derived-assets/{atlas_asset_id}/image"),
+                    None,
+                    page_index as i32,
+                    Some("atlas_cache"),
+                    "local_disk",
+                    &packed_page.storage_key,
+                    &packed_page.checksum,
+                    "image/avif",
+                    packed_page.size_bytes,
+                    packed_page.width,
+                    packed_page.height,
+                    None,
+                    None,
+                    None,
+                    None,
+                    0,
+                    None,
+                )
+                .await?;
+
+            atlas_pages.push(ZoneModalityAtlasPage {
+                id: atlas_asset.id.clone(),
+                image_url: atlas_asset.image_url.clone(),
+                width: packed_page.width,
+                height: packed_page.height,
+                slice_count: packed_page.frames.len(),
+            });
+
+            atlas_frames.extend(packed_page.frames.into_iter().map(|frame| {
+                ZoneModalityAtlasFrame {
+                    asset_id: frame.asset_id,
+                    atlas_id: atlas_asset.id.clone(),
+                    x: frame.x,
+                    y: frame.y,
+                    width: frame.width,
+                    height: frame.height,
+                }
+            }));
+        }
+
+        Ok((atlas_pages, atlas_frames))
+    }
+
+    async fn build_atlas_pages_from_slice_builds(
+        &self,
+        ingest_job_id: Uuid,
+        slice_assets: &[ZoneModalityAsset],
+        slice_builds: &[DerivedSliceBuild],
+    ) -> Result<Vec<BuiltAtlasPage>, AppError> {
+        if slice_assets.len() != slice_builds.len() {
+            return Err(AppError::internal(
+                "Slice assets and derived slice builds became misaligned",
+            ));
+        }
+
+        let storage_root = self.storage_root.clone();
+        let atlas_root = self.prepare_atlas_root(ingest_job_id).await?;
+        let slice_images = slice_assets
+            .iter()
+            .zip(slice_builds.iter())
+            .map(|(asset, build)| AtlasSourceSlice {
+                asset_id: asset.id.clone(),
+                image: build.atlas_source_image.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        tokio::task::spawn_blocking(move || {
+            write_atlas_pages(&storage_root, &atlas_root, slice_images)
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("Atlas build task failed: {error}")))?
+        .map_err(AppError::from)
+    }
+
+    async fn build_atlas_pages(
+        &self,
+        ingest_job_id: Uuid,
+        source_assets: &[ZoneModalityAsset],
+    ) -> Result<Vec<BuiltAtlasPage>, AppError> {
+        let slice_assets = source_assets
+            .iter()
+            .filter(|asset| matches!(asset.asset_kind.as_str(), "slice" | "derived_slice"))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if slice_assets.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let storage_root = self.storage_root.clone();
+        let atlas_root = self.prepare_atlas_root(ingest_job_id).await?;
+
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<BuiltAtlasPage>> {
+            let mut slice_images = Vec::with_capacity(slice_assets.len());
+
+            for asset in slice_assets {
+                let image = load_atlas_source_image(&storage_root, &asset)?;
+                slice_images.push(AtlasSourceSlice {
+                    asset_id: asset.id,
+                    image,
+                });
+            }
+
+            write_atlas_pages(&storage_root, &atlas_root, slice_images)
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("Atlas build task failed: {error}")))?
+        .map_err(AppError::from)
+    }
+
+    fn load_atlas_manifest(
+        &self,
+        atlas_assets: &[ZoneModalityAsset],
+    ) -> Result<(Vec<ZoneModalityAtlasPage>, Vec<ZoneModalityAtlasFrame>), AppError> {
+        let mut pages = Vec::with_capacity(atlas_assets.len());
+        let mut frames = Vec::new();
+
+        for atlas_asset in atlas_assets {
+            let storage_key = atlas_asset
+                .storage_key
+                .as_deref()
+                .ok_or_else(|| AppError::not_found("Atlas page file is unavailable"))?;
+            let metadata_path = self.storage_root.join(storage_key).with_extension("json");
+            let metadata_bytes = std::fs::read(&metadata_path)
+                .map_err(|_| AppError::not_found("Atlas page metadata is unavailable"))?;
+            let metadata: AtlasPageMetadata =
+                serde_json::from_slice(&metadata_bytes).map_err(|error| {
+                    AppError::internal(format!("Unable to parse atlas metadata: {error}"))
+                })?;
+
+            pages.push(ZoneModalityAtlasPage {
+                id: atlas_asset.id.clone(),
+                image_url: atlas_asset.image_url.clone(),
+                width: metadata.width,
+                height: metadata.height,
+                slice_count: metadata.frames.len(),
+            });
+
+            frames.extend(
+                metadata
+                    .frames
+                    .into_iter()
+                    .map(|frame| ZoneModalityAtlasFrame {
+                        asset_id: frame.asset_id,
+                        atlas_id: atlas_asset.id.clone(),
+                        x: frame.x,
+                        y: frame.y,
+                        width: frame.width,
+                        height: frame.height,
+                    }),
+            );
+        }
+
+        Ok((pages, frames))
+    }
 }
 
 fn dicom_text(object: &dicom::object::DefaultDicomObject, name: &str) -> Option<String> {
@@ -2179,10 +2508,202 @@ fn dicom_text(object: &dicom::object::DefaultDicomObject, name: &str) -> Option<
         .filter(|value| !value.is_empty())
 }
 
-fn encode_png(image: &DynamicImage) -> anyhow::Result<Vec<u8>> {
+fn recommended_dicom_derivation_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get().min(MAX_CONCURRENT_DICOM_DERIVATIONS))
+        .unwrap_or(4)
+}
+
+fn encode_avif(image: &RgbaImage) -> anyhow::Result<Vec<u8>> {
     let mut cursor = Cursor::new(Vec::new());
-    image.write_to(&mut cursor, image::ImageFormat::Png)?;
+    AvifEncoder::new_with_speed_quality(&mut cursor, AVIF_ENCODER_SPEED, AVIF_ENCODER_QUALITY)
+        .with_num_threads(Some(AVIF_ENCODER_THREADS_PER_IMAGE))
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            ExtendedColorType::Rgba8,
+        )?;
     Ok(cursor.into_inner())
+}
+
+fn build_atlas_source_image(image: &RgbaImage) -> RgbaImage {
+    image.clone()
+}
+
+fn resolve_slice_source_file_path(
+    storage_root: &Path,
+    asset: &ZoneModalityAsset,
+) -> anyhow::Result<PathBuf> {
+    let ingest_job_id = asset
+        .ingest_job_id
+        .as_deref()
+        .context("Slice asset is missing an ingest job id")?;
+    let source_relative_path = asset
+        .source_relative_path
+        .as_deref()
+        .context("Slice asset is missing a source-relative path")?;
+
+    for directory in ["expanded", "source"] {
+        let candidate = storage_root
+            .join("playground")
+            .join(directory)
+            .join(ingest_job_id)
+            .join(source_relative_path);
+
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Unable to locate the staged source DICOM for atlas generation"
+    ))
+}
+
+fn write_atlas_pages(
+    storage_root: &Path,
+    atlas_root: &Path,
+    slice_images: Vec<AtlasSourceSlice>,
+) -> anyhow::Result<Vec<BuiltAtlasPage>> {
+    if slice_images.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut global_cell_width = 0u32;
+    let mut global_cell_height = 0u32;
+    for slice in &slice_images {
+        global_cell_width = global_cell_width.max(slice.image.width());
+        global_cell_height = global_cell_height.max(slice.image.height());
+    }
+
+    let columns_by_width = if global_cell_width == 0 {
+        1
+    } else {
+        (MAX_ATLAS_PAGE_EDGE / global_cell_width).max(1) as usize
+    };
+    let rows_by_height = if global_cell_height == 0 {
+        1
+    } else {
+        (MAX_ATLAS_PAGE_EDGE / global_cell_height).max(1) as usize
+    };
+    let columns_per_page = columns_by_width.min(MAX_ATLAS_PAGE_COLUMNS).max(1);
+    let rows_per_page = rows_by_height.max(1);
+    let slices_per_page = (columns_per_page * rows_per_page)
+        .min(MAX_ATLAS_SLICES_PER_PAGE)
+        .max(1);
+
+    let mut atlas_pages = Vec::new();
+
+    for (page_index, page_slices) in slice_images.chunks(slices_per_page).enumerate() {
+        let mut cell_width = 0i32;
+        let mut cell_height = 0i32;
+
+        for slice in page_slices {
+            cell_width = cell_width.max(i32::try_from(slice.image.width()).unwrap_or(i32::MAX));
+            cell_height = cell_height.max(i32::try_from(slice.image.height()).unwrap_or(i32::MAX));
+        }
+
+        let columns = columns_per_page.min(page_slices.len()).max(1);
+        let rows = page_slices.len().div_ceil(columns);
+        let page_width = (cell_width as u32) * (columns as u32);
+        let page_height = (cell_height as u32) * (rows as u32);
+        let mut atlas_canvas: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(page_width, page_height, Rgba([0, 0, 0, 0]));
+        let mut frames = Vec::with_capacity(page_slices.len());
+
+        for (index, slice) in page_slices.iter().enumerate() {
+            let column = index % columns;
+            let row = index / columns;
+            let x = i64::try_from(column).unwrap_or(0) * i64::from(cell_width);
+            let y = i64::try_from(row).unwrap_or(0) * i64::from(cell_height);
+
+            overlay(&mut atlas_canvas, &slice.image, x, y);
+
+            frames.push(AtlasFrameMetadata {
+                asset_id: slice.asset_id.clone(),
+                x: i32::try_from(x).unwrap_or(i32::MAX),
+                y: i32::try_from(y).unwrap_or(i32::MAX),
+                width: i32::try_from(slice.image.width()).unwrap_or(i32::MAX),
+                height: i32::try_from(slice.image.height()).unwrap_or(i32::MAX),
+            });
+        }
+
+        let atlas_file_name = format!("atlas-{:03}.avif", page_index + 1);
+        let atlas_path = atlas_root.join(&atlas_file_name);
+        let atlas_bytes = encode_avif(&atlas_canvas)?;
+        std::fs::write(&atlas_path, &atlas_bytes)
+            .with_context(|| format!("Unable to write atlas image at {}", atlas_path.display()))?;
+
+        let metadata_path = atlas_path.with_extension("json");
+        let metadata_json = serde_json::to_vec_pretty(&AtlasPageMetadata {
+            width: i32::try_from(page_width).unwrap_or(i32::MAX),
+            height: i32::try_from(page_height).unwrap_or(i32::MAX),
+            frames: frames.clone(),
+        })?;
+        std::fs::write(&metadata_path, metadata_json).with_context(|| {
+            format!(
+                "Unable to write atlas metadata at {}",
+                metadata_path.display()
+            )
+        })?;
+
+        atlas_pages.push(BuiltAtlasPage {
+            storage_key: storage_key_from_absolute(storage_root, &atlas_path)
+                .map_err(anyhow::Error::from)?,
+            checksum: sha256_hex(&atlas_bytes),
+            size_bytes: atlas_bytes.len() as i64,
+            width: i32::try_from(page_width).unwrap_or(i32::MAX),
+            height: i32::try_from(page_height).unwrap_or(i32::MAX),
+            frames,
+        });
+    }
+
+    Ok(atlas_pages)
+}
+
+fn load_atlas_source_image(
+    storage_root: &Path,
+    asset: &ZoneModalityAsset,
+) -> anyhow::Result<RgbaImage> {
+    let storage_key = asset
+        .storage_key
+        .as_deref()
+        .context("Atlas source asset is missing a storage key")?;
+    let image_path = storage_root.join(storage_key);
+
+    let can_decode_directly = image_path
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|extension| !extension.eq_ignore_ascii_case("avif"))
+        .unwrap_or(true);
+
+    if can_decode_directly {
+        let image = image::open(&image_path).with_context(|| {
+            format!(
+                "Unable to open source slice image at {}",
+                image_path.display()
+            )
+        })?;
+        return Ok(build_atlas_source_image(&image.to_rgba8()));
+    }
+
+    let source_path = resolve_slice_source_file_path(storage_root, asset)?;
+    let object = open_file(&source_path)
+        .with_context(|| format!("Unable to open source DICOM at {}", source_path.display()))?;
+    let decoded = object.decode_pixel_data().with_context(|| {
+        format!(
+            "Unable to decode source DICOM pixel data at {}",
+            source_path.display()
+        )
+    })?;
+    let dynamic_image = decoded.to_dynamic_image(0).with_context(|| {
+        format!(
+            "Unable to render source DICOM pixel data at {}",
+            source_path.display()
+        )
+    })?;
+    Ok(build_atlas_source_image(&dynamic_image.to_rgba8()))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -2256,7 +2777,11 @@ fn infer_orientation_code(
     None
 }
 
-fn build_viewer_manifest_json(assets: &[ZoneModalityAsset]) -> serde_json::Value {
+fn build_viewer_manifest_json(
+    assets: &[ZoneModalityAsset],
+    atlases: &[ZoneModalityAtlasPage],
+    atlas_frames: &[ZoneModalityAtlasFrame],
+) -> serde_json::Value {
     let mut series_map: BTreeMap<String, Vec<&ZoneModalityAsset>> = BTreeMap::new();
 
     for asset in assets {
@@ -2287,6 +2812,8 @@ fn build_viewer_manifest_json(assets: &[ZoneModalityAsset]) -> serde_json::Value
         "schemaVersion": "draft-1",
         "sliceCount": assets.len(),
         "series": series,
+        "atlases": atlases,
+        "atlasFrames": atlas_frames,
         "weightings": assets
             .iter()
             .filter_map(|asset| asset.weighting_code.clone())
@@ -2294,6 +2821,19 @@ fn build_viewer_manifest_json(assets: &[ZoneModalityAsset]) -> serde_json::Value
             .into_iter()
             .collect::<Vec<_>>(),
     })
+}
+
+fn infer_modality_weighting_code(assets: &[ZoneModalityAsset]) -> Option<String> {
+    let distinct_weightings = assets
+        .iter()
+        .filter_map(|asset| asset.weighting_code.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    if distinct_weightings.len() == 1 {
+        return distinct_weightings.into_iter().next();
+    }
+
+    None
 }
 
 fn count_distinct_series(assets: &[ZoneModalityAsset]) -> usize {

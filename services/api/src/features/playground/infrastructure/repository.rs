@@ -237,6 +237,7 @@ impl PlaygroundRepository {
                 modality.id::text AS id,
                 modality.name,
                 modality.modality_type,
+                modality.weighting_code,
                 modality.cover_image_url,
                 modality.source_kind,
                 modality.source_label,
@@ -266,6 +267,7 @@ impl PlaygroundRepository {
         user_id: &str,
         name: &str,
         modality_type: &str,
+        weighting_code: Option<&str>,
         cover_image_url: Option<&str>,
         source_kind: &str,
         source_label: Option<&str>,
@@ -279,6 +281,7 @@ impl PlaygroundRepository {
                 zone_id,
                 name,
                 modality_type,
+                weighting_code,
                 cover_image_url,
                 source_kind,
                 source_label,
@@ -288,11 +291,12 @@ impl PlaygroundRepository {
                 created_by_user_id,
                 updated_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
             RETURNING
                 id::text AS id,
                 name,
                 modality_type,
+                weighting_code,
                 cover_image_url,
                 source_kind,
                 source_label,
@@ -306,6 +310,7 @@ impl PlaygroundRepository {
         .bind(zone_id)
         .bind(name)
         .bind(modality_type)
+        .bind(weighting_code)
         .bind(cover_image_url)
         .bind(source_kind)
         .bind(source_label)
@@ -328,6 +333,7 @@ impl PlaygroundRepository {
         user_id: &str,
         name: &str,
         modality_type: &str,
+        weighting_code: Option<&str>,
         cover_image_url: Option<&str>,
         source_kind: &str,
         source_label: Option<&str>,
@@ -341,13 +347,14 @@ impl PlaygroundRepository {
             SET
                 name = $4,
                 modality_type = $5,
-                cover_image_url = $6,
-                source_kind = $7,
-                source_label = $8,
-                source_file_count = $9,
-                processing_status = $10,
-                notes = $11,
-                updated_by_user_id = $12,
+                weighting_code = $6,
+                cover_image_url = $7,
+                source_kind = $8,
+                source_label = $9,
+                source_file_count = $10,
+                processing_status = $11,
+                notes = $12,
+                updated_by_user_id = $13,
                 updated_at = NOW()
             FROM anatomy_zones AS zone
             WHERE
@@ -359,6 +366,7 @@ impl PlaygroundRepository {
                 modality.id::text AS id,
                 modality.name,
                 modality.modality_type,
+                modality.weighting_code,
                 modality.cover_image_url,
                 modality.source_kind,
                 modality.source_label,
@@ -374,6 +382,7 @@ impl PlaygroundRepository {
         .bind(modality_id)
         .bind(name)
         .bind(modality_type)
+        .bind(weighting_code)
         .bind(cover_image_url)
         .bind(source_kind)
         .bind(source_label)
@@ -505,7 +514,59 @@ impl PlaygroundRepository {
             FROM anatomy_zone_modality_assets AS asset
             INNER JOIN anatomy_zone_modalities AS modality ON modality.id = asset.modality_id
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+                        WHERE zone.account_id = $1 AND modality.zone_id = $2 AND modality.id = $3
+                            AND asset.asset_kind <> 'atlas'
+            ORDER BY asset.sort_order ASC, asset.created_at ASC
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_zone_modality_atlas_assets(
+        &self,
+        pool: &PgPool,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+    ) -> Result<Vec<ZoneModalityAsset>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, ZoneModalityAssetRow>(
+            r#"
+            SELECT
+                asset.id::text AS id,
+                asset.label,
+                asset.asset_kind,
+                asset.weighting_code,
+                asset.image_url,
+                asset.thumbnail_url,
+                asset.sort_order,
+                asset.notes,
+                asset.ingest_job_id::text AS ingest_job_id,
+                asset.storage_backend,
+                asset.storage_key,
+                asset.checksum,
+                asset.mime_type,
+                asset.size_bytes,
+                asset.width,
+                asset.height,
+                asset.source_relative_path,
+                asset.series_uid,
+                asset.series_label,
+                asset.instance_uid,
+                asset.slice_index,
+                asset.orientation_code,
+                TO_CHAR(asset.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                TO_CHAR(asset.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM anatomy_zone_modality_assets AS asset
+            INNER JOIN anatomy_zone_modalities AS modality ON modality.id = asset.modality_id
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
             WHERE zone.account_id = $1 AND modality.zone_id = $2 AND modality.id = $3
+              AND asset.asset_kind = 'atlas'
             ORDER BY asset.sort_order ASC, asset.created_at ASC
             "#,
         )
@@ -749,6 +810,7 @@ impl PlaygroundRepository {
                 modality.id::text AS id,
                 modality.name,
                 modality.modality_type,
+                modality.weighting_code,
                 modality.cover_image_url,
                 modality.source_kind,
                 modality.source_label,
@@ -980,6 +1042,7 @@ impl PlaygroundRepository {
         user_id: &str,
         processing_status: &str,
         cover_image_url: Option<&str>,
+        inferred_weighting_code: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
@@ -988,6 +1051,7 @@ impl PlaygroundRepository {
                 latest_ingest_job_id = $2,
                 processing_status = $4,
                 cover_image_url = COALESCE($5, cover_image_url),
+                weighting_code = COALESCE(weighting_code, $6),
                 updated_by_user_id = $3,
                 updated_at = NOW()
             WHERE id = $1
@@ -998,6 +1062,7 @@ impl PlaygroundRepository {
         .bind(user_id)
         .bind(processing_status)
         .bind(cover_image_url)
+        .bind(inferred_weighting_code)
         .execute(pool)
         .await?;
 
@@ -2199,6 +2264,7 @@ struct ZoneModalityRow {
     id: String,
     name: String,
     modality_type: String,
+    weighting_code: Option<String>,
     cover_image_url: Option<String>,
     source_kind: String,
     source_label: Option<String>,
@@ -2215,6 +2281,7 @@ impl From<ZoneModalityRow> for ZoneModality {
             id: value.id,
             name: value.name,
             modality_type: value.modality_type,
+            weighting_code: value.weighting_code,
             cover_image_url: value.cover_image_url,
             source_kind: value.source_kind,
             source_label: value.source_label,

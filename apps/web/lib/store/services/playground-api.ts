@@ -237,6 +237,21 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    rebuildZoneModalityAtlases: builder.mutation<
+      void,
+      {
+        zoneId: string
+        modalityId: string
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/atlases/rebuild`,
+        method: "POST",
+      }),
+    }),
     getZoneModalityViewerManifest: builder.query<
       ZoneModalityViewerManifest,
       {
@@ -421,6 +436,7 @@ export const {
   useDeleteZoneModalityMutation,
   useGetZoneModalityViewerManifestQuery,
   useGetZoneDetailQuery,
+  useRebuildZoneModalityAtlasesMutation,
   useGetZoneModalityAssetsQuery,
   useGetZoneModalitiesQuery,
   useGetZonesQuery,

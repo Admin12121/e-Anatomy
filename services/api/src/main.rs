@@ -21,8 +21,7 @@ use crate::infrastructure::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let log_filter = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| "info,sqlx=warn".to_string());
+    let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,sqlx=warn".to_string());
     let log_filter = if log_filter.contains("dicom_object::meta") {
         log_filter
     } else {

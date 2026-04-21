@@ -186,24 +186,22 @@ export function ViewerCanvasMainOverlay({
           0,
           0.92,
         );
-        const label =
-          (isSelected
-            ? annotationForm.titleOverride.trim()
-            : annotation.titleOverride) || structure.title;
-        const hideOverlayMarkersForPaint = isAreaPaintMode && isSelected;
+        const label = annotation.titleOverride || structure.title;
         const markerVisible =
           (showLabels || pinsOnly) &&
-          !isInteractionBlocked &&
-          !hideOverlayMarkersForPaint;
+          !isInteractionBlocked;
         const textVisible =
           showLabels &&
           !pinsOnly &&
           !isInteractionBlocked &&
-          !hideOverlayMarkersForPaint &&
           (!practiceMode || isSelected || isHovered);
         const fontSize = fontScaleMode === "large" ? 24 : 18;
+        const canDragAnchor = isSelected && !isInteractionBlocked && canvasMode !== "create-label";
         const canDragLabel =
-          isSelected && canvasMode === "set-label" && !shouldAutoArrangeLabels;
+          isSelected &&
+          !shouldAutoArrangeLabels &&
+          !isInteractionBlocked &&
+          canvasMode !== "create-label";
         const highlightLabel =
           isSelected || isHovered || draggingLabelId === annotation.id;
         const leaderStrokeWidth = isSelected ? 3.5 : isHovered ? 3 : 2;
@@ -283,11 +281,7 @@ export function ViewerCanvasMainOverlay({
                   />
                 ) : null}
                 <circle
-                  className={
-                    isSelected && canvasMode === "set-anchor"
-                      ? "cursor-move"
-                      : undefined
-                  }
+                  className={canDragAnchor ? "cursor-move" : undefined}
                   cx={anchorX * 1000}
                   cy={anchorY * 1000}
                   fill={color}
@@ -296,11 +290,7 @@ export function ViewerCanvasMainOverlay({
                   stroke={isSelected ? "rgba(255,255,255,0.78)" : "transparent"}
                   strokeWidth={isSelected ? 1.4 : 0}
                   onPointerDown={(event) => {
-                    if (
-                      !isSelected ||
-                      isInteractionBlocked ||
-                      canvasMode !== "set-anchor"
-                    ) {
+                    if (!canDragAnchor) {
                       return;
                     }
 
@@ -390,10 +380,35 @@ export function ViewerCanvasMainOverlay({
             y2={annotationForm.labelY * 1000}
           />
           <circle
+            className={canvasMode !== "create-label" ? "cursor-move" : undefined}
             cx={annotationForm.anchorX * 1000}
             cy={annotationForm.anchorY * 1000}
             fill={draftPointerColor}
             r={7}
+            onPointerDown={(event) => {
+              if (canvasMode === "create-label") {
+                return;
+              }
+
+              const svg = event.currentTarget.ownerSVGElement;
+              if (!svg) {
+                return;
+              }
+
+              event.stopPropagation();
+              draggingAnchorRef.current = {
+                annotationId: "__draft__",
+                pointerId: event.pointerId,
+              };
+              svg.setPointerCapture(event.pointerId);
+              onDraftAnchorMove(
+                resolvePointerPoint({
+                  clientX: event.clientX,
+                  clientY: event.clientY,
+                  currentTarget: svg,
+                }),
+              );
+            }}
           />
           {showLabels && !pinsOnly ? (
             <text
@@ -458,7 +473,7 @@ export function ViewerCanvasMainOverlay({
           strokeWidth={2}
         />
       ) : null}
-      {showCrossReferences && canvasMode === "browse" ? (
+      {showCrossReferences ? (
         <>
           <line
             stroke="rgba(56,189,248,0.88)"

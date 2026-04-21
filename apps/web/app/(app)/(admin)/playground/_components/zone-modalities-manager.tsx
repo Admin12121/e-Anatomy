@@ -30,6 +30,7 @@ import {
 } from "@/lib/playground/modality-upload-shared";
 import type {
   ModalityType,
+  ModalityWeightingCode,
   UpdateZoneModalityInput,
   ZoneModality,
   ZoneModalityListResponse,
@@ -70,6 +71,23 @@ const MODALITY_TYPE_OPTIONS: Array<{ label: string; value: ModalityType }> = [
   { label: "Illustration", value: "illustration" },
   { label: "Photography", value: "photography" },
   { label: "Endoscopy", value: "endoscopy" },
+  { label: "Other", value: "other" },
+];
+
+type ModalityWeightingSelectValue = ModalityWeightingCode | "";
+
+const MODALITY_WEIGHTING_OPTIONS: Array<{
+  label: string;
+  value: ModalityWeightingSelectValue;
+}> = [
+  { label: "Not set", value: "" },
+  { label: "T1", value: "t1" },
+  { label: "T1 Gado", value: "t1_gado" },
+  { label: "T2", value: "t2" },
+  { label: "T2*", value: "t2_star" },
+  { label: "FLAIR", value: "flair" },
+  { label: "ADC", value: "adc" },
+  { label: "DWI", value: "dwi" },
   { label: "Other", value: "other" },
 ];
 
@@ -454,6 +472,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     useState<DetectedModalityUpload | null>(null);
   const [createModalityTypeOverride, setCreateModalityTypeOverride] =
     useState<ModalityType>("other");
+  const [createWeightingCode, setCreateWeightingCode] =
+    useState<ModalityWeightingSelectValue>("");
   const [selectedSourceLabel, setSelectedSourceLabel] = useState<string | null>(
     null,
   );
@@ -592,6 +612,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   function resetCreateState() {
     setCreateName("");
     setCreateNotes("");
+    setCreateWeightingCode("");
     clearSelectedSource();
   }
 
@@ -714,6 +735,9 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
         createName.trim() || createDetectedUpload.suggestedName,
       );
       formData.append("modalityType", createModalityTypeOverride);
+      if (createWeightingCode) {
+        formData.append("weightingCode", createWeightingCode);
+      }
       formData.append("notes", createNotes.trim());
       formData.append("sourceKind", createDetectedUpload.sourceKind);
       formData.append(
@@ -1039,7 +1063,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                 ) : null}
               </Field>
 
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-3">
                 <Field>
                   <FieldLabel htmlFor={`modality-name-${zoneId}`}>
                     Modality name
@@ -1064,6 +1088,18 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                     options={MODALITY_TYPE_OPTIONS}
                     value={createModalityTypeOverride}
                     onValueChange={setCreateModalityTypeOverride}
+                  />
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor={`modality-weighting-${zoneId}`}>
+                    Weighting
+                  </FieldLabel>
+                  <PlaygroundSelect
+                    id={`modality-weighting-${zoneId}`}
+                    options={MODALITY_WEIGHTING_OPTIONS}
+                    value={createWeightingCode}
+                    onValueChange={setCreateWeightingCode}
                   />
                 </Field>
               </div>
@@ -1145,6 +1181,8 @@ function ZoneModalityEditorCard({
   const [modalityType, setModalityType] = useState<ModalityType>(
     modality.modalityType,
   );
+  const [weightingCode, setWeightingCode] =
+    useState<ModalityWeightingSelectValue>(modality.weightingCode ?? "");
   const [notes, setNotes] = useState(modality.notes ?? "");
   const isViewerReady = modality.processingStatus === "ready";
   const isViewerPreparing =
@@ -1154,6 +1192,7 @@ function ZoneModalityEditorCard({
   const hasChanges =
     name.trim() !== modality.name ||
     modalityType !== modality.modalityType ||
+    weightingCode !== (modality.weightingCode ?? "") ||
     notes.trim() !== (modality.notes ?? "");
 
   async function handleSave() {
@@ -1167,6 +1206,7 @@ function ZoneModalityEditorCard({
     await onSave(modality, {
       name: nextName,
       modalityType,
+      weightingCode: weightingCode || null,
       notes: notes.trim() || null,
       coverImageUrl: modality.coverImageUrl,
       processingStatus: modality.processingStatus,
@@ -1193,7 +1233,7 @@ function ZoneModalityEditorCard({
       </FrameHeader>
       <FramePanel>
         <FieldGroup className="gap-4">
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-3">
             <Field>
               <FieldLabel htmlFor={`edit-modality-name-${modality.id}`}>
                 Modality name
@@ -1214,6 +1254,18 @@ function ZoneModalityEditorCard({
                 options={MODALITY_TYPE_OPTIONS}
                 value={modalityType}
                 onValueChange={setModalityType}
+              />
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor={`edit-modality-weighting-${modality.id}`}>
+                Weighting
+              </FieldLabel>
+              <PlaygroundSelect
+                id={`edit-modality-weighting-${modality.id}`}
+                options={MODALITY_WEIGHTING_OPTIONS}
+                value={weightingCode}
+                onValueChange={setWeightingCode}
               />
             </Field>
           </div>

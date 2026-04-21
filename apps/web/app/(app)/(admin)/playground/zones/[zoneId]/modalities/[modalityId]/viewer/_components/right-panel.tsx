@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   CrosshairIcon,
   EyeIcon,
@@ -33,6 +33,7 @@ import type {
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 import {
+  DEFAULT_ANNOTATION_COLOR,
   DEFAULT_GROUP_COLOR,
   EMPTY_ANNOTATION_FORM,
   type AnnotationFormState,
@@ -95,6 +96,7 @@ type RightPanelProps = {
   groupForm: GroupFormState;
   groups: ViewerStructureGroup[];
   groupsById: Map<string, ViewerStructureGroup>;
+  selectedAnnotationId: string | null;
   selectedStructureId: string | null;
   showLabels: boolean;
   structureForm: StructureFormState;
@@ -171,6 +173,7 @@ export function ModalityViewerRightPanel({
   groupForm,
   groups,
   groupsById,
+  selectedAnnotationId,
   selectedStructureId,
   showLabels,
   structureForm,
@@ -213,10 +216,6 @@ export function ModalityViewerRightPanel({
   >(null);
   const allGroupIds = groups.map((group) => group.id);
   const masterVisible = visibleGroupIds.length > 0;
-  const groupColorValue = toColorInputValue(
-    groupForm.colorHex,
-    DEFAULT_GROUP_COLOR,
-  );
   const selectedAnatomicalPart = selectedAnatomicalPartId
     ? (groupsById.get(selectedAnatomicalPartId) ?? null)
     : null;
@@ -225,15 +224,36 @@ export function ModalityViewerRightPanel({
         (structure) => structure.groupId === selectedAnatomicalPart.id,
       )
     : [];
+  const partColorValue = toColorInputValue(
+    annotationForm.colorHex,
+    selectedAnatomicalPart?.colorHex ?? DEFAULT_ANNOTATION_COLOR,
+  );
+
+  const resetPartEditorState = useCallback(() => {
+    setShowPartEditorWindow(false);
+    setPartEditorInitialContent("");
+    setPartInteractionMode("pointer");
+    onClearPolygonDraft();
+    onCanvasModeChange("browse");
+  }, [onCanvasModeChange, onClearPolygonDraft]);
+
+  const handlePartColorChange = useCallback(
+    (value: string) => {
+      onAnnotationFormChange("colorHex", value);
+      onAnnotationFormChange("leaderColorHex", value);
+      onAnnotationFormChange("overlayColorHex", value);
+    },
+    [onAnnotationFormChange],
+  );
 
   useEffect(() => {
     if (selectedAnatomicalPartId && !groupsById.has(selectedAnatomicalPartId)) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedAnatomicalPartId(null);
       setShowCreatePartFrame(false);
-      setShowPartEditorWindow(false);
+      resetPartEditorState();
     }
-  }, [groupsById, selectedAnatomicalPartId]);
+  }, [groupsById, resetPartEditorState, selectedAnatomicalPartId]);
 
   useEffect(() => {
     if (!showCreatePartFrame) {
@@ -323,19 +343,13 @@ export function ModalityViewerRightPanel({
     await onDeleteStructure(selectedStructureId);
     onResetStructure();
     setShowCreatePartFrame(false);
-    setShowPartEditorWindow(false);
-    setPartEditorInitialContent("");
-    setPartInteractionMode("pointer");
-    onClearPolygonDraft();
-    onCanvasModeChange("browse");
+    resetPartEditorState();
   };
 
   const handleSaveStructurePart = async () => {
     if (!selectedAnatomicalPart) {
       return;
     }
-
-    const isCreatingPart = !selectedStructureId;
 
     if (structureForm.groupId !== selectedAnatomicalPart.id) {
       onStructureFormChange("groupId", selectedAnatomicalPart.id);
@@ -348,23 +362,14 @@ export function ModalityViewerRightPanel({
     }
 
     const shouldSaveDraftAnnotation =
-      isCreatingPart &&
+      selectedAnnotationId !== null ||
       hasPartAnnotationDraft(partInteractionMode, annotationForm);
-
-    onSelectStructure(savedStructure.id, savedStructure.groupId);
 
     if (shouldSaveDraftAnnotation) {
       await onSaveAnnotation({ structureId: savedStructure.id });
-    } else {
-      onCanvasModeChange("browse");
     }
 
-    onClearPolygonDraft();
-    // Keep the newly created structure selected so pointer/area actions can start immediately.
-    setPartInteractionMode("pointer");
-    setShowCreatePartFrame(false);
-    setShowPartEditorWindow(false);
-    setPartEditorInitialContent("");
+    onCanvasModeChange(getCanvasModeFromPartInteraction(partInteractionMode));
   };
 
   return (
@@ -372,27 +377,32 @@ export function ModalityViewerRightPanel({
       <Frame>
         <div className="flex items-center justify-between px-3 py-2">Menu</div>
         <FramePanel className="p-3">
-          <ViewerSidebarSection title="Weightings">
-            <Select
-              value={activeWeighting}
-              onValueChange={(value) => {
-                if (value) {
-                  onWeightingChange(value);
-                }
-              }}
-            >
-              <SelectTrigger className="w-full rounded-xl text-sm">
-                <SelectValue placeholder="Select weighting" />
-              </SelectTrigger>
-              <SelectContent className="max-h-72">
-                {weightings.map((weighting) => (
-                  <SelectItem key={weighting} value={weighting}>
-                    {formatWeightingLabel(weighting)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </ViewerSidebarSection>
+          {weightings.length > 1 ? (
+            <ViewerSidebarSection title="Slice Weighting">
+              <p className="mb-2 text-xs text-white/55">
+                Auto-detected from slice metadata. This filters the stack only.
+              </p>
+              <Select
+                value={activeWeighting}
+                onValueChange={(value) => {
+                  if (value) {
+                    onWeightingChange(value);
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full rounded-xl text-sm">
+                  <SelectValue placeholder="Filter slices" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {weightings.map((weighting) => (
+                    <SelectItem key={weighting} value={weighting}>
+                      {formatWeightingLabel(weighting)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </ViewerSidebarSection>
+          ) : null}
 
           <ViewerSidebarSection
             title="Anatomical Parts"
@@ -419,11 +429,12 @@ export function ModalityViewerRightPanel({
                   onClick={() => {
                     const next = !showAnatomicalPartsPanel;
 
+                    setShowCreatePartFrame(false);
+                    resetPartEditorState();
+
                     if (next) {
                       // Create-area mode and edit-area mode are mutually exclusive.
                       setSelectedAnatomicalPartId(null);
-                      setShowCreatePartFrame(false);
-                      setShowPartEditorWindow(false);
                       onResetGroup();
                     }
 
@@ -479,7 +490,7 @@ export function ModalityViewerRightPanel({
 
                             setShowAnatomicalPartsPanel(false);
                             setShowCreatePartFrame(false);
-                            setShowPartEditorWindow(false);
+                            resetPartEditorState();
 
                             if (nextGroupId) {
                               onSelectGroup(nextGroupId);
@@ -608,16 +619,6 @@ export function ModalityViewerRightPanel({
                   }
                 />
               </div>
-
-              <div className="space-y-1.5">
-                <div className="text-xs font-medium">Color</div>
-                <AnatomicalAreaColorPicker
-                  colorHex={groupColorValue}
-                  onColorChange={(value) =>
-                    onGroupFormChange("colorHex", value)
-                  }
-                />
-              </div>
             </div>
           </FramePanel>
         </Frame>
@@ -659,16 +660,6 @@ export function ModalityViewerRightPanel({
                     }
                   />
                 </div>
-
-                <div className="space-y-1.5">
-                  <div className="text-xs font-medium">Color</div>
-                  <AnatomicalAreaColorPicker
-                    colorHex={groupColorValue}
-                    onColorChange={(value) =>
-                      onGroupFormChange("colorHex", value)
-                    }
-                  />
-                </div>
               </div>
             </FramePanel>
           </Frame>
@@ -699,8 +690,7 @@ export function ModalityViewerRightPanel({
                       onClearPolygonDraft();
                       onCanvasModeChange("browse");
                     } else {
-                      setShowPartEditorWindow(false);
-                      onCanvasModeChange("browse");
+                      resetPartEditorState();
                     }
 
                     setShowCreatePartFrame(next);
@@ -749,12 +739,16 @@ export function ModalityViewerRightPanel({
                                 selectedAnatomicalPart.id,
                               );
                               setShowCreatePartFrame(true);
-                              setShowPartEditorWindow(false);
+                              resetPartEditorState();
                               setPartEditorInitialContent(
                                 structure.longDescription ?? "",
                               );
                               setPartInteractionMode(interactionMode);
-                              onCanvasModeChange("browse");
+                              onCanvasModeChange(
+                                getCanvasModeFromPartInteraction(
+                                  interactionMode,
+                                ),
+                              );
                             }}
                           >
                             Edit
@@ -820,6 +814,16 @@ export function ModalityViewerRightPanel({
 
                   <div className="space-y-1.5">
                     <div className="text-xs font-medium text-white/70">
+                      Color
+                    </div>
+                    <AnatomicalAreaColorPicker
+                      colorHex={partColorValue}
+                      onColorChange={handlePartColorChange}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-white/70">
                       Placement Type
                     </div>
                     <Group className="rounded-md bg-white/6 p-0.5">
@@ -871,7 +875,7 @@ export function ModalityViewerRightPanel({
                         Open Editor
                       </Button>
                       <span className="truncate text-[11px] text-white/50">
-                        {structureForm.shortDescription.trim()
+                        {structureForm.longDescription.trim()
                           ? "Description draft ready"
                           : "No description draft yet"}
                       </span>

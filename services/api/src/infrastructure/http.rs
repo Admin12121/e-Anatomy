@@ -36,7 +36,9 @@ pub async fn resolve_admin_account_id(
     jar: &CookieJar,
     headers: &HeaderMap,
 ) -> Result<Uuid, AppError> {
-    Ok(resolve_admin_actor_context(state, jar, headers).await?.account_id)
+    Ok(resolve_admin_actor_context(state, jar, headers)
+        .await?
+        .account_id)
 }
 
 #[allow(dead_code)]
@@ -137,13 +139,15 @@ async fn get_trusted_actor_context(
     }))
 }
 
-async fn resolve_trusted_user_id(pool: &PgPool, provided_user_id: &str) -> Result<String, AppError> {
-    if let Some(existing_legacy_user_id) = sqlx::query_scalar::<_, String>(
-        "SELECT id FROM users WHERE id = $1 LIMIT 1",
-    )
-    .bind(provided_user_id)
-    .fetch_optional(pool)
-    .await?
+async fn resolve_trusted_user_id(
+    pool: &PgPool,
+    provided_user_id: &str,
+) -> Result<String, AppError> {
+    if let Some(existing_legacy_user_id) =
+        sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE id = $1 LIMIT 1")
+            .bind(provided_user_id)
+            .fetch_optional(pool)
+            .await?
     {
         return Ok(existing_legacy_user_id);
     }
