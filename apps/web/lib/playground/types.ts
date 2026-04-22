@@ -17,6 +17,16 @@ export type ZoneListResponse = {
   items: ZoneSummary[]
 }
 
+export type PublicZoneSummary = Pick<
+  ZoneSummary,
+  "id" | "slug" | "name" | "bodyView" | "anchor"
+>
+
+export type PublicZoneListResponse = {
+  total: number
+  items: PublicZoneSummary[]
+}
+
 export type ZoneDetail = {
   id: string
   slug: string
@@ -121,6 +131,13 @@ export type ModalitySourceAsset = {
 export type ZoneModalityListResponse = {
   total: number
   items: ZoneModality[]
+}
+
+export type PublicZoneModalitySummary = Pick<ZoneModality, "id" | "name">
+
+export type PublicZoneModalityListResponse = {
+  total: number
+  items: PublicZoneModalitySummary[]
 }
 
 export type CreateZoneModalityInput = {

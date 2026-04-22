@@ -2,15 +2,36 @@ use sqlx::{PgPool, types::Json};
 use uuid::Uuid;
 
 use crate::features::playground::domain::models::{
-    ModalityIngestJob, ModalitySourceAsset, ViewerAnnotation, ViewerAnnotationPoint,
-    ViewerStructure, ViewerStructureGroup, ZoneAnchor, ZoneDetail, ZoneListItem, ZoneModality,
-    ZoneModalityAsset,
+    ModalityIngestJob, ModalitySourceAsset, PublicZoneModalityListItem, ViewerAnnotation,
+    ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneAnchor, ZoneDetail,
+    ZoneListItem, ZoneModality, ZoneModalityAsset,
 };
 
 #[derive(Debug, Clone, Default)]
 pub struct PlaygroundRepository;
 
 impl PlaygroundRepository {
+    pub async fn list_public_zones(&self, pool: &PgPool) -> Result<Vec<ZoneListItem>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, ZoneListRow>(
+            r#"
+            SELECT
+                id::text AS id,
+                slug,
+                name,
+                body_view,
+                anchor_x,
+                anchor_y,
+                anchor_z
+            FROM anatomy_zones
+            ORDER BY name ASC, created_at ASC
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     pub async fn list_zones_for_account(
         &self,
         pool: &PgPool,
@@ -225,6 +246,27 @@ impl PlaygroundRepository {
         Ok(exists)
     }
 
+    pub async fn public_zone_exists(
+        &self,
+        pool: &PgPool,
+        zone_id: Uuid,
+    ) -> Result<bool, sqlx::Error> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM anatomy_zones
+                WHERE id = $1
+            )
+            "#,
+        )
+        .bind(zone_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(exists)
+    }
+
     pub async fn list_zone_modalities(
         &self,
         pool: &PgPool,
@@ -253,6 +295,28 @@ impl PlaygroundRepository {
             "#,
         )
         .bind(account_id)
+        .bind(zone_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn list_public_zone_modalities(
+        &self,
+        pool: &PgPool,
+        zone_id: Uuid,
+    ) -> Result<Vec<PublicZoneModalityListItem>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, PublicZoneModalityRow>(
+            r#"
+            SELECT
+                id::text AS id,
+                name
+            FROM anatomy_zone_modalities
+            WHERE zone_id = $1
+            ORDER BY updated_at DESC, name ASC
+            "#,
+        )
         .bind(zone_id)
         .fetch_all(pool)
         .await?;
@@ -2287,6 +2351,21 @@ impl From<ZoneModalityRow> for ZoneModality {
             notes: value.notes,
             created_at: value.created_at,
             updated_at: value.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PublicZoneModalityRow {
+    id: String,
+    name: String,
+}
+
+impl From<PublicZoneModalityRow> for PublicZoneModalityListItem {
+    fn from(value: PublicZoneModalityRow) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
         }
     }
 }

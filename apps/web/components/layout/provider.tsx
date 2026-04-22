@@ -1,13 +1,16 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type { ReactNode } from "react"
 import type { LenisOptions } from "lenis"
 import { ReactLenis } from "lenis/react"
 import { usePathname } from "next/navigation"
 
 import MusicToggle from "./music-toggle"
-import Preloader from "./preloader"
+import {
+  PreloaderStateProvider,
+  type PreloaderStartMode,
+} from "./preloader-state"
 import TransitionProvider from "./transition"
 
 type LayoutProviderProps = {
@@ -43,12 +46,9 @@ const LENIS_DESKTOP = {
   lerp: 0.1,
 } satisfies LenisOptions
 
-let hasBootstrappedDocument = false
-
 export default function LayoutProvider({ children }: LayoutProviderProps) {
   const pathname = usePathname()
   const [isMobile, setIsMobile] = useState(false)
-  const [showPreloader, setShowPreloader] = useState(() => !hasBootstrappedDocument)
 
   useEffect(() => {
     const handleResize = () =>
@@ -60,33 +60,31 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
     return () => window.removeEventListener("resize", handleResize)
   }, [])
 
-  useEffect(() => {
-    // Keep the preloader tied to the current document load, not client-side route changes.
-    hasBootstrappedDocument = true
-  }, [])
-
   const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
-  const handlePreloaderComplete = useCallback(() => {
-    setShowPreloader(false)
-  }, [])
-  const shouldShowPreloader = pathname === "/" && showPreloader
+  const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
+  const shouldShowMusicToggle = pathname !== "/"
+  const preloaderStateValue = useMemo(
+    () => ({
+      isPreloaderActive: false,
+      isPreloaderReady: false,
+      isPreloaderTransitioningOut: false,
+      openPreloader,
+    }),
+    [openPreloader],
+  )
 
   return (
     <TransitionProvider>
-      <ReactLenis root options={lenisOptions}>
-        <div className="relative">
-          {shouldShowPreloader ? <Preloader onComplete={handlePreloaderComplete} /> : null}
-          <MusicToggle />
-          <div
-            aria-hidden={shouldShowPreloader}
-            className={`transition-opacity duration-300 ${
-              shouldShowPreloader ? "pointer-events-none opacity-0" : "opacity-100"
-            }`}
-          >
-            {children}
+      <PreloaderStateProvider value={preloaderStateValue}>
+        <ReactLenis root options={lenisOptions}>
+          <div className="relative">
+            {shouldShowMusicToggle ? <MusicToggle /> : null}
+            <div className="opacity-100">
+              {children}
+            </div>
           </div>
-        </div>
-      </ReactLenis>
+        </ReactLenis>
+      </PreloaderStateProvider>
     </TransitionProvider>
   )
 }

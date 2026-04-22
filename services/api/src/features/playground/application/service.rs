@@ -24,10 +24,11 @@ use crate::features::playground::{
         CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
         CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
         DeleteZoneModalityAssetsInput, DeleteZoneModalityAssetsResponse, ModalitySourceAsset,
-        UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput, UpdateViewerStructureInput,
-        UpdateZoneInput, UpdateZoneModalityAssetInput, UpdateZoneModalityInput,
-        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneDetail, ZoneListResponse,
-        ZoneModality, ZoneModalityAsset, ZoneModalityAssetListResponse, ZoneModalityAtlasFrame,
+        PublicZoneModalityListResponse, UpdateViewerAnnotationInput,
+        UpdateViewerStructureGroupInput, UpdateViewerStructureInput, UpdateZoneInput,
+        UpdateZoneModalityAssetInput, UpdateZoneModalityInput, ViewerAnnotationPoint,
+        ViewerStructure, ViewerStructureGroup, ZoneDetail, ZoneListResponse, ZoneModality,
+        ZoneModalityAsset, ZoneModalityAssetListResponse, ZoneModalityAtlasFrame,
         ZoneModalityAtlasPage, ZoneModalityListResponse, ZoneModalityViewerManifest,
     },
     infrastructure::repository::PlaygroundRepository,
@@ -177,6 +178,15 @@ impl PlaygroundService {
         })
     }
 
+    pub async fn list_public_zones(&self) -> Result<ZoneListResponse, AppError> {
+        let items = self.repo.list_public_zones(&self.pool).await?;
+
+        Ok(ZoneListResponse {
+            total: items.len(),
+            items,
+        })
+    }
+
     pub async fn get_zone_detail(
         &self,
         account_id: Uuid,
@@ -264,6 +274,25 @@ impl PlaygroundService {
             .await?;
 
         Ok(ZoneModalityListResponse {
+            total: items.len(),
+            items,
+        })
+    }
+
+    pub async fn list_public_zone_modalities(
+        &self,
+        zone_id: Uuid,
+    ) -> Result<PublicZoneModalityListResponse, AppError> {
+        if !self.repo.public_zone_exists(&self.pool, zone_id).await? {
+            return Err(AppError::not_found("Zone was not found"));
+        }
+
+        let items = self
+            .repo
+            .list_public_zone_modalities(&self.pool, zone_id)
+            .await?;
+
+        Ok(PublicZoneModalityListResponse {
             total: items.len(),
             items,
         })

@@ -1,8 +1,14 @@
 import type { Metadata } from "next";
-import { Inter, Oxanium } from "next/font/google";
+import {
+  Barlow_Condensed,
+  Geist_Mono,
+  Inter,
+  Oxanium,
+} from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import HistoryNavigationGuard from "@/components/layout/history-navigation-guard";
 
 import "./globals.css";
 import { cn } from "@/lib/utils";
@@ -10,6 +16,17 @@ import { cn } from "@/lib/utils";
 const headingFont = Oxanium({
   subsets: ["latin"],
   variable: "--font-heading",
+});
+
+const preloaderHeadingFont = Barlow_Condensed({
+  subsets: ["latin"],
+  weight: ["700", "800"],
+  variable: "--font-preloader-heading",
+});
+
+const preloaderMonoFont = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-preloader-mono",
 });
 
 const bodyFont = Inter({
@@ -34,10 +51,13 @@ export default function RootLayout({
         "h-full antialiased",
         bodyFont.variable,
         headingFont.variable,
+        preloaderHeadingFont.variable,
+        preloaderMonoFont.variable,
       )}
       suppressHydrationWarning
     >
       <body className="min-h-full bg-background font-sans text-foreground">
+        <HistoryNavigationGuard />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

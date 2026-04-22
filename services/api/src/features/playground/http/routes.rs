@@ -113,6 +113,13 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
+pub fn public_routes() -> Router<AppState> {
+    Router::new().route("/zones", get(list_public_zones)).route(
+        "/zones/{zone_id}/modalities",
+        get(list_public_zone_modalities),
+    )
+}
+
 async fn list_zones(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -122,6 +129,12 @@ async fn list_zones(
         .playground_service
         .list_zones_for_account(resolve_admin_account_id(&state, &jar, &headers).await?)
         .await?;
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+async fn list_public_zones(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let response = state.playground_service.list_public_zones().await?;
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -186,6 +199,18 @@ async fn list_zone_modalities(
             resolve_admin_account_id(&state, &jar, &headers).await?,
             zone_id,
         )
+        .await?;
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+async fn list_public_zone_modalities(
+    State(state): State<AppState>,
+    Path(zone_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let response = state
+        .playground_service
+        .list_public_zone_modalities(zone_id)
         .await?;
 
     Ok((StatusCode::OK, Json(response)))

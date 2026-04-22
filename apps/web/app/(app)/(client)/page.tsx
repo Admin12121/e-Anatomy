@@ -1,611 +1,802 @@
 "use client";
 
+import { skipToken } from "@reduxjs/toolkit/query";
 import {
+  startTransition,
   useEffect,
-  useMemo,
+  useLayoutEffect,
   useRef,
   useState,
-  type ElementRef,
 } from "react";
-import dynamic from "next/dynamic";
+import Image from "next/image";
 import gsap from "gsap";
-import { useGSAP } from "@gsap/react";
-import type { LucideIcon } from "lucide-react";
+import { CustomEase } from "gsap/CustomEase";
+import { SplitText } from "gsap/SplitText";
+import dynamic from "next/dynamic";
+import { ROOT_HISTORY_RESTORE_EVENT } from "@/components/layout/history-navigation-guard";
 import {
-  ArrowLeft,
-  Brain,
-  ChevronRight,
-  Clock3,
-  Dna,
-  FlaskConical,
-  Heart,
-  Pill,
-  Sparkles,
-} from "lucide-react";
+  Frame,
+  FrameHeader,
+  FramePanel,
+  FrameTitle,
+} from "@/components/ui/frame";
 
-import type { HighlightableLayerId } from "@/components/anatomy/anatomy-stage";
-import { SkullFluidReveal } from "@/components/landing/skull-fluid-reveal";
-import { PulsatingButton } from "@/components/layout/pulsating-button";
-import { cn } from "@/lib/utils";
-
-gsap.registerPlugin(useGSAP);
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import type {
+  PublicZoneModalitySummary,
+  PublicZoneSummary,
+} from "@/lib/playground/types";
+import {
+  useGetPublicZoneModalitiesQuery,
+  useGetPublicZonesQuery,
+} from "@/lib/store/services/public-playground-api";
 
 const loadAnatomyStage = () => import("@/components/anatomy/anatomy-stage");
-const loadClickDissolveTransition = () =>
-  import("@/components/landing/click-dissolve-transition");
-
-function warmExperienceModules() {
-  void loadAnatomyStage();
-  void loadClickDissolveTransition();
-}
 
 const AnatomyStage = dynamic(
   () => loadAnatomyStage().then((module) => module.AnatomyStage),
-  {
-    ssr: false,
-    loading: () => <div className="h-full w-full bg-[#7e80fc]" />,
-  },
-);
-
-const ClickDissolveTransition = dynamic(
-  () =>
-    loadClickDissolveTransition().then(
-      (module) => module.ClickDissolveTransition,
-    ),
   {
     ssr: false,
     loading: () => null,
   },
 );
 
-type LandingCategory = {
-  focusLayer: HighlightableLayerId | null;
-  icon: LucideIcon;
-  id: string;
-  label: string;
-};
+gsap.registerPlugin(SplitText, CustomEase);
 
-const LANDING_CATEGORIES: readonly LandingCategory[] = [
-  {
-    focusLayer: "brain",
-    icon: Brain,
-    id: "neurology",
-    label: "Neurology",
-  },
-  {
-    focusLayer: "heartKidney",
-    icon: Heart,
-    id: "cardiovascular",
-    label: "Cardiovascular",
-  },
-  {
-    focusLayer: "lungs",
-    icon: FlaskConical,
-    id: "toxins",
-    label: "Toxins",
-  },
-  {
-    focusLayer: "digestive",
-    icon: Pill,
-    id: "gut-health",
-    label: "Gut Health",
-  },
-  {
-    focusLayer: "heartKidney",
-    icon: Sparkles,
-    id: "hormones",
-    label: "Hormones",
-  },
-  {
-    focusLayer: "brain",
-    icon: Dna,
-    id: "genetics",
-    label: "Genetics",
-  },
-  {
-    focusLayer: null,
-    icon: Clock3,
-    id: "longevity",
-    label: "Longevity",
-  },
-] as const;
+CustomEase.create("hop", "0.9, 0, 0.1, 1");
+CustomEase.create("glide", "0.8, 0, 0.2, 1");
 
-export default function HomePage() {
-  const [hasStartedExperience, setHasStartedExperience] = useState(false);
-  const [isExitingExperience, setIsExitingExperience] = useState(false);
-  const [transitionDirection, setTransitionDirection] = useState<
-    "enter" | "exit"
-  >("enter");
-  const [transitionRunId, setTransitionRunId] = useState(0);
-  const [hoveredCategoryId, setHoveredCategoryId] = useState<string | null>(
-    null,
-  );
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
-    null,
-  );
+const PRELOADER_CRITICAL_CSS = `
+[data-preloader-shell] {
+  position: relative;
+  min-height: 100svh;
+  background: #000;
+}
 
-  const rootRef = useRef<HTMLElement | null>(null);
-  const skullRef = useRef<HTMLDivElement | null>(null);
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const titleRef = useRef<HTMLDivElement | null>(null);
-  const startButtonRef = useRef<HTMLDivElement | null>(null);
-  const footerLeftRef = useRef<HTMLSpanElement | null>(null);
-  const footerRightRef = useRef<HTMLSpanElement | null>(null);
-  const backButtonRef = useRef<HTMLButtonElement | null>(null);
-  const categoryPanelRef = useRef<HTMLDivElement | null>(null);
-  const categoryListRef = useRef<HTMLDivElement | null>(null);
-  const enterTimelineRef = useRef<gsap.core.Timeline | null>(null);
-  const exitTimelineRef = useRef<gsap.core.Timeline | null>(null);
+[data-preloader-shell] .preloader-backdrop,
+[data-preloader-shell] .preloader,
+[data-preloader-shell] .hero {
+  width: 100%;
+  height: 100svh;
+}
 
-  const activeCategory = useMemo(
-    () =>
-      LANDING_CATEGORIES.find(
-        (category) => category.id === selectedCategoryId,
-      ) ?? null,
-    [selectedCategoryId],
-  );
-  const previewCategory = useMemo(
-    () =>
-      LANDING_CATEGORIES.find(
-        (category) => category.id === hoveredCategoryId,
-      ) ?? null,
-    [hoveredCategoryId],
-  );
-  const shouldRenderExperienceStage = hasStartedExperience || isExitingExperience;
-  const shouldRenderTransition = transitionRunId > 0;
+[data-preloader-shell] .preloader-backdrop,
+[data-preloader-shell] .preloader {
+  position: fixed;
+  inset: 0;
+}
+
+[data-preloader-shell] .preloader-backdrop {
+  z-index: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: #fff;
+  color: #7a7a7a;
+}
+
+[data-preloader-shell] .preloader {
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: #000;
+  color: #fff;
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+}
+
+[data-preloader-shell] .pb-row,
+[data-preloader-shell] .p-row {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  padding: 1.5rem;
+}
+
+[data-preloader-shell] .pb-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+[data-preloader-shell] .p-col {
+  display: flex;
+  align-items: flex-end;
+  gap: 6rem;
+}
+
+[data-preloader-shell] .p-sub-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+[data-preloader-shell] .preloader-backdrop p,
+[data-preloader-shell] .preloader p {
+  margin: 0;
+  font-family: var(--font-preloader-mono), monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+[data-preloader-shell] .preloader-btn-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20rem;
+  height: 20rem;
+  transform: translate(-50%, -50%);
+}
+
+[data-preloader-shell] #pbc-outro-label {
+  opacity: 0;
+}
+
+[data-preloader-shell] .hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: #000;
+  color: #fff;
+  text-align: center;
+  transform: scale(0.75);
+}
+
+[data-preloader-shell] .preloader-revealer {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%);
+}
+`;
+
+const EMPTY_ZONES: PublicZoneSummary[] = [];
+const EMPTY_MODALITIES: PublicZoneModalitySummary[] = [];
+
+function getApiErrorMessage(error: unknown, fallbackMessage: string) {
+  if (
+    error &&
+    typeof error === "object" &&
+    "data" in error &&
+    error.data &&
+    typeof error.data === "object" &&
+    "error" in error.data &&
+    error.data.error &&
+    typeof error.data.error === "object" &&
+    "message" in error.data.error &&
+    typeof error.data.error.message === "string"
+  ) {
+    return error.data.error.message;
+  }
+
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return fallbackMessage;
+}
+
+export default function Page() {
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const [shellVersion, setShellVersion] = useState(0);
+  const [shouldRenderStage, setShouldRenderStage] = useState(false);
+  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
+  const stageReadyRef = useRef(false);
+  const pendingEngageRef = useRef(false);
+  const runExitAnimationRef = useRef<(() => void) | null>(null);
+  const {
+    data: zonesResponse,
+    error: zonesQueryError,
+    isError: isZonesError,
+    isLoading: isZonesLoading,
+  } = useGetPublicZonesQuery();
+  const zones = zonesResponse?.items ?? EMPTY_ZONES;
+  const activeSelectedZoneId =
+    selectedZoneId && zones.some((zone) => zone.id === selectedZoneId)
+      ? selectedZoneId
+      : null;
+  const {
+    data: modalitiesResponse,
+    error: modalitiesQueryError,
+    isError: isModalitiesError,
+    isLoading: isModalitiesLoading,
+  } = useGetPublicZoneModalitiesQuery(activeSelectedZoneId ?? skipToken);
+  const stageZones = zones.map((zone) => ({
+    id: zone.id,
+    name: zone.name,
+    anchor: zone.anchor,
+  }));
+  const selectedZone =
+    activeSelectedZoneId
+      ? (zones.find((zone) => zone.id === activeSelectedZoneId) ?? null)
+      : null;
+  const selectedZoneModalities = modalitiesResponse?.items ?? EMPTY_MODALITIES;
+
+  function handleSelectZone(zoneId: string) {
+    setSelectedZoneId(zoneId);
+  }
 
   useEffect(() => {
-    const requestIdleCallback = window.requestIdleCallback?.bind(window);
-    const cancelIdleCallback = window.cancelIdleCallback?.bind(window);
+    const handleHistoryRestore = () => {
+      pendingEngageRef.current = false;
+      setShouldRenderStage(false);
+      setShellVersion((current) => current + 1);
+    };
 
-    if (requestIdleCallback && cancelIdleCallback) {
-      const idleCallbackId = requestIdleCallback(warmExperienceModules, {
-        timeout: 1600,
-      });
-
-      return () => {
-        cancelIdleCallback(idleCallbackId);
-      };
-    }
-
-    const timeoutId = globalThis.setTimeout(warmExperienceModules, 1200);
+    window.addEventListener(ROOT_HISTORY_RESTORE_EVENT, handleHistoryRestore);
 
     return () => {
-      globalThis.clearTimeout(timeoutId);
+      window.removeEventListener(
+        ROOT_HISTORY_RESTORE_EVENT,
+        handleHistoryRestore,
+      );
     };
   }, []);
 
-  useGSAP(
-    () => {
-      const stage = stageRef.current;
-      const skull = skullRef.current;
-      const title = titleRef.current;
-      const startButton = startButtonRef.current;
-      const footerLeft = footerLeftRef.current;
-      const footerRight = footerRightRef.current;
-      const backButton = backButtonRef.current;
-      const categoryPanel = categoryPanelRef.current;
+  useEffect(() => {
+    let cancelled = false;
 
-      if (
-        !stage ||
-        !skull ||
-        !title ||
-        !startButton ||
-        !footerLeft ||
-        !footerRight ||
-        !backButton ||
-        !categoryPanel
-      ) {
+    void loadAnatomyStage()
+      .then((module) => module.preloadAnatomyStageAssets?.())
+      .catch(() => null)
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+
+        stageReadyRef.current = true;
+
+        if (pendingEngageRef.current) {
+          pendingEngageRef.current = false;
+          runExitAnimationRef.current?.();
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const page = pageRef.current;
+
+    if (!page) {
+      return;
+    }
+
+    let preloaderComplete = false;
+    let exitTimeline: gsap.core.Timeline | null = null;
+
+    const preloader = page.querySelector<HTMLDivElement>(".preloader");
+    const hero = page.querySelector<HTMLElement>(".hero");
+    const heroHeading = page.querySelector<HTMLHeadingElement>(".hero h1");
+    const heroRevealer = page.querySelector<HTMLElement>(".preloader-revealer");
+    const preloaderTexts =
+      page.querySelectorAll<HTMLParagraphElement>(".preloader p");
+    const preloaderBtn = page.querySelector<HTMLDivElement>(
+      ".preloader-btn-container",
+    );
+    const btnOutlineTrack =
+      page.querySelector<SVGCircleElement>(".stroke-track");
+    const btnOutlineProgress =
+      page.querySelector<SVGCircleElement>(".stroke-progress");
+    const btnSvg = page.querySelector<SVGSVGElement>(".pbc-svg-strokes svg");
+    const btnLogo = page.querySelector<HTMLElement>("#pbc-logo");
+    const btnLabel = page.querySelector<HTMLElement>("#pbc-label");
+    const btnOutroLabel = page.querySelector<HTMLElement>("#pbc-outro-label");
+
+    if (
+      !preloader ||
+      !hero ||
+      !heroRevealer ||
+      !preloaderBtn ||
+      !btnOutlineTrack ||
+      !btnOutlineProgress ||
+      !btnSvg ||
+      !btnLogo ||
+      !btnLabel ||
+      !btnOutroLabel
+    ) {
+      return;
+    }
+
+    const svgPathLength = btnOutlineTrack.getTotalLength();
+    const preloaderSplits = Array.from(preloaderTexts).map(
+      (paragraph) =>
+        new SplitText(paragraph, {
+          type: "lines",
+          linesClass: "line",
+          mask: "lines",
+        }),
+    );
+    const heroSplit = heroHeading
+      ? new SplitText(heroHeading, {
+          type: "words",
+          wordsClass: "word",
+          mask: "words",
+        })
+      : null;
+
+    gsap.set(preloader, {
+      clearProps: "all",
+      display: "flex",
+      scale: 1,
+      clipPath: "polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)",
+    });
+    gsap.set(hero, {
+      clearProps: "all",
+      scale: 0.75,
+    });
+    gsap.set(heroRevealer, {
+      clearProps: "all",
+      clipPath: "polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)",
+    });
+    gsap.set(preloaderBtn, {
+      clearProps: "scale",
+      scale: 1,
+    });
+    gsap.set(btnSvg, {
+      clearProps: "rotation",
+      rotation: 0,
+    });
+    gsap.set(btnLogo, {
+      clearProps: "opacity",
+      opacity: 1,
+    });
+    gsap.set([btnLabel, btnOutroLabel], {
+      clearProps: "opacity",
+      opacity: 1,
+    });
+    gsap.set([btnOutlineTrack, btnOutlineProgress], {
+      strokeDasharray: svgPathLength,
+      strokeDashoffset: svgPathLength,
+    });
+
+    const introTimeline = gsap.timeline({ delay: 1 });
+
+    introTimeline
+      .to(page.querySelectorAll(".preloader .p-row p .line"), {
+        y: "0%",
+        duration: 0.75,
+        ease: "power3.out",
+        stagger: 0.1,
+      })
+      .to(
+        btnOutlineTrack,
+        {
+          strokeDashoffset: 0,
+          duration: 2,
+          ease: "hop",
+        },
+        "<",
+      )
+      .to(
+        btnSvg,
+        {
+          rotation: 270,
+          duration: 2,
+          ease: "hop",
+        },
+        "<",
+      );
+
+    const progressStops = [0.2, 0.25, 0.85, 1].map((base, index) => {
+      if (index === 3) {
+        return 1;
+      }
+
+      return base + (Math.random() - 0.5) * 0.1;
+    });
+
+    progressStops.forEach((stop, index) => {
+      introTimeline.to(btnOutlineProgress, {
+        strokeDashoffset: svgPathLength - svgPathLength * stop,
+        duration: 0.75,
+        ease: "glide",
+        delay: index === 0 ? 0.3 : 0.3 + Math.random() * 0.2,
+      });
+    });
+
+    introTimeline
+      .to(
+        btnLogo,
+        {
+          opacity: 0,
+          duration: 0.35,
+          ease: "power1.out",
+        },
+        "-=0.25",
+      )
+      .to(
+        preloaderBtn,
+        {
+          scale: 0.9,
+          duration: 1.5,
+          ease: "hop",
+        },
+        "-=0.5",
+      )
+      .to(
+        page.querySelectorAll("#pbc-label .line"),
+        {
+          y: "0%",
+          duration: 0.75,
+          ease: "power3.out",
+          onComplete: () => {
+            preloaderComplete = true;
+          },
+        },
+        "-=0.75",
+      );
+
+    const runExitAnimation = () => {
+      if (!preloaderComplete) {
         return;
       }
 
-      const categoryItems = categoryListRef.current
-        ? gsap.utils.toArray<HTMLElement>(
-            "[data-category-item]",
-            categoryListRef.current,
-          )
-        : [];
-
-      gsap.set(skull, { autoAlpha: 1 });
-      gsap.set(stage, { autoAlpha: 0 });
-      gsap.set(title, { top: "50%", yPercent: -50 });
-      gsap.set(startButton, { autoAlpha: 1, y: 0 });
-      gsap.set([footerLeft, footerRight], { autoAlpha: 1, x: 0 });
-      gsap.set(backButton, { autoAlpha: 0, scale: 0.86, y: -24 });
-      gsap.set(categoryPanel, {
-        autoAlpha: 0,
-        height: 0,
-        overflow: "hidden",
-        y: 28,
+      preloaderComplete = false;
+      startTransition(() => {
+        setShouldRenderStage(true);
       });
-      gsap.set(categoryItems, { autoAlpha: 0, y: 18 });
+      exitTimeline?.kill();
+      exitTimeline = gsap.timeline();
 
-      enterTimelineRef.current = gsap.timeline({
-        defaults: {
-          ease: "power3.inOut",
-        },
-        paused: true,
-      });
-
-      enterTimelineRef.current
+      exitTimeline
+        .to(preloader, {
+          scale: 0.75,
+          duration: 1.25,
+          ease: "hop",
+        })
         .to(
-          stage,
+          [btnOutlineTrack, btnOutlineProgress],
           {
-            autoAlpha: 1,
-            duration: 0.16,
-            ease: "none",
+            strokeDashoffset: -svgPathLength,
+            duration: 1.25,
+            ease: "hop",
           },
-          0.04,
+          "<",
         )
         .to(
-          title,
+          page.querySelectorAll("#pbc-label .line"),
           {
-            duration: 1.08,
-            ease: "expo.inOut",
-            top: "2.75rem",
-            yPercent: 0,
-          },
-          0.08,
-        )
-        .to(
-          startButton,
-          {
-            autoAlpha: 0,
-            duration: 0.45,
-            ease: "power2.inOut",
-            y: 30,
-          },
-          0,
-        )
-        .to(
-          footerLeft,
-          {
-            autoAlpha: 0,
-            duration: 0.85,
-            x: -180,
-          },
-          0,
-        )
-        .to(
-          footerRight,
-          {
-            autoAlpha: 0,
-            duration: 0.85,
-            x: 180,
-          },
-          0,
-        )
-        .to(
-          backButton,
-          {
-            autoAlpha: 1,
-            duration: 0.5,
-            ease: "expo.out",
-            scale: 1,
-            y: 0,
-          },
-          0.58,
-        )
-        .to(
-          categoryPanel,
-          {
-            autoAlpha: 1,
-            duration: 0.88,
-            ease: "expo.out",
-            height: "auto",
-            y: 0,
-          },
-          0.56,
-        )
-        .to(
-          categoryItems,
-          {
-            autoAlpha: 1,
-            duration: 0.48,
+            y: "-100%",
+            duration: 0.75,
             ease: "power3.out",
-            stagger: 0.06,
-            y: 0,
           },
-          0.76,
+          "-=1.25",
         )
         .to(
-          skull,
+          page.querySelectorAll("#pbc-outro-label .line"),
           {
-            autoAlpha: 0,
-            duration: 0.24,
-            ease: "power2.out",
+            y: "0%",
+            duration: 0.75,
+            ease: "power3.out",
           },
-          1.06,
-        );
-
-      exitTimelineRef.current = gsap.timeline({
-        defaults: {
-          ease: "power3.inOut",
-        },
-        onComplete: () => {
-          setHasStartedExperience(false);
-          setHoveredCategoryId(null);
-          setSelectedCategoryId(null);
-          setIsExitingExperience(false);
-        },
-        paused: true,
-      });
-
-      exitTimelineRef.current
+          "-=0.75",
+        )
+        .to(preloader, {
+          clipPath: "polygon(0% 0%, 0% 0%, 0% 100%, 0% 100%)",
+          duration: 1.5,
+          ease: "hop",
+        })
         .to(
-          categoryItems,
+          heroRevealer,
           {
-            autoAlpha: 0,
-            duration: 0.32,
-            ease: "power2.inOut",
-            stagger: {
-              each: 0.03,
-              from: "end",
+            clipPath: "polygon(0% 0%, 0% 0%, 0% 100%, 0% 100%)",
+            duration: 1.5,
+            ease: "hop",
+            onComplete: () => {
+              gsap.set(preloader, { display: "none" });
             },
-            y: 18,
           },
-          0,
+          "-=1.45",
         )
-        .to(
-          categoryPanel,
+        .to(hero, {
+          scale: 1,
+          duration: 1.25,
+          ease: "hop",
+        });
+
+      const heroWords = page.querySelectorAll(".hero h1 .word");
+
+      if (heroWords.length > 0) {
+        exitTimeline.to(
+          heroWords,
           {
-            autoAlpha: 0,
-            duration: 0.82,
-            ease: "expo.inOut",
-            height: 0,
-            y: 28,
+            y: "0%",
+            duration: 1,
+            ease: "glide",
+            stagger: 0.05,
           },
-          0.08,
-        )
-        .to(
-          backButton,
-          {
-            autoAlpha: 0,
-            duration: 0.46,
-            ease: "expo.in",
-            scale: 0.86,
-            y: -24,
-          },
-          0.06,
-        )
-        .to(
-          title,
-          {
-            duration: 1.08,
-            ease: "expo.inOut",
-            top: "50%",
-            yPercent: -50,
-          },
-          0.24,
-        )
-        .to(
-          footerLeft,
-          {
-            autoAlpha: 1,
-            duration: 0.9,
-            x: 0,
-          },
-          0.46,
-        )
-        .to(
-          footerRight,
-          {
-            autoAlpha: 1,
-            duration: 0.9,
-            x: 0,
-          },
-          0.46,
-        )
-        .to(
-          startButton,
-          {
-            autoAlpha: 1,
-            duration: 0.62,
-            ease: "expo.out",
-            y: 0,
-          },
-          0.7,
-        )
-        .to(
-          skull,
-          {
-            autoAlpha: 1,
-            duration: 0.12,
-            ease: "none",
-          },
-          2.72,
-        )
-        .to(
-          stage,
-          {
-            autoAlpha: 0,
-            duration: 0.12,
-            ease: "none",
-          },
-          2.72,
+          "-=1.75",
         );
-    },
-    { scope: rootRef },
-  );
+      }
+    };
 
-  const handleCategorySelect = (categoryId: string) => {
-    setSelectedCategoryId((currentCategoryId) =>
-      currentCategoryId === categoryId ? null : categoryId,
-    );
-  };
+    runExitAnimationRef.current = runExitAnimation;
 
-  const handleStartExperience = () => {
-    if (hasStartedExperience) {
-      return;
-    }
+    const handleClick = () => {
+      if (!preloaderComplete) {
+        return;
+      }
 
-    warmExperienceModules();
-    setTransitionDirection("enter");
-    setHasStartedExperience(true);
-    setTransitionRunId((currentRunId) => currentRunId + 1);
-    exitTimelineRef.current?.pause(0);
-    enterTimelineRef.current?.restart();
-  };
+      if (!stageReadyRef.current) {
+        pendingEngageRef.current = true;
+        return;
+      }
 
-  const handleExitExperience = () => {
-    if (!hasStartedExperience || isExitingExperience) {
-      return;
-    }
+      runExitAnimation();
+    };
 
-    warmExperienceModules();
-    setTransitionDirection("exit");
-    setIsExitingExperience(true);
-    setTransitionRunId((currentRunId) => currentRunId + 1);
-    enterTimelineRef.current?.pause();
-    exitTimelineRef.current?.restart();
-  };
+    preloaderBtn.addEventListener("click", handleClick);
+
+    return () => {
+      runExitAnimationRef.current = null;
+      pendingEngageRef.current = false;
+      preloaderBtn.removeEventListener("click", handleClick);
+      introTimeline.kill();
+      exitTimeline?.kill();
+      heroSplit?.revert();
+      preloaderSplits.forEach((split) => split.revert());
+    };
+  }, [shellVersion]);
 
   return (
-    <main
-      ref={rootRef as React.RefObject<ElementRef<"main">>}
-      className="relative h-screen w-full overflow-hidden bg-[#050507]"
+    <div
+      key={shellVersion}
+      ref={pageRef}
+      data-preloader-shell=""
+      style={{ minHeight: "100svh", backgroundColor: "#000" }}
     >
-      <div ref={skullRef} className="absolute inset-0 z-0">
-        <SkullFluidReveal />
-      </div>
+      <style dangerouslySetInnerHTML={{ __html: PRELOADER_CRITICAL_CSS }} />
+      <div className="preloader-backdrop">
+        <div className="pb-row">
+          <div className="pb-col">
+            <p>MED//204 Neural Trace</p>
+            <p>MED//204 Neural Trace</p>
+            <p>MED//204 Neural Trace</p>
+            <p>MED//204 Neural Trace</p>
+            <p>MED//204 Neural Trace</p>
+          </div>
+          <div className="pb-col">
+            <p>Region / Cortical Mesh</p>
+            <p>0.392 MRI 008923</p>
+          </div>
+          <div className="pb-col">
+            <p>Modality / Spectral MRI</p>
+            <p>Status / Vital Resonance</p>
+          </div>
+          <div className="pb-col">
+            <Image
+              id="pb-logo"
+              src="/logo.png"
+              alt=""
+              width={40}
+              height={40}
+              priority
+            />
+          </div>
+          <div className="pb-col">
+            <p>:::bio::scan::grid:::</p>
+          </div>
+        </div>
 
-      <div
-        ref={stageRef}
-        className={cn(
-          "absolute inset-0 z-[1]",
-          hasStartedExperience && !isExitingExperience
-            ? "pointer-events-auto"
-            : "pointer-events-none",
-        )}
-      >
-        {shouldRenderExperienceStage ? (
-          <AnatomyStage
-            focusLayer={activeCategory?.focusLayer ?? null}
-            modelOffsetY={-0.35}
-            previewLayer={previewCategory?.focusLayer ?? null}
-            targetModelHeight={5.5}
-          />
-        ) : null}
-      </div>
-
-      {shouldRenderTransition ? (
-        <ClickDissolveTransition
-          runId={transitionRunId}
-          sourceRootRef={transitionDirection === "enter" ? skullRef : stageRef}
-          targetRootRef={transitionDirection === "enter" ? stageRef : skullRef}
-        />
-      ) : null}
-
-      <button
-        ref={backButtonRef}
-        aria-label="Back"
-        className={cn(
-          "absolute left-6 top-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-white/20 text-slate-900 shadow-[0_24px_80px_rgba(63,66,176,0.24)] backdrop-blur-xl",
-          hasStartedExperience && !isExitingExperience
-            ? "pointer-events-auto"
-            : "pointer-events-none",
-        )}
-        type="button"
-        onClick={handleExitExperience}
-      >
-        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-900">
-          <ArrowLeft className="h-5 w-5" />
-        </span>
-      </button>
-
-      <div
-        ref={categoryPanelRef}
-        className={cn(
-          "absolute bottom-5 right-5 z-20 w-[340px] rounded-[30px] border border-white/16 bg-white/10 p-4 shadow-[0_30px_120px_rgba(57,61,175,0.35)] backdrop-blur-2xl",
-          hasStartedExperience && !isExitingExperience
-            ? "pointer-events-auto"
-            : "pointer-events-none",
-        )}
-      >
-        <p className="pb-4 text-center text-[0.78rem] font-semibold tracking-[0.22em] text-slate-900/80 uppercase">
-          Explore Categories
-        </p>
-        <div ref={categoryListRef} className="space-y-3">
-          {LANDING_CATEGORIES.map((category) => {
-            const Icon = category.icon;
-            const isSelected = selectedCategoryId === category.id;
-
-            return (
-              <button
-                key={category.id}
-                data-category-item
-                className={cn(
-                  "group flex w-full items-center gap-4 rounded-full border px-5 py-4 text-left transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                  isSelected
-                    ? "border-white/80 bg-white text-slate-900 shadow-[0_20px_50px_rgba(86,91,210,0.26)]"
-                    : "border-white/18 bg-white/88 text-slate-800 hover:-translate-y-0.5 hover:border-white/60 hover:bg-white hover:shadow-[0_18px_44px_rgba(86,91,210,0.22)]",
-                )}
-                type="button"
-                onMouseEnter={() => setHoveredCategoryId(category.id)}
-                onMouseLeave={() => setHoveredCategoryId(null)}
-                onClick={() => handleCategorySelect(category.id)}
-              >
-                <span
-                  className={cn(
-                    "flex h-11 w-11 items-center justify-center rounded-full border transition-colors duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                    isSelected
-                      ? "border-[#7e80fc]/30 bg-[#ecebff] text-slate-900"
-                      : "border-slate-200/80 bg-white text-slate-900 group-hover:border-[#7e80fc]/35 group-hover:bg-[#f0efff]",
-                  )}
-                >
-                  <Icon className="h-5 w-5" />
-                </span>
-                <span className="flex-1 text-lg font-medium tracking-[-0.02em]">
-                  {category.label}
-                </span>
-                <ChevronRight
-                  className={cn(
-                    "h-5 w-5 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-                    isSelected ? "translate-x-1" : "group-hover:translate-x-1",
-                  )}
-                />
-              </button>
-            );
-          })}
+        <div className="pb-row">
+          <div className="pb-col">
+            <p>Perfusion Memory</p>
+          </div>
+          <div className="pb-col">
+            <p>{"// / perfusion / lattice / //"}</p>
+          </div>
+          <div className="pb-col">
+            <p>Latency Drift &gt; 17%</p>
+          </div>
+          <div className="pb-col">
+            <p>Synapses Aligning</p>
+            <p>Map Emerging</p>
+          </div>
+          <div className="pb-col">
+            <p>Stasis Pending</p>
+            <p>Return -- Atlas View</p>
+          </div>
+          <div className="pb-col">
+            <p>XR-9</p>
+          </div>
         </div>
       </div>
 
-      <section className="pointer-events-none absolute inset-0 z-10 h-screen w-full">
-        <div className="relative h-full w-full text-white">
-          <div
-            ref={titleRef}
-            className="absolute left-1/2 z-20 -translate-x-1/2 text-center"
-          >
-            <h1 className="hero-header text-center text-5xl font-bold">
-              e-Anatomy
-            </h1>
-          </div>
-
-          <div className="pointer-events-auto absolute bottom-5 left-1/2 z-20 -translate-x-1/2">
-            <div ref={startButtonRef}>
-              <PulsatingButton
-                pulseColor="#ffffff63"
-                className="bg-white text-xl text-indigo-900"
-                disabled={hasStartedExperience}
-                onFocus={warmExperienceModules}
-                onMouseEnter={warmExperienceModules}
-                onClick={handleStartExperience}
-              >
-                Start Experience
-              </PulsatingButton>
+      <div className="preloader">
+        <div className="p-row">
+          <p>Booting Atlas</p>
+        </div>
+        <div className="p-row">
+          <div className="p-col">
+            <div className="p-sub-col">
+              <p>Phase 01</p>
+              <p>Calibration</p>
+            </div>
+            <div className="p-sub-col">
+              <p>Neural Scan</p>
+              <p>12 Layers</p>
             </div>
           </div>
+          <div className="p-col">
+            <p>MX-24</p>
+          </div>
         </div>
 
-        <div className="pointer-events-none absolute bottom-5 flex w-full items-center justify-between px-8 text-white">
-          <span ref={footerLeftRef} className="mono sm">
-            Preserving What Remains
-          </span>
-          <span ref={footerRightRef} className="mono sm">
-            [ Since 1961 ]
-          </span>
+        <div className="preloader-btn-container">
+          <Image
+            id="pbc-logo"
+            src="/logo-light.png"
+            alt=""
+            width={64}
+            height={64}
+            priority
+          />
+          <p id="pbc-label">Engage</p>
+          <p id="pbc-outro-label">Atlas Ready</p>
+
+          <div className="pbc-svg-strokes">
+            <svg
+              viewBox="0 0 320 320"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <circle
+                className="stroke-track"
+                cx="160"
+                cy="160"
+                r="155"
+                stroke="#2b2b2b"
+                strokeWidth="2"
+                strokeDasharray="974"
+                strokeDashoffset="974"
+              />
+              <circle
+                className="stroke-progress"
+                cx="160"
+                cy="160"
+                r="155"
+                stroke="#fff"
+                strokeWidth="2"
+                strokeDasharray="974"
+                strokeDashoffset="974"
+              />
+            </svg>
+          </div>
         </div>
+      </div>
+
+      <section className="hero">
+        {shouldRenderStage ? (
+          <div className="absolute inset-0 z-0">
+            <AnatomyStage
+              backgroundColor="#141414"
+              className="h-full! w-full!"
+              onZoneSelect={handleSelectZone}
+              selectedZoneId={activeSelectedZoneId}
+              showBackdrop={false}
+              zones={stageZones}
+            />
+            {selectedZone ? (
+              <Frame className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-5 md:left-5 md:bottom-auto md:w-80">
+                <FramePanel className="overflow-hidden p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="text-left">
+                        <TableHead>Modalities</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {isModalitiesLoading ? (
+                        <TableRow>
+                          <TableCell className="text-left text-muted-foreground">
+                            Loading modalities...
+                          </TableCell>
+                        </TableRow>
+                      ) : isModalitiesError ? (
+                        <TableRow>
+                          <TableCell className="text-left text-destructive">
+                            {getApiErrorMessage(
+                              modalitiesQueryError,
+                              "Unable to load modalities.",
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ) : selectedZoneModalities.length === 0 ? (
+                        <TableRow>
+                          <TableCell className="text-left text-muted-foreground">
+                            No modalities are attached to this zone yet.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        selectedZoneModalities.map((modality) => (
+                          <TableRow key={modality.id}>
+                            <TableCell className="font-medium text-left">
+                              {modality.name}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </FramePanel>
+              </Frame>
+            ) : null}
+
+            <Frame className="absolute inset-x-4 top-4 z-10 md:inset-x-auto md:top-5 md:right-5 md:w-80">
+              <FramePanel className="overflow-hidden p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="text-left">
+                      <TableHead>Regions / Zone</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {isZonesLoading ? (
+                      <TableRow>
+                        <TableCell className="text-left text-muted-foreground">
+                          Loading zones...
+                        </TableCell>
+                      </TableRow>
+                    ) : isZonesError ? (
+                      <TableRow>
+                        <TableCell className="text-left text-destructive">
+                          {getApiErrorMessage(
+                            zonesQueryError,
+                            "Unable to load zones.",
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ) : zones.length === 0 ? (
+                      <TableRow>
+                        <TableCell className="text-left text-muted-foreground">
+                          No zones are available yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      zones.map((zone) => (
+                        <TableRow
+                          key={zone.id}
+                          className="cursor-pointer"
+                          data-state={
+                            activeSelectedZoneId === zone.id
+                              ? "selected"
+                              : undefined
+                          }
+                          onClick={() => handleSelectZone(zone.id)}
+                        >
+                          <TableCell className="font-medium text-left">
+                            {zone.name}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </FramePanel>
+            </Frame>
+          </div>
+        ) : null}
+        <div className="preloader-revealer z-10" />
       </section>
-    </main>
+    </div>
   );
 }

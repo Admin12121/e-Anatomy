@@ -27,6 +27,13 @@ pub struct ZoneListResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PublicZoneModalityListItem {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ZoneDetail {
     pub id: String,
     pub slug: String,
@@ -112,6 +119,13 @@ pub struct ModalitySourceAsset {
 pub struct ZoneModalityListResponse {
     pub total: usize,
     pub items: Vec<ZoneModality>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicZoneModalityListResponse {
+    pub total: usize,
+    pub items: Vec<PublicZoneModalityListItem>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

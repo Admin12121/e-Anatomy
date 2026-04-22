@@ -90,6 +90,7 @@ type HoverZoneUserData = {
 };
 
 type AnatomySceneProps = {
+  backgroundColor: string;
   createMode: boolean;
   draftAnchor: ZoneAnchor | null;
   focusLayer: HighlightableLayerId | null;
@@ -106,7 +107,7 @@ type AnatomySceneProps = {
   targetModelHeight: number;
 };
 
-type AnatomyAssemblyProps = AnatomySceneProps;
+type AnatomyAssemblyProps = Omit<AnatomySceneProps, "backgroundColor">;
 
 type AnatomyLayerModelProps = {
   config: AnatomyLayerConfig;
@@ -131,6 +132,7 @@ type LayerRuntimeEntry = {
 };
 
 type AnatomyStageProps = {
+  backgroundColor?: string;
   className?: string;
   createMode?: boolean;
   draftAnchor?: ZoneAnchor | null;
@@ -142,6 +144,7 @@ type AnatomyStageProps = {
   overlay?: (hoveredLayer: HighlightableLayerId | null) => ReactNode;
   previewLayer?: HighlightableLayerId | null;
   selectedZoneId?: string | null;
+  showBackdrop?: boolean;
   targetModelHeight?: number;
   zones?: readonly AnatomyStageZone[];
 };
@@ -400,6 +403,9 @@ const ORGAN_GRADIENTS: Record<
   },
 };
 
+const ANATOMY_STAGE_ASSET_PATHS = ANATOMY_LAYERS.map((layer) => layer.src);
+let anatomyStagePreloadPromise: Promise<void> | null = null;
+
 function isMesh(object: Object3D): object is Mesh {
   return "isMesh" in object && object.isMesh === true;
 }
@@ -627,6 +633,7 @@ function resolveHoveredLayer(
 }
 
 export function AnatomyStage({
+  backgroundColor = "#7e80fc",
   className,
   createMode = false,
   draftAnchor = null,
@@ -638,6 +645,7 @@ export function AnatomyStage({
   overlay,
   previewLayer = null,
   selectedZoneId = null,
+  showBackdrop = true,
   targetModelHeight = DEFAULT_TARGET_MODEL_HEIGHT,
   zones = [],
 }: AnatomyStageProps) {
@@ -649,15 +657,20 @@ export function AnatomyStage({
   return (
     <section
       className={cn(
-        "relative h-screen w-full overflow-hidden bg-[#7e80fc] text-white",
+        "relative h-screen w-full overflow-hidden text-white",
         className,
       )}
+      style={{ backgroundColor }}
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.2),transparent_34%),radial-gradient(circle_at_bottom,rgba(58,63,193,0.18),transparent_28%),linear-gradient(180deg,rgba(126,128,252,0.96)_0%,rgba(111,114,243,1)_100%)]" />
-      <div className="pointer-events-none absolute inset-0 opacity-25 bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-size-[4rem_4rem] mask-[radial-gradient(circle_at_center,black,transparent_78%)]" />
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className="aspect-square w-[min(76vw,76vh)] rounded-full border border-white/6 bg-[radial-gradient(circle,rgba(255,255,255,0.02),transparent_70%)] shadow-[0_0_100px_rgba(255,255,255,0.05)]" />
-      </div>
+      {showBackdrop ? (
+        <>
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.2),transparent_34%),radial-gradient(circle_at_bottom,rgba(58,63,193,0.18),transparent_28%),linear-gradient(180deg,rgba(126,128,252,0.96)_0%,rgba(111,114,243,1)_100%)]" />
+          <div className="pointer-events-none absolute inset-0 opacity-25 bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-size-[4rem_4rem] mask-[radial-gradient(circle_at_center,black,transparent_78%)]" />
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="aspect-square w-[min(76vw,76vh)] rounded-full border border-white/6 bg-[radial-gradient(circle,rgba(255,255,255,0.02),transparent_70%)] shadow-[0_0_100px_rgba(255,255,255,0.05)]" />
+          </div>
+        </>
+      ) : null}
 
       <div
         className="absolute inset-0"
@@ -687,6 +700,7 @@ export function AnatomyStage({
           }
         >
           <AnatomyScene
+            backgroundColor={backgroundColor}
             createMode={createMode}
             draftAnchor={draftAnchor}
             focusLayer={focusLayer}
@@ -711,6 +725,7 @@ export function AnatomyStage({
 }
 
 function AnatomyScene({
+  backgroundColor,
   createMode,
   draftAnchor,
   focusLayer,
@@ -733,7 +748,7 @@ function AnatomyScene({
         fov={CAMERA_FOV}
         position={CAMERA_POSITION}
       />
-      <color attach="background" args={["#7e80fc"]} />
+      <color attach="background" args={[backgroundColor]} />
       <ambientLight color="#ffffff" intensity={0.14} />
       <hemisphereLight args={["#f4e7ff", "#7e80fc", 0.52]} />
       <directionalLight
@@ -1514,6 +1529,28 @@ function ZoneMarker({
 
 function roundAnchorValue(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+export function preloadAnatomyStageAssets() {
+  if (!anatomyStagePreloadPromise) {
+    anatomyStagePreloadPromise = Promise.allSettled(
+      ANATOMY_STAGE_ASSET_PATHS.map(async (path) => {
+        useGLTF.preload(path);
+
+        const response = await fetch(path, {
+          cache: "force-cache",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to preload anatomy asset: ${path}`);
+        }
+
+        await response.arrayBuffer();
+      }),
+    ).then(() => undefined);
+  }
+
+  return anatomyStagePreloadPromise;
 }
 
 for (const layer of ANATOMY_LAYERS) {
