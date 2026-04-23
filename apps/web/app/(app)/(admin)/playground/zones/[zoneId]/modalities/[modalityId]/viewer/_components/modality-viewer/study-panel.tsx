@@ -26,6 +26,7 @@ type RelatedAsset = {
 type StudyPanelProps = {
   activeAssetId: string | null;
   darkMode: boolean;
+  readOnly: boolean;
   referenceAssets: ZoneModalityAsset[];
   relatedAssets: RelatedAsset[];
   searchHits: StudySearchHit[];
@@ -41,6 +42,7 @@ type StudyPanelProps = {
 export function StudyPanel({
   activeAssetId,
   darkMode,
+  readOnly,
   referenceAssets,
   relatedAssets,
   searchHits,
@@ -106,6 +108,7 @@ export function StudyPanel({
       {selectedStructure ? (
         <StructureDrawer
           darkMode={darkMode}
+          readOnly={readOnly}
           relatedAssets={relatedAssets}
           selectedAnnotation={selectedAnnotation}
           selectedStructure={selectedStructure}

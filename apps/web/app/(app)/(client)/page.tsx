@@ -13,13 +13,9 @@ import gsap from "gsap";
 import { CustomEase } from "gsap/CustomEase";
 import { SplitText } from "gsap/SplitText";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { ROOT_HISTORY_RESTORE_EVENT } from "@/components/layout/history-navigation-guard";
-import {
-  Frame,
-  FrameHeader,
-  FramePanel,
-  FrameTitle,
-} from "@/components/ui/frame";
+import { Frame, FramePanel } from "@/components/ui/frame";
 
 import {
   Table,
@@ -163,6 +159,8 @@ const PRELOADER_CRITICAL_CSS = `
 
 const EMPTY_ZONES: PublicZoneSummary[] = [];
 const EMPTY_MODALITIES: PublicZoneModalitySummary[] = [];
+const STAGE_PRELOAD_READY_TIMEOUT_MS = 8000;
+const PRELOADER_READY_TIMEOUT_MS = 12000;
 
 function getApiErrorMessage(error: unknown, fallbackMessage: string) {
   if (
@@ -222,10 +220,9 @@ export default function Page() {
     name: zone.name,
     anchor: zone.anchor,
   }));
-  const selectedZone =
-    activeSelectedZoneId
-      ? (zones.find((zone) => zone.id === activeSelectedZoneId) ?? null)
-      : null;
+  const selectedZone = activeSelectedZoneId
+    ? (zones.find((zone) => zone.id === activeSelectedZoneId) ?? null)
+    : null;
   const selectedZoneModalities = modalitiesResponse?.items ?? EMPTY_MODALITIES;
 
   function handleSelectZone(zoneId: string) {
@@ -251,25 +248,39 @@ export default function Page() {
 
   useEffect(() => {
     let cancelled = false;
+    const markStageReady = () => {
+      if (cancelled || stageReadyRef.current) {
+        return;
+      }
+
+      stageReadyRef.current = true;
+
+      if (pendingEngageRef.current) {
+        runExitAnimationRef.current?.();
+      }
+    };
+    const readyFallback = window.setTimeout(
+      markStageReady,
+      STAGE_PRELOAD_READY_TIMEOUT_MS,
+    );
 
     void loadAnatomyStage()
-      .then((module) => module.preloadAnatomyStageAssets?.())
-      .catch(() => null)
-      .finally(() => {
+      .then((module) => {
         if (cancelled) {
           return;
         }
 
-        stageReadyRef.current = true;
-
-        if (pendingEngageRef.current) {
-          pendingEngageRef.current = false;
-          runExitAnimationRef.current?.();
-        }
+        const preloadPromise = module.preloadAnatomyStageAssets?.();
+        void preloadPromise?.catch(() => null);
+        markStageReady();
+      })
+      .catch(() => {
+        markStageReady();
       });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(readyFallback);
     };
   }, []);
 
@@ -281,7 +292,10 @@ export default function Page() {
     }
 
     let preloaderComplete = false;
+    let exitStarted = false;
     let exitTimeline: gsap.core.Timeline | null = null;
+    let introTimeline: gsap.core.Timeline | null = null;
+    let preloaderReadyFallback: number | undefined;
 
     const preloader = page.querySelector<HTMLDivElement>(".preloader");
     const hero = page.querySelector<HTMLElement>(".hero");
@@ -368,89 +382,25 @@ export default function Page() {
       strokeDashoffset: svgPathLength,
     });
 
-    const introTimeline = gsap.timeline({ delay: 1 });
-
-    introTimeline
-      .to(page.querySelectorAll(".preloader .p-row p .line"), {
-        y: "0%",
-        duration: 0.75,
-        ease: "power3.out",
-        stagger: 0.1,
-      })
-      .to(
-        btnOutlineTrack,
-        {
-          strokeDashoffset: 0,
-          duration: 2,
-          ease: "hop",
-        },
-        "<",
-      )
-      .to(
-        btnSvg,
-        {
-          rotation: 270,
-          duration: 2,
-          ease: "hop",
-        },
-        "<",
-      );
-
-    const progressStops = [0.2, 0.25, 0.85, 1].map((base, index) => {
-      if (index === 3) {
-        return 1;
-      }
-
-      return base + (Math.random() - 0.5) * 0.1;
-    });
-
-    progressStops.forEach((stop, index) => {
-      introTimeline.to(btnOutlineProgress, {
-        strokeDashoffset: svgPathLength - svgPathLength * stop,
-        duration: 0.75,
-        ease: "glide",
-        delay: index === 0 ? 0.3 : 0.3 + Math.random() * 0.2,
-      });
-    });
-
-    introTimeline
-      .to(
-        btnLogo,
-        {
-          opacity: 0,
-          duration: 0.35,
-          ease: "power1.out",
-        },
-        "-=0.25",
-      )
-      .to(
-        preloaderBtn,
-        {
-          scale: 0.9,
-          duration: 1.5,
-          ease: "hop",
-        },
-        "-=0.5",
-      )
-      .to(
-        page.querySelectorAll("#pbc-label .line"),
-        {
-          y: "0%",
-          duration: 0.75,
-          ease: "power3.out",
-          onComplete: () => {
-            preloaderComplete = true;
-          },
-        },
-        "-=0.75",
-      );
-
     const runExitAnimation = () => {
-      if (!preloaderComplete) {
+      if (
+        exitStarted ||
+        !pendingEngageRef.current ||
+        !preloaderComplete ||
+        !stageReadyRef.current
+      ) {
         return;
       }
 
+      pendingEngageRef.current = false;
       preloaderComplete = false;
+      exitStarted = true;
+
+      if (preloaderReadyFallback !== undefined) {
+        window.clearTimeout(preloaderReadyFallback);
+        preloaderReadyFallback = undefined;
+      }
+
       startTransition(() => {
         setShouldRenderStage(true);
       });
@@ -529,18 +479,120 @@ export default function Page() {
       }
     };
 
+    const markPreloaderComplete = (syncVisualState = false) => {
+      if (preloaderComplete || exitStarted) {
+        return;
+      }
+
+      if (preloaderReadyFallback !== undefined) {
+        window.clearTimeout(preloaderReadyFallback);
+        preloaderReadyFallback = undefined;
+      }
+
+      if (syncVisualState) {
+        introTimeline?.progress(1, true);
+        gsap.set(page.querySelectorAll(".preloader .p-row p .line"), {
+          y: "0%",
+        });
+        gsap.set(page.querySelectorAll("#pbc-label .line"), { y: "0%" });
+        gsap.set(btnLogo, { opacity: 0 });
+        gsap.set(preloaderBtn, { scale: 0.9 });
+        gsap.set(btnSvg, { rotation: 270 });
+        gsap.set([btnOutlineTrack, btnOutlineProgress], {
+          strokeDashoffset: 0,
+        });
+      }
+
+      preloaderComplete = true;
+      runExitAnimation();
+    };
+
+    introTimeline = gsap.timeline({ delay: 1 });
+
+    introTimeline
+      .to(page.querySelectorAll(".preloader .p-row p .line"), {
+        y: "0%",
+        duration: 0.75,
+        ease: "power3.out",
+        stagger: 0.1,
+      })
+      .to(
+        btnOutlineTrack,
+        {
+          strokeDashoffset: 0,
+          duration: 2,
+          ease: "hop",
+        },
+        "<",
+      )
+      .to(
+        btnSvg,
+        {
+          rotation: 270,
+          duration: 2,
+          ease: "hop",
+        },
+        "<",
+      );
+
+    const progressStops = [0.2, 0.25, 0.85, 1].map((base, index) => {
+      if (index === 3) {
+        return 1;
+      }
+
+      return base + (Math.random() - 0.5) * 0.1;
+    });
+
+    progressStops.forEach((stop, index) => {
+      introTimeline.to(btnOutlineProgress, {
+        strokeDashoffset: svgPathLength - svgPathLength * stop,
+        duration: 0.75,
+        ease: "glide",
+        delay: index === 0 ? 0.3 : 0.3 + Math.random() * 0.2,
+      });
+    });
+
+    introTimeline
+      .to(
+        btnLogo,
+        {
+          opacity: 0,
+          duration: 0.35,
+          ease: "power1.out",
+        },
+        "-=0.25",
+      )
+      .to(
+        preloaderBtn,
+        {
+          scale: 0.9,
+          duration: 1.5,
+          ease: "hop",
+        },
+        "-=0.5",
+      )
+      .to(
+        page.querySelectorAll("#pbc-label .line"),
+        {
+          y: "0%",
+          duration: 0.75,
+          ease: "power3.out",
+          onComplete: () => {
+            markPreloaderComplete();
+          },
+        },
+        "-=0.75",
+      );
+
+    preloaderReadyFallback = window.setTimeout(
+      () => markPreloaderComplete(true),
+      PRELOADER_READY_TIMEOUT_MS,
+    );
+
     runExitAnimationRef.current = runExitAnimation;
 
     const handleClick = () => {
-      if (!preloaderComplete) {
-        return;
-      }
-
-      if (!stageReadyRef.current) {
-        pendingEngageRef.current = true;
-        return;
-      }
-
+      pendingEngageRef.current = true;
       runExitAnimation();
     };
 
@@ -550,7 +602,10 @@ export default function Page() {
       runExitAnimationRef.current = null;
       pendingEngageRef.current = false;
       preloaderBtn.removeEventListener("click", handleClick);
-      introTimeline.kill();
+      if (preloaderReadyFallback !== undefined) {
+        window.clearTimeout(preloaderReadyFallback);
+      }
+      introTimeline?.kill();
       exitTimeline?.kill();
       heroSplit?.revert();
       preloaderSplits.forEach((split) => split.revert());
@@ -730,7 +785,16 @@ export default function Page() {
                         selectedZoneModalities.map((modality) => (
                           <TableRow key={modality.id}>
                             <TableCell className="font-medium text-left">
-                              {modality.name}
+                              {selectedZone ? (
+                                <Link
+                                  className="inline-flex items-center underline-offset-4 hover:underline"
+                                  href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
+                                >
+                                  {modality.name}
+                                </Link>
+                              ) : (
+                                modality.name
+                              )}
                             </TableCell>
                           </TableRow>
                         ))

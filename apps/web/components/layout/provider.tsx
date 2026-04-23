@@ -12,6 +12,7 @@ import {
   type PreloaderStartMode,
 } from "./preloader-state"
 import TransitionProvider from "./transition"
+import { cn } from "@/lib/utils"
 
 type LayoutProviderProps = {
   children: ReactNode
@@ -46,6 +47,12 @@ const LENIS_DESKTOP = {
   lerp: 0.1,
 } satisfies LenisOptions
 
+function isPublicViewerPath(pathname: string) {
+  const segments = pathname.split("/").filter(Boolean)
+
+  return segments.length === 2
+}
+
 export default function LayoutProvider({ children }: LayoutProviderProps) {
   const pathname = usePathname()
   const [isMobile, setIsMobile] = useState(false)
@@ -62,7 +69,8 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
 
   const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
   const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
-  const shouldShowMusicToggle = pathname !== "/"
+  const isPublicViewerRoute = isPublicViewerPath(pathname)
+  const shouldShowMusicToggle = pathname !== "/" && !isPublicViewerRoute
   const preloaderStateValue = useMemo(
     () => ({
       isPreloaderActive: false,
@@ -77,9 +85,20 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
     <TransitionProvider>
       <PreloaderStateProvider value={preloaderStateValue}>
         <ReactLenis root options={lenisOptions}>
-          <div className="relative">
+          <div
+            className={cn(
+              "relative",
+              isPublicViewerRoute && "min-h-dvh overflow-hidden bg-black",
+            )}
+          >
             {shouldShowMusicToggle ? <MusicToggle /> : null}
-            <div className="opacity-100">
+            <div
+              className={cn(
+                "opacity-100",
+                isPublicViewerRoute &&
+                  "h-dvh min-h-0 overflow-hidden dark:bg-[#171717]",
+              )}
+            >
               {children}
             </div>
           </div>

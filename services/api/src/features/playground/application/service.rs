@@ -326,6 +326,7 @@ impl PlaygroundService {
         let source_file_count = normalize_source_file_count(input.source_file_count)?;
         let processing_status = normalize_processing_status(input.processing_status)?;
         let notes = normalize_optional_text(input.notes);
+        let slug = self.allocate_modality_slug(zone_id, &name).await?;
 
         let modality = self
             .repo
@@ -333,6 +334,7 @@ impl PlaygroundService {
                 &self.pool,
                 zone_id,
                 user_id,
+                &slug,
                 &name,
                 &modality_type,
                 weighting_code.as_deref(),
@@ -382,6 +384,7 @@ impl PlaygroundService {
         let source_file_count = normalize_source_file_count(
             input.source_file_count.or(Some(input.files.len() as i32)),
         )?;
+        let slug = self.allocate_modality_slug(zone_id, &name).await?;
 
         let modality = self
             .repo
@@ -389,6 +392,7 @@ impl PlaygroundService {
                 &self.pool,
                 zone_id,
                 user_id,
+                &slug,
                 &name,
                 &modality_type,
                 weighting_code.as_deref(),
@@ -995,6 +999,100 @@ impl PlaygroundService {
         })
     }
 
+    pub async fn get_public_zone_modality_viewer_manifest(
+        &self,
+        zone_slug: &str,
+        modality_slug: &str,
+    ) -> Result<ZoneModalityViewerManifest, AppError> {
+        let lookup = self
+            .repo
+            .get_public_zone_modality_lookup_by_slugs(&self.pool, zone_slug, modality_slug)
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
+
+        let zone = self
+            .get_zone_detail(lookup.account_id, lookup.zone_id)
+            .await?;
+        let modality = self
+            .repo
+            .get_zone_modality_detail(
+                &self.pool,
+                lookup.account_id,
+                lookup.zone_id,
+                lookup.modality_id,
+            )
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
+        let assets = self
+            .repo
+            .list_zone_modality_assets(
+                &self.pool,
+                lookup.account_id,
+                lookup.zone_id,
+                lookup.modality_id,
+            )
+            .await?
+            .into_iter()
+            .map(rewrite_public_viewer_asset_urls)
+            .collect::<Vec<_>>();
+        let atlas_assets = self
+            .repo
+            .list_zone_modality_atlas_assets(
+                &self.pool,
+                lookup.account_id,
+                lookup.zone_id,
+                lookup.modality_id,
+            )
+            .await?;
+        let (atlases, atlas_frames) = self.load_atlas_manifest(&atlas_assets)?;
+        let structure_groups = self
+            .repo
+            .list_viewer_structure_groups(
+                &self.pool,
+                lookup.account_id,
+                lookup.zone_id,
+                lookup.modality_id,
+            )
+            .await?;
+        let structures = self
+            .repo
+            .list_viewer_structures(
+                &self.pool,
+                lookup.account_id,
+                lookup.zone_id,
+                lookup.modality_id,
+            )
+            .await?;
+        let annotations = self
+            .repo
+            .list_viewer_annotations(
+                &self.pool,
+                lookup.account_id,
+                lookup.zone_id,
+                lookup.modality_id,
+            )
+            .await?;
+
+        Ok(ZoneModalityViewerManifest {
+            zone,
+            modality,
+            ingest_job: None,
+            source_assets: Vec::new(),
+            assets,
+            atlases: atlases
+                .into_iter()
+                .map(|atlas| ZoneModalityAtlasPage {
+                    image_url: public_derived_asset_url(&atlas.id),
+                    ..atlas
+                })
+                .collect(),
+            atlas_frames,
+            structure_groups,
+            structures,
+            annotations,
+        })
+    }
+
     pub async fn rebuild_modality_atlases(
         &self,
         account_id: Uuid,
@@ -1512,6 +1610,21 @@ impl PlaygroundService {
         Ok((bytes, mime_type))
     }
 
+    pub async fn get_public_derived_asset_binary(
+        &self,
+        asset_id: Uuid,
+        variant: DerivedAssetBinaryVariant,
+    ) -> Result<(Vec<u8>, String), AppError> {
+        let account_id = self
+            .repo
+            .get_public_zone_modality_asset_account_id(&self.pool, asset_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Derived asset was not found"))?;
+
+        self.get_derived_asset_binary(account_id, asset_id, variant)
+            .await
+    }
+
     async fn stage_study_files(
         &self,
         modality_id: Uuid,
@@ -1757,6 +1870,23 @@ impl PlaygroundService {
         while self
             .repo
             .slug_exists(&self.pool, account_id, &candidate)
+            .await?
+        {
+            candidate = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+
+        Ok(candidate)
+    }
+
+    async fn allocate_modality_slug(&self, zone_id: Uuid, name: &str) -> Result<String, AppError> {
+        let base = slugify(name, "modality");
+        let mut candidate = base.clone();
+        let mut suffix = 1;
+
+        while self
+            .repo
+            .modality_slug_exists(&self.pool, zone_id, &candidate)
             .await?
         {
             candidate = format!("{base}-{suffix}");
@@ -2054,6 +2184,20 @@ fn normalize_polygon_points(
     }
 
     Ok(points)
+}
+
+fn public_derived_asset_url(asset_id: &str) -> String {
+    format!("/api/v1/public/playground/derived-assets/{asset_id}/image")
+}
+
+fn rewrite_public_viewer_asset_urls(mut asset: ZoneModalityAsset) -> ZoneModalityAsset {
+    if asset.image_url.contains("/playground/derived-assets/") {
+        let public_url = public_derived_asset_url(&asset.id);
+        asset.image_url = public_url.clone();
+        asset.thumbnail_url = Some(public_url);
+    }
+
+    asset
 }
 
 fn slugify(value: &str, fallback: &str) -> String {

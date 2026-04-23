@@ -267,6 +267,54 @@ impl PlaygroundRepository {
         Ok(exists)
     }
 
+    pub async fn modality_slug_exists(
+        &self,
+        pool: &PgPool,
+        zone_id: Uuid,
+        slug: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM anatomy_zone_modalities
+                WHERE zone_id = $1 AND slug = $2
+            )
+            "#,
+        )
+        .bind(zone_id)
+        .bind(slug)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(exists)
+    }
+
+    pub async fn get_public_zone_modality_lookup_by_slugs(
+        &self,
+        pool: &PgPool,
+        zone_slug: &str,
+        modality_slug: &str,
+    ) -> Result<Option<PublicZoneModalityLookupRow>, sqlx::Error> {
+        sqlx::query_as::<_, PublicZoneModalityLookupRow>(
+            r#"
+            SELECT
+                zone.account_id,
+                zone.id AS zone_id,
+                modality.id AS modality_id
+            FROM anatomy_zones AS zone
+            INNER JOIN anatomy_zone_modalities AS modality ON modality.zone_id = zone.id
+            WHERE zone.slug = $1 AND modality.slug = $2
+            ORDER BY zone.created_at ASC, modality.created_at ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(zone_slug)
+        .bind(modality_slug)
+        .fetch_optional(pool)
+        .await
+    }
+
     pub async fn list_zone_modalities(
         &self,
         pool: &PgPool,
@@ -277,6 +325,7 @@ impl PlaygroundRepository {
             r#"
             SELECT
                 modality.id::text AS id,
+                modality.slug,
                 modality.name,
                 modality.modality_type,
                 modality.weighting_code,
@@ -311,6 +360,7 @@ impl PlaygroundRepository {
             r#"
             SELECT
                 id::text AS id,
+                slug,
                 name
             FROM anatomy_zone_modalities
             WHERE zone_id = $1
@@ -329,6 +379,7 @@ impl PlaygroundRepository {
         pool: &PgPool,
         zone_id: Uuid,
         user_id: &str,
+        slug: &str,
         name: &str,
         modality_type: &str,
         weighting_code: Option<&str>,
@@ -343,6 +394,7 @@ impl PlaygroundRepository {
             r#"
             INSERT INTO anatomy_zone_modalities (
                 zone_id,
+                slug,
                 name,
                 modality_type,
                 weighting_code,
@@ -355,9 +407,10 @@ impl PlaygroundRepository {
                 created_by_user_id,
                 updated_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
             RETURNING
                 id::text AS id,
+                slug,
                 name,
                 modality_type,
                 weighting_code,
@@ -372,6 +425,7 @@ impl PlaygroundRepository {
             "#,
         )
         .bind(zone_id)
+        .bind(slug)
         .bind(name)
         .bind(modality_type)
         .bind(weighting_code)
@@ -428,6 +482,7 @@ impl PlaygroundRepository {
                 AND zone.account_id = $1
             RETURNING
                 modality.id::text AS id,
+                modality.slug,
                 modality.name,
                 modality.modality_type,
                 modality.weighting_code,
@@ -872,6 +927,7 @@ impl PlaygroundRepository {
             r#"
             SELECT
                 modality.id::text AS id,
+                modality.slug,
                 modality.name,
                 modality.modality_type,
                 modality.weighting_code,
@@ -1363,6 +1419,26 @@ impl PlaygroundRepository {
             "#,
         )
         .bind(account_id)
+        .bind(asset_id)
+        .fetch_optional(pool)
+        .await
+    }
+
+    pub async fn get_public_zone_modality_asset_account_id(
+        &self,
+        pool: &PgPool,
+        asset_id: Uuid,
+    ) -> Result<Option<Uuid>, sqlx::Error> {
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT zone.account_id
+            FROM anatomy_zone_modality_assets AS asset
+            INNER JOIN anatomy_zone_modalities AS modality ON modality.id = asset.modality_id
+            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE asset.id = $1
+            LIMIT 1
+            "#,
+        )
         .bind(asset_id)
         .fetch_optional(pool)
         .await
@@ -2323,6 +2399,7 @@ impl From<ZoneDetailRow> for ZoneDetail {
 #[derive(Debug, sqlx::FromRow)]
 struct ZoneModalityRow {
     id: String,
+    slug: String,
     name: String,
     modality_type: String,
     weighting_code: Option<String>,
@@ -2340,6 +2417,7 @@ impl From<ZoneModalityRow> for ZoneModality {
     fn from(value: ZoneModalityRow) -> Self {
         Self {
             id: value.id,
+            slug: value.slug,
             name: value.name,
             modality_type: value.modality_type,
             weighting_code: value.weighting_code,
@@ -2358,6 +2436,7 @@ impl From<ZoneModalityRow> for ZoneModality {
 #[derive(Debug, sqlx::FromRow)]
 struct PublicZoneModalityRow {
     id: String,
+    slug: String,
     name: String,
 }
 
@@ -2365,9 +2444,17 @@ impl From<PublicZoneModalityRow> for PublicZoneModalityListItem {
     fn from(value: PublicZoneModalityRow) -> Self {
         Self {
             id: value.id,
+            slug: value.slug,
             name: value.name,
         }
     }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct PublicZoneModalityLookupRow {
+    pub account_id: Uuid,
+    pub zone_id: Uuid,
+    pub modality_id: Uuid,
 }
 
 #[derive(Debug, sqlx::FromRow)]

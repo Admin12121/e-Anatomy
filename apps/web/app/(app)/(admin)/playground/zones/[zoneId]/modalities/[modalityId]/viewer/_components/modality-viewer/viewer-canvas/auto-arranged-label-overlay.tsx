@@ -151,8 +151,12 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
           <g
             key={`main-label-${annotation.id}`}
             className="pointer-events-auto"
-            onMouseEnter={() => onAnnotationHover(annotation.id)}
-            onMouseLeave={() => onAnnotationHover(null)}
+            onMouseEnter={() => {
+              onAnnotationHover(annotation.id);
+            }}
+            onMouseLeave={() => {
+              onAnnotationHover(null);
+            }}
             onPointerDown={(event) => {
               event.stopPropagation();
             }}

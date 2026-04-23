@@ -157,6 +157,7 @@ function buildVirtualSliceWindow({
 
 type SliceFilmstripProps = {
   activeAssetId: string | null;
+  allowEditing: boolean;
   canDeleteLeftSlices: boolean;
   canDeleteRightSlices: boolean;
   canDeleteSelectedSlice: boolean;
@@ -170,7 +171,10 @@ type SliceFilmstripProps = {
   isAssetLoading: boolean;
   navigationAssetIndex: number;
   pendingDeletedSliceIds: string[];
-  pendingSliceSortUpdates: Array<{ asset: ZoneModalityAsset; nextSortOrder: number }>;
+  pendingSliceSortUpdates: Array<{
+    asset: ZoneModalityAsset;
+    nextSortOrder: number;
+  }>;
   showSliceEditorPanel: boolean;
   sliceEditorScrollerRef: MutableRefObject<HTMLDivElement | null>;
   totalSliceCount: number;
@@ -191,6 +195,7 @@ type SliceFilmstripProps = {
 
 export function SliceFilmstrip({
   activeAssetId,
+  allowEditing,
   canDeleteLeftSlices,
   canDeleteRightSlices,
   canDeleteSelectedSlice,
@@ -252,7 +257,9 @@ export function SliceFilmstrip({
   const activeSliceIndex = useMemo(
     () =>
       activeAssetId
-        ? sliceItems.findIndex((sliceItem) => sliceItem.assetId === activeAssetId)
+        ? sliceItems.findIndex(
+            (sliceItem) => sliceItem.assetId === activeAssetId,
+          )
         : -1,
     [activeAssetId, sliceItems],
   );
@@ -386,7 +393,12 @@ export function SliceFilmstrip({
         sliceItems,
         viewportWidth: compactViewport.width,
       }),
-    [activeSliceIndex, compactViewport.scrollLeft, compactViewport.width, sliceItems],
+    [
+      activeSliceIndex,
+      compactViewport.scrollLeft,
+      compactViewport.width,
+      sliceItems,
+    ],
   );
 
   const editorWindow = useMemo(
@@ -400,7 +412,12 @@ export function SliceFilmstrip({
         sliceItems,
         viewportWidth: editorViewport.width,
       }),
-    [activeSliceIndex, editorViewport.scrollLeft, editorViewport.width, sliceItems],
+    [
+      activeSliceIndex,
+      editorViewport.scrollLeft,
+      editorViewport.width,
+      sliceItems,
+    ],
   );
 
   const navigationLabel =
@@ -410,8 +427,14 @@ export function SliceFilmstrip({
 
   const createSliceButton = useCallback(
     (sliceItem: SliceItem, variant: "compact" | "editor") => {
-      const { asset, assetId, assetIndex, atlasFrame, atlasPage, thumbnailSrc } =
-        sliceItem;
+      const {
+        asset,
+        assetId,
+        assetIndex,
+        atlasFrame,
+        atlasPage,
+        thumbnailSrc,
+      } = sliceItem;
       const isActive = assetId === activeAssetId;
       const thumbnailSizePx =
         variant === "compact" ? COMPACT_ITEM_WIDTH_PX : EDITOR_ITEM_WIDTH_PX;
@@ -493,22 +516,28 @@ export function SliceFilmstrip({
       <div
         className={cn(
           "rounded-sm bg-white/3 backdrop-blur-sm transition-all",
-          showSliceEditorPanel && "pb-2",
+          allowEditing && showSliceEditorPanel && "pb-2",
         )}
       >
         <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 p-1">
           <button
             type="button"
-            aria-expanded={showSliceEditorPanel}
+            aria-expanded={allowEditing && showSliceEditorPanel}
             aria-label={
-              showSliceEditorPanel
-                ? "Collapse slice editing panel"
-                : "Expand slice editing panel"
+              allowEditing
+                ? showSliceEditorPanel
+                  ? "Collapse slice editing panel"
+                  : "Expand slice editing panel"
+                : "Slice editing unavailable"
             }
             className={cn(
-              "flex size-7 items-center justify-center rounded-md border border-transparent bg-black/35 transition hover:border-white/30",
-              showSliceEditorPanel && "border-indigo-600/70",
+              "flex size-7 items-center justify-center rounded-md border border-transparent bg-black/35 transition",
+              allowEditing
+                ? "hover:border-white/30"
+                : "cursor-not-allowed opacity-60",
+              allowEditing && showSliceEditorPanel && "border-indigo-600/70",
             )}
+            disabled={!allowEditing}
             onClick={onToggleSliceEditorPanel}
           >
             <NextImage src="/logo.png" alt="Anatomy" height={24} width={24} />
@@ -556,7 +585,7 @@ export function SliceFilmstrip({
           </div>
         </div>
 
-        {showSliceEditorPanel ? (
+        {allowEditing && showSliceEditorPanel ? (
           <div className="mx-auto h-50 w-full max-w-[calc(100%-0.5rem)] rounded-md border border-white/12 bg-black/60 p-2">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <Button
@@ -630,7 +659,9 @@ export function SliceFilmstrip({
                 type="button"
                 size="sm"
                 variant="default"
-                disabled={!hasPendingSliceTimelineChanges || isApplyingSliceChanges}
+                disabled={
+                  !hasPendingSliceTimelineChanges || isApplyingSliceChanges
+                }
                 onClick={onApplyChanges}
               >
                 {isApplyingSliceChanges ? "Applying..." : "Apply changes"}

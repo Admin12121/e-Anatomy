@@ -1,8 +1,4 @@
-import type {
-  Dispatch,
-  MutableRefObject,
-  SetStateAction,
-} from "react";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type {
   ViewerAnnotation,
@@ -18,10 +14,7 @@ import {
   type ViewerCanvasMode,
 } from "../../modality-viewer.types";
 import { clamp } from "../utils";
-import {
-  LABEL_BOX_HEIGHT_PADDING,
-  LABEL_BOX_PADDING_X,
-} from "./helpers";
+import { LABEL_BOX_HEIGHT_PADDING, LABEL_BOX_PADDING_X } from "./helpers";
 
 type AnchorDragState = {
   annotationId: string;
@@ -36,6 +29,7 @@ type ResolvePointerPointInput = {
 
 type ViewerCanvasMainOverlayProps = {
   activeAreaCursorRadius: number;
+  annotationEditingEnabled: boolean;
   annotationForm: AnnotationFormState;
   areaEditTool: "brush" | "erase";
   areaToolCursorPoint: ViewerAnnotationPoint | null;
@@ -94,6 +88,7 @@ function pointToSvgPair(point: ViewerAnnotationPoint) {
 
 export function ViewerCanvasMainOverlay({
   activeAreaCursorRadius,
+  annotationEditingEnabled,
   annotationForm,
   areaEditTool,
   areaToolCursorPoint,
@@ -161,8 +156,12 @@ export function ViewerCanvasMainOverlay({
           preferredAnnotationColor ||
           group?.colorHex ||
           DEFAULT_ANNOTATION_COLOR;
-        const anchorX = isSelected ? annotationForm.anchorX : annotation.anchorX;
-        const anchorY = isSelected ? annotationForm.anchorY : annotation.anchorY;
+        const anchorX = isSelected
+          ? annotationForm.anchorX
+          : annotation.anchorX;
+        const anchorY = isSelected
+          ? annotationForm.anchorY
+          : annotation.anchorY;
         const labelX = isSelected ? annotationForm.labelX : annotation.labelX;
         const labelY = isSelected ? annotationForm.labelY : annotation.labelY;
         const rawLabelTextAnchor: "start" | "end" =
@@ -182,22 +181,31 @@ export function ViewerCanvasMainOverlay({
         const emphasizedOpacity = clamp(
           polygonOpacity *
             overlayOpacity *
-            (isInteractionBlocked ? 0.65 : isSelected ? 1.2 : isHovered ? 1.35 : 1),
+            (isInteractionBlocked
+              ? 0.65
+              : isSelected
+                ? 1.2
+                : isHovered
+                  ? 1.35
+                  : 1),
           0,
           0.92,
         );
         const label = annotation.titleOverride || structure.title;
-        const markerVisible =
-          (showLabels || pinsOnly) &&
-          !isInteractionBlocked;
+        const markerVisible = (showLabels || pinsOnly) && !isInteractionBlocked;
         const textVisible =
           showLabels &&
           !pinsOnly &&
           !isInteractionBlocked &&
           (!practiceMode || isSelected || isHovered);
         const fontSize = fontScaleMode === "large" ? 24 : 18;
-        const canDragAnchor = isSelected && !isInteractionBlocked && canvasMode !== "create-label";
+        const canDragAnchor =
+          annotationEditingEnabled &&
+          isSelected &&
+          !isInteractionBlocked &&
+          canvasMode !== "create-label";
         const canDragLabel =
+          annotationEditingEnabled &&
           isSelected &&
           !shouldAutoArrangeLabels &&
           !isInteractionBlocked &&
@@ -232,7 +240,11 @@ export function ViewerCanvasMainOverlay({
         return (
           <g
             key={annotation.id}
-            style={isInteractionBlocked ? { pointerEvents: "none" } : undefined}
+            style={
+              isInteractionBlocked
+                ? { pointerEvents: "none" }
+                : undefined
+            }
             onMouseEnter={() => {
               if (isInteractionBlocked) {
                 return;
@@ -330,7 +342,9 @@ export function ViewerCanvasMainOverlay({
                   />
                 ) : null}
                 <text
-                  className={canDragLabel ? "cursor-pointer select-none" : undefined}
+                  className={
+                    canDragLabel ? "cursor-pointer select-none" : undefined
+                  }
                   dominantBaseline="middle"
                   fill={highlightLabel ? "#ffffff" : color}
                   fontFamily="system-ui"
@@ -380,13 +394,17 @@ export function ViewerCanvasMainOverlay({
             y2={annotationForm.labelY * 1000}
           />
           <circle
-            className={canvasMode !== "create-label" ? "cursor-move" : undefined}
+            className={
+              annotationEditingEnabled && canvasMode !== "create-label"
+                ? "cursor-move"
+                : undefined
+            }
             cx={annotationForm.anchorX * 1000}
             cy={annotationForm.anchorY * 1000}
             fill={draftPointerColor}
             r={7}
             onPointerDown={(event) => {
-              if (canvasMode === "create-label") {
+              if (!annotationEditingEnabled || canvasMode === "create-label") {
                 return;
               }
 
@@ -444,7 +462,9 @@ export function ViewerCanvasMainOverlay({
               <polygon
                 key={`draft-disconnected-${polygonIndex}`}
                 fill={disconnectedOverlayColor}
-                fillOpacity={annotationForm.overlayOpacity * overlayOpacity * 0.42}
+                fillOpacity={
+                  annotationForm.overlayOpacity * overlayOpacity * 0.42
+                }
                 points={polygonPoints.map(pointToSvgPair).join(" ")}
                 stroke={disconnectedOverlayColor}
                 strokeDasharray="8 6"

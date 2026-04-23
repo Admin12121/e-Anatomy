@@ -16,9 +16,11 @@ export default function HistoryNavigationGuard() {
     };
 
     const handlePopState = () => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(dispatchRootRestore);
-      });
+      window.setTimeout(() => {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(dispatchRootRestore);
+        });
+      }, 0);
     };
 
     const handlePageShow = (event: PageTransitionEvent) => {
@@ -29,19 +31,12 @@ export default function HistoryNavigationGuard() {
       dispatchRootRestore();
     };
 
-    const handleUnload = () => {
-      // Intentionally empty. Keeping an unload listener prevents BFCache
-      // restores on browsers that would otherwise revive a GSAP-mutated page.
-    };
-
     window.addEventListener("popstate", handlePopState);
     window.addEventListener("pageshow", handlePageShow);
-    window.addEventListener("unload", handleUnload);
 
     return () => {
       window.removeEventListener("popstate", handlePopState);
       window.removeEventListener("pageshow", handlePageShow);
-      window.removeEventListener("unload", handleUnload);
     };
   }, []);
 

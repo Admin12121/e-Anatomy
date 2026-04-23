@@ -18,6 +18,7 @@ type ViewerToolbarProps = {
   canvasMode: "browse" | "draw-region" | "create-label" | "set-anchor" | "set-label";
   mainInteractionTool: MainInteractionTool;
   showControlPanel: boolean;
+  crossReferenceToggleDisabled?: boolean;
   showCrossReferences: boolean;
   showStudyPanel: boolean;
   onAreaBrushSizeChange: (value: number) => void;
@@ -35,6 +36,7 @@ export function ViewerToolbar({
   canvasMode,
   mainInteractionTool,
   showControlPanel,
+  crossReferenceToggleDisabled = false,
   showCrossReferences,
   showStudyPanel,
   onAreaBrushSizeChange,
@@ -64,15 +66,20 @@ export function ViewerToolbar({
             <ArrowRight className="size-4" />
           )}
         </Button>
-        <Button
+        {!crossReferenceToggleDisabled && <Button
           aria-label={showCrossReferences ? "Hide crosshair" : "Show crosshair"}
           type="button"
           size="icon-lg"
           variant={!showCrossReferences ? "secondary" : "default"}
-          onClick={() => onShowCrossReferencesChange(!showCrossReferences)}
+          disabled={crossReferenceToggleDisabled}
+          onClick={
+            crossReferenceToggleDisabled
+              ? undefined
+              : () => onShowCrossReferencesChange(!showCrossReferences)
+          }
         >
           <CrosshairIcon className="size-4" />
-        </Button>
+        </Button>}
         <Button
           aria-label="Layer scrub tool"
           type="button"

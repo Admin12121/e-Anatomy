@@ -96,6 +96,7 @@ type RightPanelProps = {
   groupForm: GroupFormState;
   groups: ViewerStructureGroup[];
   groupsById: Map<string, ViewerStructureGroup>;
+  readOnly: boolean;
   selectedAnnotationId: string | null;
   selectedStructureId: string | null;
   showLabels: boolean;
@@ -173,6 +174,7 @@ export function ModalityViewerRightPanel({
   groupForm,
   groups,
   groupsById,
+  readOnly,
   selectedAnnotationId,
   selectedStructureId,
   showLabels,
@@ -421,28 +423,30 @@ export function ModalityViewerRightPanel({
                     <EyeOffIcon className="size-4" />
                   )}
                 </Button>
-                <Button
-                  aria-label="Show anatomical parts editor"
-                  type="button"
-                  size="icon"
-                  variant={showAnatomicalPartsPanel ? "default" : "secondary"}
-                  onClick={() => {
-                    const next = !showAnatomicalPartsPanel;
+                {!readOnly ? (
+                  <Button
+                    aria-label="Show anatomical parts editor"
+                    type="button"
+                    size="icon"
+                    variant={showAnatomicalPartsPanel ? "default" : "secondary"}
+                    onClick={() => {
+                      const next = !showAnatomicalPartsPanel;
 
-                    setShowCreatePartFrame(false);
-                    resetPartEditorState();
+                      setShowCreatePartFrame(false);
+                      resetPartEditorState();
 
-                    if (next) {
-                      // Create-area mode and edit-area mode are mutually exclusive.
-                      setSelectedAnatomicalPartId(null);
-                      onResetGroup();
-                    }
+                      if (next) {
+                        // Create-area mode and edit-area mode are mutually exclusive.
+                        setSelectedAnatomicalPartId(null);
+                        onResetGroup();
+                      }
 
-                    setShowAnatomicalPartsPanel(next);
-                  }}
-                >
-                  <PlusIcon className="size-4" />
-                </Button>
+                      setShowAnatomicalPartsPanel(next);
+                    }}
+                  >
+                    <PlusIcon className="size-4" />
+                  </Button>
+                ) : null}
               </Group>
             }
           >
@@ -594,7 +598,7 @@ export function ModalityViewerRightPanel({
           </ViewerSidebarSection>
         </FramePanel>
       </Frame>
-      {showAnatomicalPartsPanel ? (
+      {!readOnly && showAnatomicalPartsPanel ? (
         <Frame>
           <div className="flex items-center justify-between px-3 py-2">
             Anatomical Area
@@ -629,78 +633,92 @@ export function ModalityViewerRightPanel({
           <Frame>
             <div className="flex items-center justify-between px-3 py-2">
               {selectedAnatomicalPart.title}
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  disabled={busy || !groupForm.title.trim()}
-                  onClick={() => void handleUpdateSelectedAnatomicalArea()}
-                >
-                  Save
-                  {busy && <LoaderCircleIcon className="size-4 animate-spin" />}
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={busy}
-                  onClick={() => void onDeleteGroup(selectedAnatomicalPart.id)}
-                >
-                  <Trash2Icon className="size-4" />
-                </Button>
-              </div>
+              {!readOnly ? (
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    disabled={busy || !groupForm.title.trim()}
+                    onClick={() => void handleUpdateSelectedAnatomicalArea()}
+                  >
+                    Save
+                    {busy && (
+                      <LoaderCircleIcon className="size-4 animate-spin" />
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    disabled={busy}
+                    onClick={() =>
+                      void onDeleteGroup(selectedAnatomicalPart.id)
+                    }
+                  >
+                    <Trash2Icon className="size-4" />
+                  </Button>
+                </div>
+              ) : null}
             </div>
             <FramePanel className="p-3">
               <div className="space-y-3">
                 <div className="space-y-1.5">
                   <div className="text-xs font-medium">Area Name</div>
-                  <Input
-                    placeholder="Ex: Frontal Lobe"
-                    value={groupForm.title}
-                    onChange={(event) =>
-                      onGroupFormChange("title", event.target.value)
-                    }
-                  />
+                  {readOnly ? (
+                    <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm">
+                      {selectedAnatomicalPart.title}
+                    </div>
+                  ) : (
+                    <Input
+                      placeholder="Ex: Frontal Lobe"
+                      value={groupForm.title}
+                      onChange={(event) =>
+                        onGroupFormChange("title", event.target.value)
+                      }
+                    />
+                  )}
                 </div>
               </div>
             </FramePanel>
           </Frame>
 
-          <div className="p-1">
-            <Frame className="shrink-0 outline-offset-2 outline outline-border/50 rounded-lg p-0">
-              <FrameHeader className="py-1 px-2 flex items-center justify-between flex-row">
-                <FrameTitle className="text-lg">Anatomical Part</FrameTitle>
-                <Button
-                  type="button"
-                  size="icon"
-                  onClick={() => {
-                    const next = !showCreatePartFrame;
+          {!readOnly ? (
+            <div className="p-1">
+              <Frame className="shrink-0 outline-offset-2 outline outline-border/50 rounded-lg p-0">
+                <FrameHeader className="py-1 px-2 flex items-center justify-between flex-row">
+                  <FrameTitle className="text-lg">Anatomical Part</FrameTitle>
+                  <Button
+                    type="button"
+                    size="icon"
+                    onClick={() => {
+                      const next = !showCreatePartFrame;
 
-                    if (next) {
-                      onResetStructure();
-                      onStructureFormChange(
-                        "groupId",
-                        selectedAnatomicalPart.id,
-                      );
-                      onStructureFormChange(
-                        "learningPoints",
-                        `${PART_INTERACTION_MARKER}pointer`,
-                      );
-                      setPartInteractionMode("pointer");
-                      setPartEditorInitialContent("");
-                      setShowPartEditorWindow(false);
-                      onClearPolygonDraft();
-                      onCanvasModeChange("browse");
-                    } else {
-                      resetPartEditorState();
-                    }
+                      if (next) {
+                        onResetStructure();
+                        onStructureFormChange(
+                          "groupId",
+                          selectedAnatomicalPart.id,
+                        );
+                        onStructureFormChange(
+                          "learningPoints",
+                          `${PART_INTERACTION_MARKER}pointer`,
+                        );
+                        setPartInteractionMode("pointer");
+                        setPartEditorInitialContent("");
+                        setShowPartEditorWindow(false);
+                        onClearPolygonDraft();
+                        onCanvasModeChange("browse");
+                      } else {
+                        resetPartEditorState();
+                      }
 
-                    setShowCreatePartFrame(next);
-                  }}
-                >
-                  <PlusIcon className="size-4" />
-                </Button>
-              </FrameHeader>
-            </Frame>
-          </div>
+                      setShowCreatePartFrame(next);
+                    }}
+                  >
+                    <PlusIcon className="size-4" />
+                  </Button>
+                </FrameHeader>
+              </Frame>
+            </div>
+          ) : null}
 
           <Frame>
             <Table>
@@ -708,7 +726,9 @@ export function ModalityViewerRightPanel({
                 <TableRow>
                   <TableHead className="w-12">#</TableHead>
                   <TableHead>Part Name</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
+                  <TableHead className="text-right">
+                    {readOnly ? "View" : "Action"}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -738,8 +758,13 @@ export function ModalityViewerRightPanel({
                                 structure.id,
                                 selectedAnatomicalPart.id,
                               );
-                              setShowCreatePartFrame(true);
                               resetPartEditorState();
+
+                              if (readOnly) {
+                                return;
+                              }
+
+                              setShowCreatePartFrame(true);
                               setPartEditorInitialContent(
                                 structure.longDescription ?? "",
                               );
@@ -751,7 +776,7 @@ export function ModalityViewerRightPanel({
                               );
                             }}
                           >
-                            Edit
+                            {readOnly ? "Open" : "Edit"}
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -768,7 +793,7 @@ export function ModalityViewerRightPanel({
             </Table>
           </Frame>
 
-          {showCreatePartFrame ? (
+          {!readOnly && showCreatePartFrame ? (
             <Frame>
               <div className="flex items-center justify-between px-3 py-2">
                 {selectedStructureId

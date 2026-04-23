@@ -29,6 +29,7 @@ pub struct ZoneListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PublicZoneModalityListItem {
     pub id: String,
+    pub slug: String,
     pub name: String,
 }
 
@@ -67,6 +68,7 @@ pub struct UpdateZoneInput {
 #[serde(rename_all = "camelCase")]
 pub struct ZoneModality {
     pub id: String,
+    pub slug: String,
     pub name: String,
     pub modality_type: String,
     pub weighting_code: Option<String>,

@@ -114,10 +114,20 @@ pub fn routes() -> Router<AppState> {
 }
 
 pub fn public_routes() -> Router<AppState> {
-    Router::new().route("/zones", get(list_public_zones)).route(
-        "/zones/{zone_id}/modalities",
-        get(list_public_zone_modalities),
-    )
+    Router::new()
+        .route("/zones", get(list_public_zones))
+        .route(
+            "/zones/{zone_id}/modalities",
+            get(list_public_zone_modalities),
+        )
+        .route(
+            "/zones/{zone_slug}/modalities/{modality_slug}/viewer",
+            get(get_public_zone_modality_viewer_manifest),
+        )
+        .route(
+            "/derived-assets/{asset_id}/image",
+            get(get_public_derived_asset_image),
+        )
 }
 
 async fn list_zones(
@@ -211,6 +221,18 @@ async fn list_public_zone_modalities(
     let response = state
         .playground_service
         .list_public_zone_modalities(zone_id)
+        .await?;
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+async fn get_public_zone_modality_viewer_manifest(
+    State(state): State<AppState>,
+    Path((zone_slug, modality_slug)): Path<(String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    let response = state
+        .playground_service
+        .get_public_zone_modality_viewer_manifest(&zone_slug, &modality_slug)
         .await?;
 
     Ok((StatusCode::OK, Json(response)))
@@ -687,6 +709,25 @@ async fn get_derived_asset_image(
         DerivedAssetBinaryVariant::Image,
     )
     .await
+}
+
+async fn get_public_derived_asset_image(
+    State(state): State<AppState>,
+    Path(asset_id): Path<Uuid>,
+) -> Result<Response, AppError> {
+    let (bytes, mime_type) = state
+        .playground_service
+        .get_public_derived_asset_binary(asset_id, DerivedAssetBinaryVariant::Image)
+        .await?;
+
+    Ok((
+        [
+            (CONTENT_TYPE, mime_type),
+            (CACHE_CONTROL, "public, max-age=86400".to_string()),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 async fn serve_derived_asset_binary(

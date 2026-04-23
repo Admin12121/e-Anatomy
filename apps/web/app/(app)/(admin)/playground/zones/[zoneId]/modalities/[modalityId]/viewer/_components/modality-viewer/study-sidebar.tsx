@@ -105,12 +105,14 @@ export function TriViewStudyPanel({
 
 export function StructureDrawer({
   darkMode,
+  readOnly,
   relatedAssets,
   selectedAnnotation,
   selectedStructure,
   onJumpToAsset,
 }: {
   darkMode: boolean;
+  readOnly: boolean;
   relatedAssets: Array<{
     annotation: ViewerAnnotation;
     asset: ZoneModalityAsset;
@@ -129,7 +131,9 @@ export function StructureDrawer({
     <div className={cn("px-2")}>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-2xl font-semibold">{selectedStructure.title}</div>
+          <div className="text-2xl font-semibold">
+            {selectedStructure.title}
+          </div>
           {selectedStructure.latinName ? (
             <div className="mt-1 text-sm text-indigo-300">
               {selectedStructure.latinName}
@@ -150,8 +154,9 @@ export function StructureDrawer({
 
       {isLocked ? (
         <div className="mt-4 rounded-2xl border border-lime-400/40 bg-lime-400/8 p-4 text-sm">
-          Learners will only see the subscriber version of this topic until you
-          publish broader access.
+          {readOnly
+            ? "This topic is available with a subscription."
+            : "Learners will only see the subscriber version of this topic until you publish broader access."}
         </div>
       ) : selectedStructure.longDescription ? (
         <MarkdownContent

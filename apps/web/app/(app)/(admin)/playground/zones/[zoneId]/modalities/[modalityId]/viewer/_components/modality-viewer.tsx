@@ -1,5 +1,6 @@
 "use client";
 
+import { skipToken } from "@reduxjs/toolkit/query";
 import {
   useCallback,
   startTransition,
@@ -28,6 +29,7 @@ import type {
   ZoneModalityAtlasPage,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
+import { useGetPublicZoneModalityViewerManifestQuery } from "@/lib/store/services/public-playground-api";
 import {
   useCreateViewerAnnotationMutation,
   useCreateViewerStructureGroupMutation,
@@ -162,25 +164,71 @@ function sortPreloadQueue(queue: PreloadQueueItem[]) {
   });
 }
 
+type DraftModalityViewerProps = {
+  modalityId: string;
+  zoneId: string;
+};
+
+type PublicModalityViewerProps = {
+  modalitySlug: string;
+  zoneSlug: string;
+};
+
+type ModalityViewerShellProps = {
+  modalityId: string;
+  modalitySlug: string;
+  mode: "admin" | "public";
+  zoneId: string;
+  zoneSlug: string;
+};
+
 export function DraftModalityViewer({
   modalityId,
   zoneId,
-}: {
-  modalityId: string;
-  zoneId: string;
-}) {
+}: DraftModalityViewerProps) {
+  return (
+    <ModalityViewerShell
+      modalityId={modalityId}
+      modalitySlug=""
+      mode="admin"
+      zoneId={zoneId}
+      zoneSlug=""
+    />
+  );
+}
+
+export function PublicModalityViewer({
+  modalitySlug,
+  zoneSlug,
+}: PublicModalityViewerProps) {
+  return (
+    <ModalityViewerShell
+      modalityId=""
+      modalitySlug={modalitySlug}
+      mode="public"
+      zoneId=""
+      zoneSlug={zoneSlug}
+    />
+  );
+}
+
+function ModalityViewerShell({
+  modalityId,
+  modalitySlug,
+  mode,
+  zoneId,
+  zoneSlug,
+}: ModalityViewerShellProps) {
+  const readOnly = mode === "public";
   const [viewerPollingIntervalMs, setViewerPollingIntervalMs] = useState(0);
 
-  const {
-    data,
-    error,
-    isLoading,
-    refetch: refetchViewerManifest,
-  } = useGetZoneModalityViewerManifestQuery(
-    {
-      zoneId,
-      modalityId,
-    },
+  const adminViewerQuery = useGetZoneModalityViewerManifestQuery(
+    readOnly
+      ? skipToken
+      : {
+          zoneId,
+          modalityId,
+        },
     {
       pollingInterval: viewerPollingIntervalMs,
       refetchOnFocus: true,
@@ -188,6 +236,27 @@ export function DraftModalityViewer({
       refetchOnReconnect: true,
     },
   );
+  const publicViewerQuery = useGetPublicZoneModalityViewerManifestQuery(
+    readOnly
+      ? {
+          modalitySlug,
+          zoneSlug,
+        }
+      : skipToken,
+    {
+      pollingInterval: viewerPollingIntervalMs,
+      refetchOnFocus: true,
+      refetchOnMountOrArgChange: true,
+      refetchOnReconnect: true,
+    },
+  );
+
+  const {
+    data,
+    error,
+    isLoading,
+    refetch: refetchViewerManifest,
+  } = readOnly ? publicViewerQuery : adminViewerQuery;
   const [createGroup, { isLoading: isCreatingGroup }] =
     useCreateViewerStructureGroupMutation();
   const [updateGroup, { isLoading: isUpdatingGroup }] =
@@ -254,6 +323,7 @@ export function DraftModalityViewer({
   const [showSliceEditorPanel, setShowSliceEditorPanel] = useState(false);
   const [mainInteractionTool, setMainInteractionTool] =
     useState<MainInteractionTool>("layers");
+  const effectiveShowCrossReferences = readOnly ? false : showCrossReferences;
   const [showStudyPanel, setShowStudyPanel] = useState(true);
   const [showControlPanel, setShowControlPanel] = useState(true);
   const [canvasRotationQuarterTurns, setCanvasRotationQuarterTurns] =
@@ -290,12 +360,15 @@ export function DraftModalityViewer({
     new Map(),
   );
   const preloadQueueRef = useRef<PreloadQueueItem[]>([]);
+  const pumpPreloadQueueRef = useRef<(() => void) | null>(null);
   const queuedPreloadByAssetIdRef = useRef<Map<string, PreloadQueueItem>>(
     new Map(),
   );
   const preloadQueueOrderRef = useRef(0);
   const preloadInFlightCountRef = useRef(0);
   const preloadLowInFlightCountRef = useRef(0);
+  const currentAssetIdRef = useRef<string | null>(null);
+  const pendingAssetIdRef = useRef<string | null>(null);
   const previewImagePromiseCacheRef = useRef<
     Map<string, Promise<HTMLImageElement | null>>
   >(new Map());
@@ -396,15 +469,18 @@ export function DraftModalityViewer({
         assets.map((asset) => {
           const atlasFrame = atlasFrameByAssetId.get(asset.id) ?? null;
           const atlasPage = atlasFrame
-            ? atlasPageById.get(atlasFrame.atlasId) ?? null
+            ? (atlasPageById.get(atlasFrame.atlasId) ?? null)
             : null;
 
-          return [asset.id, {
-            atlasFrame,
-            atlasPage,
-            cacheKey: atlasPage?.id ?? asset.id,
-            imageUrl: atlasPage?.imageUrl ?? asset.imageUrl,
-          }];
+          return [
+            asset.id,
+            {
+              atlasFrame,
+              atlasPage,
+              cacheKey: atlasPage?.id ?? asset.id,
+              imageUrl: atlasPage?.imageUrl ?? asset.imageUrl,
+            },
+          ];
         }),
       ),
     [assets, atlasFrameByAssetId, atlasPageById],
@@ -515,10 +591,10 @@ export function DraftModalityViewer({
       null)
     : null;
   const currentImageSource = currentAsset
-    ? assetImageSourceById.get(currentAsset.id) ?? null
+    ? (assetImageSourceById.get(currentAsset.id) ?? null)
     : null;
   const pendingImageSource = pendingAsset
-    ? assetImageSourceById.get(pendingAsset.id) ?? null
+    ? (assetImageSourceById.get(pendingAsset.id) ?? null)
     : null;
   const currentAtlasFrame = currentImageSource?.atlasFrame ?? null;
   const navigationAssetIndex = useMemo(() => {
@@ -535,6 +611,24 @@ export function DraftModalityViewer({
     () => viewerSliceItems.map((item) => item.assetId).join("|"),
     [viewerSliceItems],
   );
+
+  useEffect(() => {
+    currentAssetIdRef.current = currentAssetId;
+  }, [currentAssetId]);
+
+  useEffect(() => {
+    pendingAssetIdRef.current = pendingAssetId;
+  }, [pendingAssetId]);
+
+  const commitCurrentAssetId = useCallback((assetId: string | null) => {
+    currentAssetIdRef.current = assetId;
+    setCurrentAssetId(assetId);
+  }, []);
+
+  const commitPendingAssetId = useCallback((assetId: string | null) => {
+    pendingAssetIdRef.current = assetId;
+    setPendingAssetId(assetId);
+  }, []);
   const currentAnnotations = useMemo(
     () =>
       currentAsset
@@ -618,9 +712,8 @@ export function DraftModalityViewer({
         return Promise.resolve(cachedPreview);
       }
 
-      const existingPreviewPromise = previewImagePromiseCacheRef.current.get(
-        cacheKey,
-      );
+      const existingPreviewPromise =
+        previewImagePromiseCacheRef.current.get(cacheKey);
 
       if (existingPreviewPromise) {
         return existingPreviewPromise;
@@ -645,7 +738,8 @@ export function DraftModalityViewer({
             cachePreviewImage(cacheKey, imageElement);
           }
 
-          const cachedPromise = previewImagePromiseCacheRef.current.get(cacheKey);
+          const cachedPromise =
+            previewImagePromiseCacheRef.current.get(cacheKey);
 
           if (cachedPromise === previewPromise) {
             previewImagePromiseCacheRef.current.delete(cacheKey);
@@ -756,7 +850,7 @@ export function DraftModalityViewer({
           );
         }
 
-        pumpPreloadQueue();
+        pumpPreloadQueueRef.current?.();
       };
 
       const finalize = () => {
@@ -790,6 +884,14 @@ export function DraftModalityViewer({
       image.src = imageUrl;
     }
   }, [markAssetReady]);
+
+  useEffect(() => {
+    pumpPreloadQueueRef.current = pumpPreloadQueue;
+
+    return () => {
+      pumpPreloadQueueRef.current = null;
+    };
+  }, [pumpPreloadQueue]);
 
   const preloadAsset = useCallback(
     (asset: ZoneModalityAsset, priority: PreloadPriority = "low") => {
@@ -851,13 +953,15 @@ export function DraftModalityViewer({
 
   const requestAssetNavigation = useCallback(
     (asset: ZoneModalityAsset, source: NavigationSource) => {
+      const activeCurrentAssetId = currentAssetIdRef.current;
+      const activePendingAssetId = pendingAssetIdRef.current;
       const sourceImage = assetImageSourceById.get(asset.id) ?? {
         cacheKey: asset.id,
         imageUrl: asset.thumbnailUrl || asset.imageUrl,
       };
       const cacheKey = sourceImage.cacheKey;
 
-      if (pendingAssetId && pendingAssetId !== asset.id) {
+      if (activePendingAssetId && activePendingAssetId !== asset.id) {
         if (source === "scrub") {
           queuedNavigationAssetIdRef.current = null;
         } else {
@@ -869,14 +973,14 @@ export function DraftModalityViewer({
 
       queuedNavigationAssetIdRef.current = null;
 
-      if (pendingAssetId === asset.id) {
+      if (activePendingAssetId === asset.id) {
         return;
       }
 
-      if (currentAsset?.id === asset.id) {
+      if (activeCurrentAssetId === asset.id) {
         navigationRequestIdRef.current += 1;
         setLoadingIndicatorAssetId(null);
-        setPendingAssetId(null);
+        commitPendingAssetId(null);
         return;
       }
 
@@ -886,8 +990,8 @@ export function DraftModalityViewer({
         const cachedImage = imageElementCacheRef.current.get(cacheKey) ?? null;
         navigationRequestIdRef.current += 1;
         setLoadingIndicatorAssetId(null);
-        setPendingAssetId(null);
-        setCurrentAssetId(asset.id);
+        commitPendingAssetId(null);
+        commitCurrentAssetId(asset.id);
         setCurrentImageElement(cachedImage);
         return;
       }
@@ -896,8 +1000,8 @@ export function DraftModalityViewer({
         const requestId = navigationRequestIdRef.current + 1;
         navigationRequestIdRef.current = requestId;
         setLoadingIndicatorAssetId(null);
-        setPendingAssetId(null);
-        setCurrentAssetId(asset.id);
+        commitPendingAssetId(null);
+        commitCurrentAssetId(asset.id);
 
         const cachedPreviewImage = previewImageCacheRef.current.get(cacheKey);
 
@@ -924,7 +1028,7 @@ export function DraftModalityViewer({
       const requestId = navigationRequestIdRef.current + 1;
       navigationRequestIdRef.current = requestId;
       setLoadingIndicatorAssetId(null);
-      setPendingAssetId(asset.id);
+      commitPendingAssetId(asset.id);
 
       void preloadAsset(asset, "high").then(() => {
         if (navigationRequestIdRef.current !== requestId) {
@@ -933,18 +1037,24 @@ export function DraftModalityViewer({
 
         if (!readyAssetIdCacheRef.current.has(cacheKey)) {
           setLoadingIndicatorAssetId(null);
-          setPendingAssetId(null);
+          commitPendingAssetId(null);
           return;
         }
 
         const cachedImage = imageElementCacheRef.current.get(cacheKey) ?? null;
-        setCurrentAssetId(asset.id);
+        commitCurrentAssetId(asset.id);
         setCurrentImageElement(cachedImage);
         setLoadingIndicatorAssetId(null);
-        setPendingAssetId(null);
+        commitPendingAssetId(null);
       });
     },
-    [assetImageSourceById, currentAsset?.id, pendingAssetId, preloadAsset, preloadAssetPreview],
+    [
+      assetImageSourceById,
+      commitCurrentAssetId,
+      commitPendingAssetId,
+      preloadAsset,
+      preloadAssetPreview,
+    ],
   );
 
   useEffect(() => {
@@ -971,7 +1081,9 @@ export function DraftModalityViewer({
 
   useEffect(() => {
     const activeCacheKeys = new Set(
-      assets.map((asset) => assetImageSourceById.get(asset.id)?.cacheKey ?? asset.id),
+      assets.map(
+        (asset) => assetImageSourceById.get(asset.id)?.cacheKey ?? asset.id,
+      ),
     );
 
     for (const cacheKey of previewImageCacheRef.current.keys()) {
@@ -998,6 +1110,7 @@ export function DraftModalityViewer({
       }
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReadyAssetIds((current) => {
       let changed = false;
       const next = new Set<string>();
@@ -1054,12 +1167,14 @@ export function DraftModalityViewer({
       return;
     }
 
-    const cachedImage = imageElementCacheRef.current.get(currentSourceKey) ?? null;
+    const cachedImage =
+      imageElementCacheRef.current.get(currentSourceKey) ?? null;
 
     if (!cachedImage) {
       return;
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCurrentImageElement((current) =>
       current === cachedImage ? current : cachedImage,
     );
@@ -1101,8 +1216,7 @@ export function DraftModalityViewer({
           (annotation) => annotation.structureId === structure.id,
         );
         const relatedAsset =
-          relatedAnnotation &&
-          assetById.get(relatedAnnotation.assetId);
+          relatedAnnotation && assetById.get(relatedAnnotation.assetId);
 
         return {
           asset: relatedAsset ?? null,
@@ -1211,12 +1325,7 @@ export function DraftModalityViewer({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [
-    activeAssets,
-    assetById,
-    currentAssetId,
-    requestAssetNavigation,
-  ]);
+  }, [activeAssets, assetById, currentAssetId, requestAssetNavigation]);
 
   useEffect(() => {
     if (!selectedGroup) {
@@ -1247,13 +1356,18 @@ export function DraftModalityViewer({
 
   useEffect(() => {
     if (!selectedAnnotation) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnnotationForm((current) => {
         const structure = selectedStructureId
           ? (structuresById.get(selectedStructureId) ?? null)
           : null;
-        const group = structure?.groupId ? groupsById.get(structure.groupId) : null;
+        const group = structure?.groupId
+          ? groupsById.get(structure.groupId)
+          : null;
         const resolvedColor =
-          current.colorHex.trim() || group?.colorHex || DEFAULT_ANNOTATION_COLOR;
+          current.colorHex.trim() ||
+          group?.colorHex ||
+          DEFAULT_ANNOTATION_COLOR;
 
         return {
           ...EMPTY_ANNOTATION_FORM,
@@ -1268,11 +1382,11 @@ export function DraftModalityViewer({
     }
 
     const structure = structuresById.get(selectedAnnotation.structureId);
-    const group = structure?.groupId
-      ? groupsById.get(structure.groupId)
-      : null;
+    const group = structure?.groupId ? groupsById.get(structure.groupId) : null;
     const resolvedColor =
-      selectedAnnotation.colorHex ?? group?.colorHex ?? DEFAULT_ANNOTATION_COLOR;
+      selectedAnnotation.colorHex ??
+      group?.colorHex ??
+      DEFAULT_ANNOTATION_COLOR;
 
     setAnnotationForm({
       anchorX: selectedAnnotation.anchorX,
@@ -1301,6 +1415,7 @@ export function DraftModalityViewer({
 
     // Slice-specific annotation selection should not leak across slices while
     // the same anatomical part stays selected.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedAnnotationId(null);
   }, [annotationsById, currentAsset, selectedAnnotationId]);
 
@@ -1384,7 +1499,13 @@ export function DraftModalityViewer({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [activeAssets, currentAsset?.id, navigationAssetIndex, pendingAsset, preloadAsset]);
+  }, [
+    activeAssets,
+    currentAsset?.id,
+    navigationAssetIndex,
+    pendingAsset,
+    preloadAsset,
+  ]);
 
   useEffect(() => {
     if (
@@ -1430,18 +1551,29 @@ export function DraftModalityViewer({
     return () => {
       cancelled = true;
     };
-  }, [activeAssets, currentAsset?.id, navigationAssetIndex, pendingAsset, preloadAsset]);
+  }, [
+    activeAssets,
+    currentAsset?.id,
+    navigationAssetIndex,
+    pendingAsset,
+    preloadAsset,
+  ]);
 
   useEffect(() => {
+    const preloadQueue = preloadQueueRef.current;
+    const queuedPreloadByAssetId = queuedPreloadByAssetIdRef.current;
+    const imagePreloadPromiseCache = imagePreloadPromiseCacheRef.current;
+    const previewImagePromiseCache = previewImagePromiseCacheRef.current;
+
     return () => {
-      for (const queuedTask of preloadQueueRef.current) {
+      for (const queuedTask of preloadQueue) {
         queuedTask.resolve();
       }
 
-      preloadQueueRef.current = [];
-      queuedPreloadByAssetIdRef.current.clear();
-      imagePreloadPromiseCacheRef.current.clear();
-      previewImagePromiseCacheRef.current.clear();
+      preloadQueue.length = 0;
+      queuedPreloadByAssetId.clear();
+      imagePreloadPromiseCache.clear();
+      previewImagePromiseCache.clear();
 
       if (wheelCooldownRef.current !== null) {
         window.clearTimeout(wheelCooldownRef.current);
@@ -1530,10 +1662,12 @@ export function DraftModalityViewer({
       ? selectedStructure
       : null;
   const shellGridClass = cn(
-    "grid flex-1 gap-2",
-    showSliceEditorPanel
-      ? "max-h-[calc(100vh-310px)]"
-      : "max-h-[calc(100vh-101px)]",
+    "grid min-h-0 flex-1 gap-2",
+    readOnly
+      ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-hidden"
+      : showSliceEditorPanel
+        ? "max-h-[calc(100vh-310px)]"
+        : "max-h-[calc(100vh-101px)]",
     showStudyPanel &&
       showControlPanel &&
       "xl:grid-cols-[22rem_minmax(0,1fr)_22rem]",
@@ -1656,7 +1790,7 @@ export function DraftModalityViewer({
         ? WHEEL_LOADING_INDICATOR_DELAY_MS
         : lastNavigationSourceRef.current === "scrub"
           ? SCRUB_LOADING_INDICATOR_DELAY_MS
-        : LOADING_INDICATOR_DELAY_MS;
+          : LOADING_INDICATOR_DELAY_MS;
     const timeoutId = window.setTimeout(() => {
       setLoadingIndicatorAssetId(assetId);
     }, delayMs);
@@ -1729,7 +1863,11 @@ export function DraftModalityViewer({
         gsap.killTweensOf(sliceEditorScroller);
       }
     };
-  }, [centerActiveFilmstripItem, filmstripAssetOrderSignature, showSliceEditorPanel]);
+  }, [
+    centerActiveFilmstripItem,
+    filmstripAssetOrderSignature,
+    showSliceEditorPanel,
+  ]);
 
   function updateGroupVisibility(groupId: string, nextVisible: boolean) {
     setVisibleGroupIds((current) => {
@@ -1783,63 +1921,59 @@ export function DraftModalityViewer({
     void requestAssetNavigation(nextAsset, source);
   }
 
-  const updateAnnotationForm = useCallback(
-    function updateAnnotationForm<Key extends keyof AnnotationFormState>(
-      key: Key,
-      value: AnnotationFormState[Key],
-    ) {
-      setAnnotationForm((current) =>
-        Object.is(current[key], value)
-          ? current
-          : {
-              ...current,
-              [key]: value,
-            },
-      );
-    },
-    [],
-  );
+  const updateAnnotationForm = useCallback(function updateAnnotationForm<
+    Key extends keyof AnnotationFormState,
+  >(key: Key, value: AnnotationFormState[Key]) {
+    setAnnotationForm((current) =>
+      Object.is(current[key], value)
+        ? current
+        : {
+            ...current,
+            [key]: value,
+          },
+    );
+  }, []);
 
-  const updateStructureForm = useCallback(
-    function updateStructureForm<Key extends keyof StructureFormState>(
-      key: Key,
-      value: StructureFormState[Key],
-    ) {
-      setStructureForm((current) =>
-        Object.is(current[key], value)
-          ? current
-          : {
-              ...current,
-              [key]: value,
-            },
-      );
-    },
-    [],
-  );
+  const updateStructureForm = useCallback(function updateStructureForm<
+    Key extends keyof StructureFormState,
+  >(key: Key, value: StructureFormState[Key]) {
+    setStructureForm((current) =>
+      Object.is(current[key], value)
+        ? current
+        : {
+            ...current,
+            [key]: value,
+          },
+    );
+  }, []);
 
-  const updateGroupForm = useCallback(
-    function updateGroupForm<Key extends keyof GroupFormState>(
-      key: Key,
-      value: GroupFormState[Key],
-    ) {
-      setGroupForm((current) =>
-        Object.is(current[key], value)
-          ? current
-          : {
-              ...current,
-              [key]: value,
-            },
-      );
-    },
-    [],
-  );
+  const updateGroupForm = useCallback(function updateGroupForm<
+    Key extends keyof GroupFormState,
+  >(key: Key, value: GroupFormState[Key]) {
+    setGroupForm((current) =>
+      Object.is(current[key], value)
+        ? current
+        : {
+            ...current,
+            [key]: value,
+          },
+    );
+  }, []);
 
   function clearPolygonDraft() {
+    if (readOnly) {
+      return;
+    }
+
     setDraftDisconnectedPolygons([]);
     updateAnnotationForm("polygonPoints", []);
   }
 
   async function handleSaveStructure(): Promise<ViewerStructure | null> {
+    if (readOnly) {
+      return null;
+    }
+
     if (!structureForm.title.trim()) {
       toast.error("Structure title is required.");
       return null;
@@ -1884,6 +2018,10 @@ export function DraftModalityViewer({
   }
 
   async function handleSaveAnnotation(options?: { structureId?: string }) {
+    if (readOnly) {
+      return;
+    }
+
     const activeStructureId =
       options?.structureId ?? selectedStructure?.id ?? selectedStructureId;
 
@@ -2012,6 +2150,10 @@ export function DraftModalityViewer({
   }
 
   async function handleSaveGroup() {
+    if (readOnly) {
+      return;
+    }
+
     if (!groupForm.title.trim()) {
       toast.error("Group title is required.");
       return;
@@ -2053,6 +2195,10 @@ export function DraftModalityViewer({
   }
 
   async function handleDeleteGroup(groupId: string) {
+    if (readOnly) {
+      return;
+    }
+
     const group = groupsById.get(groupId);
 
     if (!group) {
@@ -2084,6 +2230,10 @@ export function DraftModalityViewer({
   }
 
   async function handleDeleteStructure(structureId: string) {
+    if (readOnly) {
+      return;
+    }
+
     const structure = structuresById.get(structureId);
 
     if (!structure) {
@@ -2155,6 +2305,10 @@ export function DraftModalityViewer({
   }
 
   function handleCanvasClick(point: ViewerAnnotationPoint) {
+    if (readOnly) {
+      return;
+    }
+
     if (!currentAsset) {
       return;
     }
@@ -2241,6 +2395,10 @@ export function DraftModalityViewer({
   }
 
   function handleDraftLabelMove(point: ViewerAnnotationPoint) {
+    if (readOnly) {
+      return;
+    }
+
     if (!selectedAnnotationId || canvasMode === "create-label") {
       return;
     }
@@ -2250,6 +2408,10 @@ export function DraftModalityViewer({
   }
 
   function handleDraftAnchorMove(point: ViewerAnnotationPoint) {
+    if (readOnly) {
+      return;
+    }
+
     if (canvasMode === "create-label") {
       return;
     }
@@ -2262,6 +2424,10 @@ export function DraftModalityViewer({
     index: number,
     point: ViewerAnnotationPoint,
   ) {
+    if (readOnly) {
+      return;
+    }
+
     if (index < 0) {
       return;
     }
@@ -2282,6 +2448,10 @@ export function DraftModalityViewer({
   }
 
   function handleDraftPolygonReplace(points: ViewerAnnotationPoint[]) {
+    if (readOnly) {
+      return;
+    }
+
     setAnnotationForm((current) => {
       if (points.length < 3 || selectedAnnotationId) {
         return {
@@ -2314,10 +2484,18 @@ export function DraftModalityViewer({
   function handleDraftDisconnectedPolygonsChange(
     polygons: ViewerAnnotationPoint[][],
   ) {
+    if (readOnly) {
+      return;
+    }
+
     setDraftDisconnectedPolygons(polygons);
   }
 
   function handleCanvasDoubleClick() {
+    if (readOnly) {
+      return;
+    }
+
     if (canvasMode !== "draw-region") {
       return;
     }
@@ -2456,6 +2634,10 @@ export function DraftModalityViewer({
   }
 
   function commitSliceTimeline(nextOrder: string[]) {
+    if (readOnly) {
+      return;
+    }
+
     if (nextOrder.length === 0) {
       toast.error("At least one slice must remain.");
       return;
@@ -2474,6 +2656,10 @@ export function DraftModalityViewer({
   }
 
   function handleDeleteLeftSlicesFromSelection() {
+    if (readOnly) {
+      return;
+    }
+
     if (!canDeleteLeftSlices) {
       return;
     }
@@ -2487,19 +2673,23 @@ export function DraftModalityViewer({
     }
 
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter((assetId) => !leftSliceIds.has(assetId)),
+      normalizedSliceTimelineIds.filter(
+        (assetId) => !leftSliceIds.has(assetId),
+      ),
     );
   }
 
   function handleDeleteRightSlicesFromSelection() {
+    if (readOnly) {
+      return;
+    }
+
     if (!canDeleteRightSlices) {
       return;
     }
 
     const rightSliceIds = new Set(
-      activeAssets
-        .slice(navigationAssetIndex + 1)
-        .map((asset) => asset.id),
+      activeAssets.slice(navigationAssetIndex + 1).map((asset) => asset.id),
     );
 
     if (rightSliceIds.size === 0) {
@@ -2507,11 +2697,17 @@ export function DraftModalityViewer({
     }
 
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter((assetId) => !rightSliceIds.has(assetId)),
+      normalizedSliceTimelineIds.filter(
+        (assetId) => !rightSliceIds.has(assetId),
+      ),
     );
   }
 
   function handleDeleteSelectedSlice() {
+    if (readOnly) {
+      return;
+    }
+
     if (!activeViewerAssetId || !canDeleteSelectedSlice) {
       return;
     }
@@ -2524,6 +2720,10 @@ export function DraftModalityViewer({
   }
 
   function handleFlipSliceTimeline() {
+    if (readOnly) {
+      return;
+    }
+
     if (!canFlipSliceTimeline) {
       return;
     }
@@ -2532,6 +2732,10 @@ export function DraftModalityViewer({
   }
 
   function handleUndoSliceTimeline() {
+    if (readOnly) {
+      return;
+    }
+
     const previousOrder =
       sliceTimelineUndoStack[sliceTimelineUndoStack.length - 1];
 
@@ -2556,6 +2760,10 @@ export function DraftModalityViewer({
   }
 
   function handleRedoSliceTimeline() {
+    if (readOnly) {
+      return;
+    }
+
     const nextOrder = sliceTimelineRedoStack[sliceTimelineRedoStack.length - 1];
 
     if (!nextOrder) {
@@ -2579,6 +2787,10 @@ export function DraftModalityViewer({
   }
 
   async function handleApplySliceTimelineChanges() {
+    if (readOnly) {
+      return;
+    }
+
     if (isApplyingSliceChanges || !hasPendingSliceTimelineChanges) {
       return;
     }
@@ -2673,6 +2885,7 @@ export function DraftModalityViewer({
         <StudyPanel
           activeAssetId={activeViewerAssetId}
           darkMode={darkMode}
+          readOnly={readOnly}
           referenceAssets={referenceAssets}
           relatedAssets={relatedAssets}
           searchHits={searchHits}
@@ -2688,6 +2901,7 @@ export function DraftModalityViewer({
 
       <main className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
         <ViewerCanvas
+          annotationEditingEnabled={!readOnly}
           areaBrushSize={areaBrushSize}
           areaEditTool={areaEditTool}
           areaEraserSize={areaEraserSize}
@@ -2713,7 +2927,7 @@ export function DraftModalityViewer({
           practiceMode={practiceMode}
           selectedAnnotationId={selectedAnnotationId}
           draftStructureTitle={selectedStructure?.title ?? structureForm.title}
-          showCrossReferences={showCrossReferences}
+          showCrossReferences={effectiveShowCrossReferences}
           showOrientation={showOrientation}
           showLabels={showLabels}
           viewerTitle={viewerTitle}
@@ -2736,7 +2950,9 @@ export function DraftModalityViewer({
           onCanvasClick={handleCanvasClick}
           onCanvasDoubleClick={handleCanvasDoubleClick}
           onDraftAnchorMove={handleDraftAnchorMove}
-          onDraftDisconnectedPolygonsChange={handleDraftDisconnectedPolygonsChange}
+          onDraftDisconnectedPolygonsChange={
+            handleDraftDisconnectedPolygonsChange
+          }
           onDraftLabelMove={handleDraftLabelMove}
           onDraftPolygonPointMove={handleDraftPolygonPointMove}
           onDraftPolygonReplace={handleDraftPolygonReplace}
@@ -2750,7 +2966,8 @@ export function DraftModalityViewer({
           canvasMode={canvasMode}
           mainInteractionTool={mainInteractionTool}
           showControlPanel={showControlPanel}
-          showCrossReferences={showCrossReferences}
+          crossReferenceToggleDisabled={readOnly}
+          showCrossReferences={effectiveShowCrossReferences}
           showStudyPanel={showStudyPanel}
           onAreaBrushSizeChange={setAreaBrushSize}
           onAreaEditToolChange={setAreaEditTool}
@@ -2772,15 +2989,20 @@ export function DraftModalityViewer({
               </span>
             </div>
             <p className="text-xs text-lime-200/80">
-              Learners need a subscription to open this lesson card in full
-              mode.
+              {readOnly
+                ? "A subscription is required to unlock this lesson card."
+                : "Learners need a subscription to open this lesson card in full mode."}
             </p>
             <div className="mt-3 flex items-center gap-2">
               <Button
                 size="sm"
                 type="button"
                 onClick={() =>
-                  toast.info("Subscription preview card shown in admin mode.")
+                  toast.info(
+                    readOnly
+                      ? "Subscription access is required for this lesson."
+                      : "Subscription preview card shown in admin mode.",
+                  )
                 }
               >
                 Subscribe
@@ -2790,7 +3012,9 @@ export function DraftModalityViewer({
                 className="text-xs text-indigo-200 underline underline-offset-2"
                 onClick={() =>
                   toast.info(
-                    "Learner sign-in flow is handled in the learner app.",
+                    readOnly
+                      ? "Sign-in and subscription access are handled in the learner app."
+                      : "Learner sign-in flow is handled in the learner app.",
                   )
                 }
               >
@@ -2815,6 +3039,7 @@ export function DraftModalityViewer({
 
       <SliceFilmstrip
         activeAssetId={activeFilmstripAssetId}
+        allowEditing={!readOnly}
         canDeleteLeftSlices={canDeleteLeftSlices}
         canDeleteRightSlices={canDeleteRightSlices}
         canDeleteSelectedSlice={canDeleteSelectedSlice}
@@ -2860,6 +3085,7 @@ export function DraftModalityViewer({
           groupForm={groupForm}
           groups={groups}
           groupsById={groupsById}
+          readOnly={readOnly}
           selectedAnnotationId={selectedAnnotationId}
           selectedStructureId={selectedStructureId}
           showLabels={showLabels}
@@ -2895,4 +3121,3 @@ export function DraftModalityViewer({
     </div>
   );
 }
-

@@ -66,8 +66,8 @@ type LabelTextWidthMeasurer = (
   fontWeight: 500 | 700,
 ) => number;
 
-
 type ViewerCanvasProps = {
+  annotationEditingEnabled: boolean;
   areaBrushSize: number;
   areaEditTool: AreaEditTool;
   areaEraserSize: number;
@@ -94,7 +94,9 @@ type ViewerCanvasProps = {
   onCanvasClick: (point: ViewerAnnotationPoint) => void;
   onCanvasDoubleClick: () => void;
   onDraftAnchorMove: (point: ViewerAnnotationPoint) => void;
-  onDraftDisconnectedPolygonsChange: (polygons: ViewerAnnotationPoint[][]) => void;
+  onDraftDisconnectedPolygonsChange: (
+    polygons: ViewerAnnotationPoint[][],
+  ) => void;
   onDraftLabelMove: (point: ViewerAnnotationPoint) => void;
   onDraftPolygonPointMove: (
     index: number,
@@ -122,6 +124,7 @@ type ViewerCanvasProps = {
 };
 
 export function ViewerCanvas({
+  annotationEditingEnabled,
   areaBrushSize,
   areaEditTool,
   areaEraserSize,
@@ -218,9 +221,8 @@ export function ViewerCanvas({
   const [stageSizePx, setStageSizePx] = useState({ width: 1, height: 1 });
   const [measureLabelTextWidth, setMeasureLabelTextWidth] =
     useState<LabelTextWidthMeasurer>(
-      () =>
-        (text: string, fontSize: number) =>
-          Math.ceil(text.length * fontSize * 0.6),
+      () => (text: string, fontSize: number) =>
+        Math.ceil(text.length * fontSize * 0.6),
     );
 
   useEffect(() => {
@@ -239,12 +241,11 @@ export function ViewerCanvas({
     // from the same fallback widths and avoid hydration drift.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMeasureLabelTextWidth(
-      () =>
-        (text: string, fontSize: number, fontWeight: 500 | 700) => {
-          measurementContext.font = `${fontWeight} ${fontSize}px system-ui`;
+      () => (text: string, fontSize: number, fontWeight: 500 | 700) => {
+        measurementContext.font = `${fontWeight} ${fontSize}px system-ui`;
 
-          return Math.ceil(measurementContext.measureText(text).width);
-        },
+        return Math.ceil(measurementContext.measureText(text).width);
+      },
     );
   }, []);
 
@@ -288,7 +289,11 @@ export function ViewerCanvas({
       }
 
       const ellipsis = "...";
-      const ellipsisWidth = measureLabelTextWidth(ellipsis, fontSize, fontWeight);
+      const ellipsisWidth = measureLabelTextWidth(
+        ellipsis,
+        fontSize,
+        fontWeight,
+      );
 
       if (ellipsisWidth >= maxTextWidth) {
         return ellipsis;
@@ -365,7 +370,9 @@ export function ViewerCanvas({
     Math.abs(annotationForm.labelX - EMPTY_ANNOTATION_FORM.labelX) > 0.0005 ||
     Math.abs(annotationForm.labelY - EMPTY_ANNOTATION_FORM.labelY) > 0.0005;
   const showDraftPointer =
-    !selectedAnnotationId && draftPointerMovedFromDefault;
+    annotationEditingEnabled &&
+    !selectedAnnotationId &&
+    draftPointerMovedFromDefault;
   const draftPointerColor =
     annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
   const draftPointerLabel = draftStructureTitle.trim() || "Draft";
@@ -434,7 +441,12 @@ export function ViewerCanvas({
         return;
       }
 
-      areaMaskContext.clearRect(0, 0, AREA_MASK_RESOLUTION, AREA_MASK_RESOLUTION);
+      areaMaskContext.clearRect(
+        0,
+        0,
+        AREA_MASK_RESOLUTION,
+        AREA_MASK_RESOLUTION,
+      );
 
       areaMaskContext.fillStyle = "#ffffff";
 
@@ -718,10 +730,7 @@ export function ViewerCanvas({
         applyStrokePoint(interpolatedPoint);
       }
     },
-    [
-      activeAreaStrokeStep,
-      stampAreaMaskAtPoint,
-    ],
+    [activeAreaStrokeStep, stampAreaMaskAtPoint],
   );
 
   useLayoutEffect(() => {
@@ -801,7 +810,10 @@ export function ViewerCanvas({
       MAIN_LABEL_BAND_WIDTH_PX,
       Math.max(stageWidth / 2 - MAIN_LABEL_BAND_MIN_GAP_PX, 120),
     );
-    const bySide: Record<LabelSide, Array<{ anchorX: number; anchorY: number; id: string }>> = {
+    const bySide: Record<
+      LabelSide,
+      Array<{ anchorX: number; anchorY: number; id: string }>
+    > = {
       left: [],
       right: [],
     };
@@ -835,7 +847,9 @@ export function ViewerCanvas({
     }
 
     for (const side of ["left", "right"] as const) {
-      const sideItems = bySide[side].sort((left, right) => left.anchorY - right.anchorY);
+      const sideItems = bySide[side].sort(
+        (left, right) => left.anchorY - right.anchorY,
+      );
 
       if (sideItems.length === 0) {
         continue;
@@ -857,7 +871,8 @@ export function ViewerCanvas({
       sideItems.forEach((item, index) => {
         const rowY = distributedRows[index] ?? item.anchorY;
         const labelOffset = clamp(
-          MAIN_LABEL_BASE_OFFSET_PX + Math.abs(item.anchorX - stageWidth / 2) * 0.12,
+          MAIN_LABEL_BASE_OFFSET_PX +
+            Math.abs(item.anchorX - stageWidth / 2) * 0.12,
           MAIN_LABEL_OFFSET_MIN_PX,
           MAIN_LABEL_OFFSET_MAX_PX,
         );
@@ -927,10 +942,7 @@ export function ViewerCanvas({
     DEFAULT_ANNOTATION_COLOR;
 
   function clearMainInteractionDragState() {
-    if (
-      typeof window !== "undefined" &&
-      layerScrubFrameRef.current !== null
-    ) {
+    if (typeof window !== "undefined" && layerScrubFrameRef.current !== null) {
       window.cancelAnimationFrame(layerScrubFrameRef.current);
       layerScrubFrameRef.current = null;
     }
@@ -954,7 +966,11 @@ export function ViewerCanvas({
       event.currentTarget.setPointerCapture(event.pointerId);
       layerScrubDragRef.current = {
         pointerId: event.pointerId,
-        startIndex: clamp(currentAssetIndex, 0, Math.max(totalSliceCount - 1, 0)),
+        startIndex: clamp(
+          currentAssetIndex,
+          0,
+          Math.max(totalSliceCount - 1, 0),
+        ),
         startY: event.clientY,
       };
       return;
@@ -1278,6 +1294,7 @@ export function ViewerCanvas({
           >
             <ViewerCanvasMainOverlay
               activeAreaCursorRadius={activeAreaCursorRadius}
+              annotationEditingEnabled={annotationEditingEnabled}
               annotationForm={annotationForm}
               areaEditTool={areaEditTool}
               areaToolCursorPoint={areaToolCursorPoint}
