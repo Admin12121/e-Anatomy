@@ -4,7 +4,6 @@ import type {
   ViewerAnnotation,
   ViewerAnnotationPoint,
   ViewerStructure,
-  ViewerStructureGroup,
 } from "@/lib/playground/types";
 
 import {
@@ -31,6 +30,7 @@ type ViewerCanvasMainOverlayProps = {
   activeAreaCursorRadius: number;
   annotationEditingEnabled: boolean;
   annotationForm: AnnotationFormState;
+  areaPaintPreviewActive: boolean;
   areaEditTool: "brush" | "erase";
   areaToolCursorPoint: ViewerAnnotationPoint | null;
   canvasMode: ViewerCanvasMode;
@@ -54,7 +54,6 @@ type ViewerCanvasMainOverlayProps = {
     fontWeight: 500 | 700,
   ) => string;
   fontScaleMode: FontScaleMode;
-  groupsById: Map<string, ViewerStructureGroup>;
   hoveredAnnotationId: string | null;
   isAreaPaintMode: boolean;
   measureLabelRectWidth: (
@@ -90,6 +89,7 @@ export function ViewerCanvasMainOverlay({
   activeAreaCursorRadius,
   annotationEditingEnabled,
   annotationForm,
+  areaPaintPreviewActive,
   areaEditTool,
   areaToolCursorPoint,
   canvasMode,
@@ -104,7 +104,6 @@ export function ViewerCanvasMainOverlay({
   editLockEnabled,
   fitLabelText,
   fontScaleMode,
-  groupsById,
   hoveredAnnotationId,
   isAreaPaintMode,
   measureLabelRectWidth,
@@ -126,7 +125,7 @@ export function ViewerCanvasMainOverlay({
   visibleAnnotations,
 }: ViewerCanvasMainOverlayProps) {
   const overlayPreview =
-    canvasMode !== "browse"
+    canvasMode !== "browse" && !areaPaintPreviewActive
       ? annotationForm.polygonPoints.map(pointToSvgPair).join(" ")
       : null;
 
@@ -138,10 +137,6 @@ export function ViewerCanvasMainOverlay({
           return null;
         }
 
-        const group = structure.groupId
-          ? groupsById.get(structure.groupId)
-          : null;
-
         const isSelected = annotation.id === selectedAnnotationId;
         const isHovered = annotation.id === hoveredAnnotationId;
         const isInteractionBlocked = editLockEnabled
@@ -150,12 +145,9 @@ export function ViewerCanvasMainOverlay({
             : true
           : false;
         const preferredAnnotationColor = isSelected
-          ? annotationForm.colorHex.trim() || annotation.colorHex
-          : annotation.colorHex;
-        const color =
-          preferredAnnotationColor ||
-          group?.colorHex ||
-          DEFAULT_ANNOTATION_COLOR;
+          ? annotationForm.colorHex.trim() || structure.colorHex
+          : structure.colorHex;
+        const color = preferredAnnotationColor || DEFAULT_ANNOTATION_COLOR;
         const anchorX = isSelected
           ? annotationForm.anchorX
           : annotation.anchorX;
@@ -171,10 +163,10 @@ export function ViewerCanvasMainOverlay({
           : annotation.polygonPoints;
         const overlayColor = isSelected
           ? annotationForm.overlayColorHex || color
-          : annotation.overlayColorHex || color;
+          : color;
         const leaderColor = isSelected
           ? annotationForm.leaderColorHex || color
-          : annotation.leaderColorHex || color;
+          : color;
         const polygonOpacity = isSelected
           ? annotationForm.overlayOpacity
           : annotation.overlayOpacity;
@@ -199,17 +191,19 @@ export function ViewerCanvasMainOverlay({
           !isInteractionBlocked &&
           (!practiceMode || isSelected || isHovered);
         const fontSize = fontScaleMode === "large" ? 24 : 18;
+        const annotationPositionEditingActive =
+          canvasMode === "set-anchor" || canvasMode === "set-label";
         const canDragAnchor =
           annotationEditingEnabled &&
           isSelected &&
           !isInteractionBlocked &&
-          canvasMode !== "create-label";
+          annotationPositionEditingActive;
         const canDragLabel =
           annotationEditingEnabled &&
           isSelected &&
           !shouldAutoArrangeLabels &&
           !isInteractionBlocked &&
-          canvasMode !== "create-label";
+          annotationPositionEditingActive;
         const highlightLabel =
           isSelected || isHovered || draggingLabelId === annotation.id;
         const leaderStrokeWidth = isSelected ? 3.5 : isHovered ? 3 : 2;
@@ -268,14 +262,12 @@ export function ViewerCanvasMainOverlay({
               onAnnotationSelect(annotation.id, annotation.structureId);
             }}
           >
-            {polygonPoints.length >= 3 ? (
+            {polygonPoints.length >= 3 &&
+            !(areaPaintPreviewActive && isAreaPaintMode && isSelected) ? (
               <polygon
                 fill={overlayColor}
                 fillOpacity={emphasizedOpacity}
                 points={polygonPoints.map(pointToSvgPair).join(" ")}
-                stroke={overlayColor}
-                strokeOpacity={isHovered ? 1 : 0.9}
-                strokeWidth={isSelected ? 3.5 : isHovered ? 3 : 2}
               />
             ) : null}
             {markerVisible ? (
@@ -395,7 +387,8 @@ export function ViewerCanvasMainOverlay({
           />
           <circle
             className={
-              annotationEditingEnabled && canvasMode !== "create-label"
+              annotationEditingEnabled &&
+              (canvasMode === "set-anchor" || canvasMode === "set-label")
                 ? "cursor-move"
                 : undefined
             }
@@ -404,7 +397,10 @@ export function ViewerCanvasMainOverlay({
             fill={draftPointerColor}
             r={7}
             onPointerDown={(event) => {
-              if (!annotationEditingEnabled || canvasMode === "create-label") {
+              if (
+                !annotationEditingEnabled ||
+                (canvasMode !== "set-anchor" && canvasMode !== "set-label")
+              ) {
                 return;
               }
 
@@ -445,14 +441,11 @@ export function ViewerCanvasMainOverlay({
       {overlayPreview ? (
         <polygon
           fill={annotationForm.overlayColorHex}
-          fillOpacity={annotationForm.overlayOpacity * overlayOpacity * 0.45}
+          fillOpacity={annotationForm.overlayOpacity * overlayOpacity}
           points={overlayPreview}
-          stroke={annotationForm.overlayColorHex}
-          strokeDasharray="8 6"
-          strokeWidth={2}
         />
       ) : null}
-      {canvasMode === "draw-region"
+      {canvasMode === "draw-region" && !areaPaintPreviewActive
         ? draftDisconnectedPolygons.map((polygonPoints, polygonIndex) => {
             if (polygonPoints.length < 3) {
               return null;
@@ -462,13 +455,8 @@ export function ViewerCanvasMainOverlay({
               <polygon
                 key={`draft-disconnected-${polygonIndex}`}
                 fill={disconnectedOverlayColor}
-                fillOpacity={
-                  annotationForm.overlayOpacity * overlayOpacity * 0.42
-                }
+                fillOpacity={annotationForm.overlayOpacity * overlayOpacity}
                 points={polygonPoints.map(pointToSvgPair).join(" ")}
-                stroke={disconnectedOverlayColor}
-                strokeDasharray="8 6"
-                strokeWidth={2}
               />
             );
           })
@@ -484,13 +472,6 @@ export function ViewerCanvasMainOverlay({
           }
           pointerEvents="none"
           r={activeAreaCursorRadius * 1000}
-          stroke={
-            areaEditTool === "erase"
-              ? "rgba(248,113,113,0.96)"
-              : "rgba(34,211,238,0.96)"
-          }
-          strokeDasharray={areaEditTool === "erase" ? "6 4" : undefined}
-          strokeWidth={2}
         />
       ) : null}
       {showCrossReferences ? (

@@ -1,7 +1,6 @@
 import type {
   ViewerAnnotation,
   ViewerStructure,
-  ViewerStructureGroup,
 } from "@/lib/playground/types";
 
 import {
@@ -31,7 +30,6 @@ type ViewerCanvasAutoArrangedLabelOverlayProps = {
     fontWeight: 500 | 700,
   ) => string;
   fontScaleMode: FontScaleMode;
-  groupsById: Map<string, ViewerStructureGroup>;
   hoveredAnnotationId: string | null;
   labelLayout: {
     labels: Map<string, ArrangedLabel>;
@@ -62,7 +60,6 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
   editLockEnabled,
   fitLabelText,
   fontScaleMode,
-  groupsById,
   hoveredAnnotationId,
   labelLayout,
   measureLabelRectWidth,
@@ -95,21 +92,14 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
           return null;
         }
 
-        const group = structure.groupId
-          ? groupsById.get(structure.groupId)
-          : null;
-
         const isHovered = annotation.id === hoveredAnnotationId;
         const preferredAnnotationColor = isSelected
-          ? annotationForm.colorHex.trim() || annotation.colorHex
-          : annotation.colorHex;
-        const color =
-          preferredAnnotationColor ||
-          group?.colorHex ||
-          DEFAULT_ANNOTATION_COLOR;
+          ? annotationForm.colorHex.trim() || structure.colorHex
+          : structure.colorHex;
+        const color = preferredAnnotationColor || DEFAULT_ANNOTATION_COLOR;
         const leaderColor = isSelected
           ? annotationForm.leaderColorHex || color
-          : annotation.leaderColorHex || color;
+          : color;
         const label = annotation.titleOverride || structure.title;
         const textVisible =
           showLabels &&

@@ -1458,7 +1458,6 @@ impl PlaygroundRepository {
                 groups.slug,
                 groups.title,
                 groups.description,
-                groups.color_hex,
                 groups.icon_name,
                 groups.sort_order,
                 groups.is_default_visible,
@@ -1488,7 +1487,6 @@ impl PlaygroundRepository {
         slug: &str,
         title: &str,
         description: Option<&str>,
-        color_hex: &str,
         icon_name: Option<&str>,
         sort_order: i32,
         is_default_visible: bool,
@@ -1500,20 +1498,18 @@ impl PlaygroundRepository {
                 slug,
                 title,
                 description,
-                color_hex,
                 icon_name,
                 sort_order,
                 is_default_visible,
                 created_by_user_id,
                 updated_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
             RETURNING
                 id::text AS id,
                 slug,
                 title,
                 description,
-                color_hex,
                 icon_name,
                 sort_order,
                 is_default_visible,
@@ -1525,7 +1521,6 @@ impl PlaygroundRepository {
         .bind(slug)
         .bind(title)
         .bind(description)
-        .bind(color_hex)
         .bind(icon_name)
         .bind(sort_order)
         .bind(is_default_visible)
@@ -1546,7 +1541,6 @@ impl PlaygroundRepository {
         user_id: &str,
         title: &str,
         description: Option<&str>,
-        color_hex: &str,
         icon_name: Option<&str>,
         sort_order: i32,
         is_default_visible: bool,
@@ -1557,11 +1551,10 @@ impl PlaygroundRepository {
             SET
                 title = $5,
                 description = $6,
-                color_hex = $7,
-                icon_name = $8,
-                sort_order = $9,
-                is_default_visible = $10,
-                updated_by_user_id = $11,
+                icon_name = $7,
+                sort_order = $8,
+                is_default_visible = $9,
+                updated_by_user_id = $10,
                 updated_at = NOW()
             FROM anatomy_zone_modalities AS modality
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
@@ -1576,7 +1569,6 @@ impl PlaygroundRepository {
                 groups.slug,
                 groups.title,
                 groups.description,
-                groups.color_hex,
                 groups.icon_name,
                 groups.sort_order,
                 groups.is_default_visible,
@@ -1590,7 +1582,6 @@ impl PlaygroundRepository {
         .bind(group_id)
         .bind(title)
         .bind(description)
-        .bind(color_hex)
         .bind(icon_name)
         .bind(sort_order)
         .bind(is_default_visible)
@@ -1712,6 +1703,7 @@ impl PlaygroundRepository {
                 structures.group_id::text AS group_id,
                 structures.slug,
                 structures.title,
+                structures.color_hex,
                 structures.latin_name,
                 structures.short_description,
                 structures.long_description,
@@ -1746,6 +1738,7 @@ impl PlaygroundRepository {
         group_id: Option<Uuid>,
         slug: &str,
         title: &str,
+        color_hex: &str,
         latin_name: Option<&str>,
         short_description: Option<&str>,
         long_description: Option<&str>,
@@ -1762,6 +1755,7 @@ impl PlaygroundRepository {
                 group_id,
                 slug,
                 title,
+                color_hex,
                 latin_name,
                 short_description,
                 long_description,
@@ -1773,12 +1767,13 @@ impl PlaygroundRepository {
                 created_by_user_id,
                 updated_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
             RETURNING
                 id::text AS id,
                 group_id::text AS group_id,
                 slug,
                 title,
+                color_hex,
                 latin_name,
                 short_description,
                 long_description,
@@ -1795,6 +1790,7 @@ impl PlaygroundRepository {
         .bind(group_id)
         .bind(slug)
         .bind(title)
+        .bind(color_hex)
         .bind(latin_name)
         .bind(short_description)
         .bind(long_description)
@@ -1820,6 +1816,7 @@ impl PlaygroundRepository {
         user_id: &str,
         group_id: Option<Uuid>,
         title: &str,
+        color_hex: &str,
         latin_name: Option<&str>,
         short_description: Option<&str>,
         long_description: Option<&str>,
@@ -1835,15 +1832,16 @@ impl PlaygroundRepository {
             SET
                 group_id = $5,
                 title = $6,
-                latin_name = $7,
-                short_description = $8,
-                long_description = $9,
-                synonyms = $10,
-                learning_points = $11,
-                access_level = $12,
-                is_pinned_default = $13,
-                sort_order = $14,
-                updated_by_user_id = $15,
+                color_hex = $7,
+                latin_name = $8,
+                short_description = $9,
+                long_description = $10,
+                synonyms = $11,
+                learning_points = $12,
+                access_level = $13,
+                is_pinned_default = $14,
+                sort_order = $15,
+                updated_by_user_id = $16,
                 updated_at = NOW()
             FROM anatomy_zone_modalities AS modality
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
@@ -1858,6 +1856,7 @@ impl PlaygroundRepository {
                 structures.group_id::text AS group_id,
                 structures.slug,
                 structures.title,
+                structures.color_hex,
                 structures.latin_name,
                 structures.short_description,
                 structures.long_description,
@@ -1876,6 +1875,7 @@ impl PlaygroundRepository {
         .bind(structure_id)
         .bind(group_id)
         .bind(title)
+        .bind(color_hex)
         .bind(latin_name)
         .bind(short_description)
         .bind(long_description)
@@ -2598,7 +2598,6 @@ struct ViewerStructureGroupRow {
     slug: String,
     title: String,
     description: Option<String>,
-    color_hex: String,
     icon_name: Option<String>,
     sort_order: i32,
     is_default_visible: bool,
@@ -2613,7 +2612,6 @@ impl From<ViewerStructureGroupRow> for ViewerStructureGroup {
             slug: value.slug,
             title: value.title,
             description: value.description,
-            color_hex: value.color_hex,
             icon_name: value.icon_name,
             sort_order: value.sort_order,
             is_default_visible: value.is_default_visible,
@@ -2629,6 +2627,7 @@ struct ViewerStructureRow {
     group_id: Option<String>,
     slug: String,
     title: String,
+    color_hex: String,
     latin_name: Option<String>,
     short_description: Option<String>,
     long_description: Option<String>,
@@ -2648,6 +2647,7 @@ impl From<ViewerStructureRow> for ViewerStructure {
             group_id: value.group_id,
             slug: value.slug,
             title: value.title,
+            color_hex: value.color_hex,
             latin_name: value.latin_name,
             short_description: value.short_description,
             long_description: value.long_description,

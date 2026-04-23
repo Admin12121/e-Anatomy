@@ -170,6 +170,7 @@ type SliceFilmstripProps = {
   isApplyingSliceChanges: boolean;
   isAssetLoading: boolean;
   navigationAssetIndex: number;
+  navigationDisabled: boolean;
   pendingDeletedSliceIds: string[];
   pendingSliceSortUpdates: Array<{
     asset: ZoneModalityAsset;
@@ -208,6 +209,7 @@ export function SliceFilmstrip({
   isApplyingSliceChanges,
   isAssetLoading,
   navigationAssetIndex,
+  navigationDisabled,
   pendingDeletedSliceIds,
   pendingSliceSortUpdates,
   showSliceEditorPanel,
@@ -461,7 +463,9 @@ export function SliceFilmstrip({
               : isActive
                 ? "border-indigo-600"
                 : "hover:border-white/45",
+            navigationDisabled && "cursor-not-allowed opacity-60",
           )}
+          disabled={navigationDisabled}
           onClick={handleSelectAsset}
         >
           <div
@@ -492,7 +496,7 @@ export function SliceFilmstrip({
         </button>
       );
     },
-    [activeAssetId, handleSelectAsset],
+    [activeAssetId, handleSelectAsset, navigationDisabled],
   );
 
   const filmstripButtons = useMemo(
@@ -537,7 +541,7 @@ export function SliceFilmstrip({
                 : "cursor-not-allowed opacity-60",
               allowEditing && showSliceEditorPanel && "border-indigo-600/70",
             )}
-            disabled={!allowEditing}
+            disabled={!allowEditing || navigationDisabled}
             onClick={onToggleSliceEditorPanel}
           >
             <NextImage src="/logo.png" alt="Anatomy" height={24} width={24} />
@@ -563,10 +567,14 @@ export function SliceFilmstrip({
           </div>
 
           <div className="flex items-center gap-2">
-            <Button size="icon" onClick={onToggleBlockView}>
+            <Button
+              size="icon"
+              disabled={navigationDisabled}
+              onClick={onToggleBlockView}
+            >
               <LayoutGrid />
             </Button>
-            <Button size="icon" onClick={onPrevious}>
+            <Button size="icon" disabled={navigationDisabled} onClick={onPrevious}>
               <ArrowLeft />
             </Button>
             <p className="w-24 pr-1 text-center text-sm font-semibold tabular-nums dark:text-white/85">
@@ -579,7 +587,7 @@ export function SliceFilmstrip({
                 navigationLabel
               )}
             </p>
-            <Button size="icon" onClick={onNext}>
+            <Button size="icon" disabled={navigationDisabled} onClick={onNext}>
               <ArrowRight />
             </Button>
           </div>
@@ -593,7 +601,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Undo"
-                disabled={!canUndoSliceTimeline}
+                disabled={navigationDisabled || !canUndoSliceTimeline}
                 onClick={onUndo}
               >
                 <Undo2 className="size-4" />
@@ -603,7 +611,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Redo"
-                disabled={!canRedoSliceTimeline}
+                disabled={navigationDisabled || !canRedoSliceTimeline}
                 onClick={onRedo}
               >
                 <Redo2 className="size-4" />
@@ -613,7 +621,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete all left from selected"
-                disabled={!canDeleteLeftSlices}
+                disabled={navigationDisabled || !canDeleteLeftSlices}
                 onClick={onDeleteLeft}
               >
                 <DeleteAllLeftIcon className="size-4" />
@@ -623,7 +631,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete all right from selected"
-                disabled={!canDeleteRightSlices}
+                disabled={navigationDisabled || !canDeleteRightSlices}
                 onClick={onDeleteRight}
               >
                 <DeleteAllRightIcon className="size-4" />
@@ -633,7 +641,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete selected slice"
-                disabled={!canDeleteSelectedSlice}
+                disabled={navigationDisabled || !canDeleteSelectedSlice}
                 onClick={onDeleteSelected}
               >
                 <Trash className="size-4" />
@@ -643,7 +651,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Flip slice order"
-                disabled={!canFlipSliceTimeline}
+                disabled={navigationDisabled || !canFlipSliceTimeline}
                 onClick={onFlipOrder}
               >
                 <FlipSliceOrderIcon className="size-4" />
@@ -660,7 +668,9 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="default"
                 disabled={
-                  !hasPendingSliceTimelineChanges || isApplyingSliceChanges
+                  navigationDisabled ||
+                  !hasPendingSliceTimelineChanges ||
+                  isApplyingSliceChanges
                 }
                 onClick={onApplyChanges}
               >
@@ -671,7 +681,7 @@ export function SliceFilmstrip({
             <div
               ref={sliceEditorScrollerRef}
               className="no-scrollbar h-36.25 overflow-x-auto rounded-md bg-black/35 p-2"
-              onWheel={onWheel}
+              onWheel={navigationDisabled ? undefined : onWheel}
             >
               <div
                 className="flex w-max items-start gap-2"

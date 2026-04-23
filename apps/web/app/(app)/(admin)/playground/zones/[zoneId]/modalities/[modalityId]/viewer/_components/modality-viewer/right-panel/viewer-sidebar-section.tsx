@@ -7,17 +7,20 @@ export function ViewerSidebarSection({
   children,
   title,
   className,
+  border = true,
 }: {
   actions?: ReactNode;
   children: ReactNode;
   title: string;
   className?: string;
+  border?: boolean;
 }) {
   return (
     <section
       className={cn(
-        "border-t py-4 first:border-t-0 first:pt-0 dark:border-white/8",
+        "py-4 dark:border-white/8",
         className,
+        border ? "border-t first:border-t-0 first:pt-0" : "",
       )}
     >
       <div className="mb-3 flex items-center justify-between gap-2">

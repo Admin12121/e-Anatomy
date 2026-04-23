@@ -8,7 +8,6 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { LoaderCircleIcon } from "lucide-react";
 
 import Loader from "@/components/ui/loader";
 import type {
@@ -16,7 +15,6 @@ import type {
   ViewerAnnotation,
   ViewerAnnotationPoint,
   ViewerStructure,
-  ViewerStructureGroup,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 import { cn } from "@/lib/utils";
@@ -60,6 +58,8 @@ import { ViewerCanvasMainOverlay } from "./viewer-canvas/main-overlay";
 export type MainInteractionTool = "layers" | "pan" | "zoom";
 export type AreaEditTool = "brush" | "erase";
 
+const AREA_MASK_PREVIEW_OPACITY_MULTIPLIER = 1;
+
 type LabelTextWidthMeasurer = (
   text: string,
   fontSize: number,
@@ -83,7 +83,6 @@ type ViewerCanvasProps = {
   darkMode: boolean;
   draftStructureTitle: string;
   fontScaleMode: FontScaleMode;
-  groupsById: Map<string, ViewerStructureGroup>;
   hoveredAnnotationId: string | null;
   ingestFailureMessage: string | null;
   isIngesting: boolean;
@@ -113,7 +112,6 @@ type ViewerCanvasProps = {
   selectedAnnotationId: string | null;
   showCrossReferences: boolean;
   showLabels: boolean;
-  showLoadingIndicator: boolean;
   showOrientation: boolean;
   stageRef: MutableRefObject<HTMLDivElement | null>;
   structuresById: Map<string, ViewerStructure>;
@@ -140,7 +138,6 @@ export function ViewerCanvas({
   darkMode,
   draftStructureTitle,
   fontScaleMode,
-  groupsById,
   hoveredAnnotationId,
   ingestFailureMessage,
   isIngesting,
@@ -165,7 +162,6 @@ export function ViewerCanvas({
   selectedAnnotationId,
   showCrossReferences,
   showLabels,
-  showLoadingIndicator,
   showOrientation,
   stageRef,
   structuresById,
@@ -175,6 +171,7 @@ export function ViewerCanvas({
   draftDisconnectedPolygons,
 }: ViewerCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const areaMaskPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const brushingRef = useRef(false);
   const lastBrushPointRef = useRef<ViewerAnnotationPoint | null>(null);
   const draggingAnchorRef = useRef<{
@@ -213,8 +210,9 @@ export function ViewerCanvas({
   const [zoomScale, setZoomScale] = useState(1);
   const areaMaskCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const areaMaskContextRef = useRef<CanvasRenderingContext2D | null>(null);
-  const pendingMaskCommitFrameRef = useRef<number | null>(null);
+  const pendingMaskPreviewFrameRef = useRef<number | null>(null);
   const skipMaskSyncRef = useRef(false);
+  const [isAreaBrushActive, setIsAreaBrushActive] = useState(false);
   const [mainStageAnchors, setMainStageAnchors] = useState<
     Map<string, ViewerAnnotationPoint>
   >(() => new Map());
@@ -372,6 +370,7 @@ export function ViewerCanvas({
   const showDraftPointer =
     annotationEditingEnabled &&
     !selectedAnnotationId &&
+    !isAreaPaintMode &&
     draftPointerMovedFromDefault;
   const draftPointerColor =
     annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
@@ -432,6 +431,80 @@ export function ViewerCanvas({
 
     return areaMaskContextRef.current;
   }, []);
+
+  const renderAreaMaskPreview = useCallback(() => {
+    const previewCanvas = areaMaskPreviewCanvasRef.current;
+
+    if (!previewCanvas) {
+      return;
+    }
+
+    if (previewCanvas.width !== AREA_MASK_RESOLUTION) {
+      previewCanvas.width = AREA_MASK_RESOLUTION;
+    }
+
+    if (previewCanvas.height !== AREA_MASK_RESOLUTION) {
+      previewCanvas.height = AREA_MASK_RESOLUTION;
+    }
+
+    const previewContext = previewCanvas.getContext("2d");
+
+    if (!previewContext) {
+      return;
+    }
+
+    previewContext.clearRect(
+      0,
+      0,
+      AREA_MASK_RESOLUTION,
+      AREA_MASK_RESOLUTION,
+    );
+
+    const areaMaskCanvas = areaMaskCanvasRef.current;
+
+    if (canvasMode !== "draw-region" || !areaMaskCanvas) {
+      return;
+    }
+
+    previewContext.save();
+    previewContext.drawImage(areaMaskCanvas, 0, 0);
+    previewContext.globalCompositeOperation = "source-in";
+    previewContext.globalAlpha = clamp(
+      annotationForm.overlayOpacity *
+        overlayOpacity *
+        AREA_MASK_PREVIEW_OPACITY_MULTIPLIER,
+      0,
+      0.92,
+    );
+    previewContext.fillStyle =
+      annotationForm.overlayColorHex.trim() ||
+      annotationForm.colorHex.trim() ||
+      DEFAULT_ANNOTATION_COLOR;
+    previewContext.fillRect(
+      0,
+      0,
+      AREA_MASK_RESOLUTION,
+      AREA_MASK_RESOLUTION,
+    );
+    previewContext.restore();
+  }, [
+    annotationForm.colorHex,
+    annotationForm.overlayColorHex,
+    annotationForm.overlayOpacity,
+    canvasMode,
+    overlayOpacity,
+  ]);
+
+  const scheduleAreaMaskPreview = useCallback(() => {
+    if (pendingMaskPreviewFrameRef.current !== null) {
+      return;
+    }
+
+    pendingMaskPreviewFrameRef.current = window.requestAnimationFrame(() => {
+      pendingMaskPreviewFrameRef.current = null;
+      renderAreaMaskPreview();
+    });
+  }, [renderAreaMaskPreview]);
 
   const syncAreaMaskFromPolygons = useCallback(
     (polygons: ViewerAnnotationPoint[][]) => {
@@ -507,17 +580,6 @@ export function ViewerCanvas({
     onDraftPolygonReplace,
   ]);
 
-  const scheduleAreaMaskCommit = useCallback(() => {
-    if (pendingMaskCommitFrameRef.current !== null) {
-      return;
-    }
-
-    pendingMaskCommitFrameRef.current = window.requestAnimationFrame(() => {
-      pendingMaskCommitFrameRef.current = null;
-      commitAreaMaskToPolygon();
-    });
-  }, [commitAreaMaskToPolygon]);
-
   const stampAreaMaskAtPoint = useCallback(
     (point: ViewerAnnotationPoint) => {
       const areaMaskContext = ensureAreaMaskContext();
@@ -543,13 +605,13 @@ export function ViewerCanvas({
       areaMaskContext.fill();
       areaMaskContext.restore();
 
-      scheduleAreaMaskCommit();
+      scheduleAreaMaskPreview();
     },
     [
       activeAreaCursorRadius,
       areaEditTool,
       ensureAreaMaskContext,
-      scheduleAreaMaskCommit,
+      scheduleAreaMaskPreview,
     ],
   );
 
@@ -666,6 +728,7 @@ export function ViewerCanvas({
 
   useLayoutEffect(() => {
     if (canvasMode !== "draw-region") {
+      renderAreaMaskPreview();
       return;
     }
 
@@ -678,22 +741,45 @@ export function ViewerCanvas({
       annotationForm.polygonPoints,
       ...draftDisconnectedPolygons,
     ]);
+    renderAreaMaskPreview();
   }, [
     draftDisconnectedPolygons,
     annotationForm.polygonPoints,
     canvasMode,
+    renderAreaMaskPreview,
     selectedAnnotationId,
     syncAreaMaskFromPolygons,
   ]);
 
   useLayoutEffect(() => {
     return () => {
-      if (pendingMaskCommitFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingMaskCommitFrameRef.current);
-        pendingMaskCommitFrameRef.current = null;
+      if (pendingMaskPreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingMaskPreviewFrameRef.current);
+        pendingMaskPreviewFrameRef.current = null;
       }
     };
   }, []);
+
+  useEffect(() => {
+    const stageElement = stageRef.current;
+
+    if (!stageElement) {
+      return;
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      onWheelNavigate(event.deltaY);
+    };
+
+    stageElement.addEventListener("wheel", handleWheel, {
+      passive: false,
+    });
+
+    return () => {
+      stageElement.removeEventListener("wheel", handleWheel);
+    };
+  }, [onWheelNavigate, stageRef]);
 
   const commitBrushPoint = useCallback(
     (point: ViewerAnnotationPoint, force = false) => {
@@ -1112,16 +1198,24 @@ export function ViewerCanvas({
 
       <div
         ref={stageRef}
-        className="relative flex min-h-160 h-full items-center justify-center p-8"
-        onDoubleClick={onCanvasDoubleClick}
+        className={cn(
+          "relative flex min-h-160 h-full select-none items-center justify-center p-8",
+          isAreaPaintMode ? "touch-none" : null,
+        )}
+        style={isAreaPaintMode ? { touchAction: "none" } : undefined}
+        onDoubleClick={(event) => {
+          if (isAreaPaintMode) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+
+          onCanvasDoubleClick();
+        }}
         onPointerDown={handleStagePointerDown}
         onPointerMove={handleStagePointerMove}
         onPointerUp={handleStagePointerEnd}
         onPointerCancel={handleStagePointerEnd}
-        onWheel={(event) => {
-          event.preventDefault();
-          onWheelNavigate(event.deltaY);
-        }}
       >
         <div
           className="relative inline-block max-w-full"
@@ -1130,23 +1224,42 @@ export function ViewerCanvas({
             transformOrigin: "center center",
           }}
         >
-          {showLoadingIndicator ? (
-            <div className="absolute right-3 top-3 z-20 flex items-center rounded-full border border-white/12 bg-black/60 px-3 py-1.5 text-xs text-white/75 shadow-lg">
-              <LoaderCircleIcon className="mr-2 size-4 animate-spin" />
-              Loading slice...
-            </div>
-          ) : null}
           <canvas
             ref={canvasRef}
             aria-label={currentAsset.label}
             className="block max-h-[84vh] w-[min(82vh,82vw)] max-w-full object-contain"
+            draggable={false}
+          />
+          <canvas
+            ref={areaMaskPreviewCanvasRef}
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-0 h-full w-full",
+              isAreaPaintMode && isAreaBrushActive ? "block" : "hidden",
+            )}
+            height={AREA_MASK_RESOLUTION}
+            width={AREA_MASK_RESOLUTION}
           />
           <svg
             ref={overlayRef}
-            className="absolute inset-0 h-full w-full"
+            className={cn(
+              "absolute inset-0 h-full w-full",
+              isAreaPaintMode ? "cursor-none touch-none" : null,
+            )}
+            style={isAreaPaintMode ? { touchAction: "none" } : undefined}
             viewBox="0 0 1000 1000"
+            onDoubleClick={(event) => {
+              if (!isAreaPaintMode) {
+                return;
+              }
+
+              event.preventDefault();
+              event.stopPropagation();
+            }}
             onClick={(event) => {
               if (canvasMode === "draw-region") {
+                event.preventDefault();
+                event.stopPropagation();
                 return;
               }
 
@@ -1161,9 +1274,12 @@ export function ViewerCanvas({
                 return;
               }
 
+              event.preventDefault();
+              event.stopPropagation();
               const pointerPoint = resolvePointerPoint(event);
               setAreaToolCursorPoint(pointerPoint);
               brushingRef.current = true;
+              setIsAreaBrushActive(true);
               event.currentTarget.setPointerCapture(event.pointerId);
               commitBrushPoint(pointerPoint, true);
             }}
@@ -1201,6 +1317,7 @@ export function ViewerCanvas({
                 return;
               }
 
+              event.preventDefault();
               setAreaToolCursorPoint(pointerPoint);
 
               if (!brushingRef.current) {
@@ -1253,6 +1370,9 @@ export function ViewerCanvas({
                 return;
               }
 
+              event.preventDefault();
+              event.stopPropagation();
+
               if (event.currentTarget.hasPointerCapture(event.pointerId)) {
                 event.currentTarget.releasePointerCapture(event.pointerId);
               }
@@ -1260,33 +1380,42 @@ export function ViewerCanvas({
               brushingRef.current = false;
               lastBrushPointRef.current = null;
               commitAreaMaskToPolygon();
+              setIsAreaBrushActive(false);
             }}
             onPointerCancel={(event) => {
+              const wasBrushing = brushingRef.current;
+
               if (event.currentTarget.hasPointerCapture(event.pointerId)) {
                 event.currentTarget.releasePointerCapture(event.pointerId);
               }
 
               brushingRef.current = false;
               lastBrushPointRef.current = null;
+              setIsAreaBrushActive(false);
               draggingAnchorRef.current = null;
               draggingPolygonPointRef.current = null;
               draggingLabelRef.current = null;
               setDraggingLabelId(null);
               setAreaToolCursorPoint(null);
-              if (isAreaPaintMode) {
+              if (isAreaPaintMode && wasBrushing) {
+                event.preventDefault();
+                event.stopPropagation();
                 commitAreaMaskToPolygon();
               }
             }}
             onPointerLeave={() => {
+              const wasBrushing = brushingRef.current;
+
               draggingLabelRef.current = null;
               draggingAnchorRef.current = null;
               draggingPolygonPointRef.current = null;
               setDraggingLabelId(null);
 
-              if (isAreaPaintMode) {
+              if (isAreaPaintMode && wasBrushing) {
                 brushingRef.current = false;
                 lastBrushPointRef.current = null;
                 commitAreaMaskToPolygon();
+                setIsAreaBrushActive(false);
               }
 
               setAreaToolCursorPoint(null);
@@ -1310,8 +1439,8 @@ export function ViewerCanvas({
               editLockEnabled={editLockEnabled}
               fitLabelText={fitLabelText}
               fontScaleMode={fontScaleMode}
-              groupsById={groupsById}
               hoveredAnnotationId={hoveredAnnotationId}
+              areaPaintPreviewActive={isAreaBrushActive}
               isAreaPaintMode={isAreaPaintMode}
               measureLabelRectWidth={measureLabelRectWidth}
               onAnnotationHover={onAnnotationHover}
@@ -1342,7 +1471,6 @@ export function ViewerCanvas({
             editLockEnabled={editLockEnabled}
             fitLabelText={fitLabelText}
             fontScaleMode={fontScaleMode}
-            groupsById={groupsById}
             hoveredAnnotationId={hoveredAnnotationId}
             labelLayout={labelLayout}
             measureLabelRectWidth={measureLabelRectWidth}

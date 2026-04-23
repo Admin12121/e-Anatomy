@@ -4,7 +4,6 @@ import {
 import type {
   ViewerAnnotation,
   ViewerStructure,
-  ViewerStructureGroup,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 
@@ -167,7 +166,6 @@ export function createDefaultLabelX(anchorX: number) {
 export async function captureViewerSnapshot({
   annotations,
   asset,
-  groupsById,
   overlayOpacity,
   pinsOnly,
   practiceMode,
@@ -177,7 +175,6 @@ export async function captureViewerSnapshot({
 }: {
   annotations: ViewerAnnotation[];
   asset: ZoneModalityAsset;
-  groupsById: Map<string, ViewerStructureGroup>;
   overlayOpacity: number;
   pinsOnly: boolean;
   practiceMode: boolean;
@@ -203,11 +200,9 @@ export async function captureViewerSnapshot({
       continue;
     }
 
-    const group = structure.groupId ? groupsById.get(structure.groupId) : null;
-    const color =
-      annotation.colorHex || group?.colorHex || DEFAULT_ANNOTATION_COLOR;
-    const overlayColor = annotation.overlayColorHex || color;
-    const leaderColor = annotation.leaderColorHex || color;
+    const color = structure.colorHex || DEFAULT_ANNOTATION_COLOR;
+    const overlayColor = color;
+    const leaderColor = color;
 
     if (annotation.polygonPoints.length >= 3) {
       context.save();

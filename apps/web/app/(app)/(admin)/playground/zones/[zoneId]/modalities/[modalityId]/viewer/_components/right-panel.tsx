@@ -9,6 +9,8 @@ import {
   FlipVertical2 as FlipVertical2Icon,
   GripVertical,
   LoaderCircleIcon,
+  Pen,
+  PenOff,
   PinIcon,
   PlusIcon,
   RotateCcw,
@@ -18,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Group } from "@/components/ui/group";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,7 +37,6 @@ import type {
 } from "@/lib/playground/types";
 import {
   DEFAULT_ANNOTATION_COLOR,
-  DEFAULT_GROUP_COLOR,
   EMPTY_ANNOTATION_FORM,
   type AnnotationFormState,
   type GroupFormState,
@@ -90,6 +92,7 @@ type RightPanelProps = {
   activeWeighting: string;
   annotationForm: AnnotationFormState;
   busy: boolean;
+  canvasMode: ViewerCanvasMode;
   canvasFlipHorizontal: boolean;
   canvasFlipVertical: boolean;
   currentAsset: ZoneModalityAsset | null;
@@ -106,9 +109,10 @@ type RightPanelProps = {
   weightings: string[];
   onAnnotationFormChange: UpdateAnnotationForm;
   onCanvasModeChange: (mode: ViewerCanvasMode) => void;
+  onCancelAnnotationEdit: () => void;
   onClearPolygonDraft: () => void;
-  onDeleteGroup: (groupId: string) => void | Promise<void>;
-  onDeleteStructure: (structureId: string) => void | Promise<void>;
+  onDeleteGroup: (groupId: string) => Promise<void>;
+  onDeleteStructure: (structureId: string) => Promise<void>;
   onFlipCanvasHorizontal: () => void;
   onFlipCanvasVertical: () => void;
   onGroupFormChange: UpdateGroupForm;
@@ -120,11 +124,10 @@ type RightPanelProps = {
   onSaveAnnotation: (options?: {
     structureId?: string;
   }) => void | Promise<void>;
-  onSaveGroup: () => void | Promise<void>;
-  onSaveStructure: () =>
-    | ViewerStructure
-    | null
-    | Promise<ViewerStructure | null>;
+  onSaveGroup: () => Promise<ViewerStructureGroup | null>;
+  onSaveStructure: (options?: {
+    groupId?: string | null;
+  }) => Promise<ViewerStructure | null>;
   onSelectGroup: (groupId: string) => void;
   onSelectStructure: (structureId: string, groupId: string | null) => void;
   onShowLabelsChange: (value: boolean) => void;
@@ -133,12 +136,6 @@ type RightPanelProps = {
   onWeightingChange: (weighting: string) => void;
   handleReset: () => void;
 };
-
-function getCanvasModeFromPartInteraction(
-  mode: PartInteractionMode,
-): ViewerCanvasMode {
-  return mode === "area" ? "draw-region" : "create-label";
-}
 
 function hasPointerPlacementDraft(annotationForm: AnnotationFormState) {
   const epsilon = 0.0005;
@@ -168,6 +165,7 @@ export function ModalityViewerRightPanel({
   activeWeighting,
   annotationForm,
   busy,
+  canvasMode,
   canvasFlipHorizontal,
   canvasFlipVertical,
   currentAsset,
@@ -184,6 +182,7 @@ export function ModalityViewerRightPanel({
   weightings,
   onAnnotationFormChange,
   onCanvasModeChange,
+  onCancelAnnotationEdit,
   onClearPolygonDraft,
   onDeleteGroup,
   onDeleteStructure,
@@ -217,7 +216,8 @@ export function ModalityViewerRightPanel({
     string | null
   >(null);
   const allGroupIds = groups.map((group) => group.id);
-  const masterVisible = visibleGroupIds.length > 0;
+  const allGroupsVisible =
+    allGroupIds.length > 0 && visibleGroupIds.length === allGroupIds.length;
   const selectedAnatomicalPart = selectedAnatomicalPartId
     ? (groupsById.get(selectedAnatomicalPartId) ?? null)
     : null;
@@ -226,10 +226,13 @@ export function ModalityViewerRightPanel({
         (structure) => structure.groupId === selectedAnatomicalPart.id,
       )
     : [];
-  const partColorValue = toColorInputValue(
+  const annotationColorValue = toColorInputValue(
     annotationForm.colorHex,
-    selectedAnatomicalPart?.colorHex ?? DEFAULT_ANNOTATION_COLOR,
+    structureForm.colorHex || DEFAULT_ANNOTATION_COLOR,
   );
+  const placementEditingActive = canvasMode !== "browse";
+  const placementTypeLocked = Boolean(selectedStructureId);
+  const hasPointerDraft = hasPointerPlacementDraft(annotationForm);
 
   const resetPartEditorState = useCallback(() => {
     setShowPartEditorWindow(false);
@@ -241,11 +244,12 @@ export function ModalityViewerRightPanel({
 
   const handlePartColorChange = useCallback(
     (value: string) => {
+      onStructureFormChange("colorHex", value);
       onAnnotationFormChange("colorHex", value);
       onAnnotationFormChange("leaderColorHex", value);
       onAnnotationFormChange("overlayColorHex", value);
     },
-    [onAnnotationFormChange],
+    [onAnnotationFormChange, onStructureFormChange],
   );
 
   useEffect(() => {
@@ -290,32 +294,13 @@ export function ModalityViewerRightPanel({
     );
   }, [showCreatePartFrame, structureForm.learningPoints]);
 
-  useEffect(() => {
-    if (
-      !showCreatePartFrame ||
-      !selectedAnatomicalPart ||
-      selectedStructureId
-    ) {
+  const handleSaveAnatomicalPart = async () => {
+    const savedGroup = await onSaveGroup();
+
+    if (!savedGroup) {
       return;
     }
 
-    const areaColorHex = toColorInputValue(
-      selectedAnatomicalPart.colorHex,
-      DEFAULT_GROUP_COLOR,
-    );
-
-    onAnnotationFormChange("colorHex", areaColorHex);
-    onAnnotationFormChange("leaderColorHex", areaColorHex);
-    onAnnotationFormChange("overlayColorHex", areaColorHex);
-  }, [
-    onAnnotationFormChange,
-    selectedAnatomicalPart,
-    selectedStructureId,
-    showCreatePartFrame,
-  ]);
-
-  const handleSaveAnatomicalPart = async () => {
-    await onSaveGroup();
     onResetGroup();
     setSelectedAnatomicalPartId(null);
   };
@@ -334,7 +319,18 @@ export function ModalityViewerRightPanel({
       "learningPoints",
       `${PART_INTERACTION_MARKER}${nextMode}`,
     );
-    onCanvasModeChange(getCanvasModeFromPartInteraction(nextMode));
+    onCancelAnnotationEdit();
+  };
+
+  const handleEnablePlacementEditing = () => {
+    if (partInteractionMode === "area") {
+      onCanvasModeChange("draw-region");
+      return;
+    }
+
+    onCanvasModeChange(
+      selectedAnnotationId || hasPointerDraft ? "set-anchor" : "create-label",
+    );
   };
 
   const handleDeleteSelectedPart = async () => {
@@ -348,16 +344,26 @@ export function ModalityViewerRightPanel({
     resetPartEditorState();
   };
 
+  const handleDeleteSelectedAnatomicalArea = async () => {
+    if (!selectedAnatomicalPart) {
+      return;
+    }
+
+    await onDeleteGroup(selectedAnatomicalPart.id);
+    onResetGroup();
+    setSelectedAnatomicalPartId(null);
+    setShowCreatePartFrame(false);
+    resetPartEditorState();
+  };
+
   const handleSaveStructurePart = async () => {
     if (!selectedAnatomicalPart) {
       return;
     }
 
-    if (structureForm.groupId !== selectedAnatomicalPart.id) {
-      onStructureFormChange("groupId", selectedAnatomicalPart.id);
-    }
-
-    const savedStructure = await onSaveStructure();
+    const savedStructure = await onSaveStructure({
+      groupId: selectedAnatomicalPart.id,
+    });
 
     if (!savedStructure) {
       return;
@@ -371,7 +377,7 @@ export function ModalityViewerRightPanel({
       await onSaveAnnotation({ structureId: savedStructure.id });
     }
 
-    onCanvasModeChange(getCanvasModeFromPartInteraction(partInteractionMode));
+    onCanvasModeChange("browse");
   };
 
   return (
@@ -407,7 +413,7 @@ export function ModalityViewerRightPanel({
           ) : null}
 
           <ViewerSidebarSection
-            title="Anatomical Parts"
+            title="Anatomical Areas"
             actions={
               <Group className="rounded-md bg-white/6 p-0.5">
                 <Button
@@ -425,7 +431,7 @@ export function ModalityViewerRightPanel({
                 </Button>
                 {!readOnly ? (
                   <Button
-                    aria-label="Show anatomical parts editor"
+                    aria-label="Show anatomical areas editor"
                     type="button"
                     size="icon"
                     variant={showAnatomicalPartsPanel ? "default" : "secondary"}
@@ -455,12 +461,12 @@ export function ModalityViewerRightPanel({
                 type="button"
                 className="flex w-full items-center justify-between px-1 py-1.5 text-sm"
                 onClick={() =>
-                  onVisibleGroupIdsChange(masterVisible ? [] : allGroupIds)
+                  onVisibleGroupIdsChange(allGroupsVisible ? [] : allGroupIds)
                 }
               >
                 <span>Select all</span>
                 <Switch
-                  checked={masterVisible}
+                  checked={allGroupsVisible}
                   onCheckedChange={(checked) =>
                     onVisibleGroupIdsChange(checked ? allGroupIds : [])
                   }
@@ -476,9 +482,7 @@ export function ModalityViewerRightPanel({
                       key={group.id}
                       className={cn(
                         "flex w-full items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-left transition",
-                        masterVisible
-                          ? "hover:bg-white/3"
-                          : "cursor-not-allowed opacity-45",
+                        "hover:bg-white/3",
                       )}
                     >
                       <span className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -514,19 +518,13 @@ export function ModalityViewerRightPanel({
                           >
                             {group.iconName}
                           </span>
-                        ) : (
-                          <span
-                            className="size-2.5 rounded-full"
-                            style={{ backgroundColor: group.colorHex }}
-                          />
-                        )}
+                        ) : null}
                         <span className="truncate text-[15px] leading-5">
                           {group.title}
                         </span>
                       </span>
                       <Switch
                         checked={isVisible}
-                        disabled={!masterVisible}
                         onCheckedChange={(checked) => {
                           onGroupVisibilityChange(group.id, checked);
                         }}
@@ -645,16 +643,24 @@ export function ModalityViewerRightPanel({
                       <LoaderCircleIcon className="size-4 animate-spin" />
                     )}
                   </Button>
-                  <Button
-                    type="button"
-                    variant="destructive"
+                  <DeleteConfirmationDialog
+                    confirmationLabel="Area name"
+                    confirmationValue={selectedAnatomicalPart.title}
+                    descriptionPrefix="Delete this anatomical area and ungroup its linked topics. To confirm, enter the"
                     disabled={busy}
-                    onClick={() =>
-                      void onDeleteGroup(selectedAnatomicalPart.id)
+                    onConfirm={handleDeleteSelectedAnatomicalArea}
+                    placeholder={selectedAnatomicalPart.title}
+                    title="Delete anatomical area"
+                    trigger={
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={busy}
+                      >
+                        <Trash2Icon className="size-4" />
+                      </Button>
                     }
-                  >
-                    <Trash2Icon className="size-4" />
-                  </Button>
+                  />
                 </div>
               ) : null}
             </div>
@@ -769,11 +775,7 @@ export function ModalityViewerRightPanel({
                                 structure.longDescription ?? "",
                               );
                               setPartInteractionMode(interactionMode);
-                              onCanvasModeChange(
-                                getCanvasModeFromPartInteraction(
-                                  interactionMode,
-                                ),
-                              );
+                              onCanvasModeChange("browse");
                             }}
                           >
                             {readOnly ? "Open" : "Edit"}
@@ -811,14 +813,24 @@ export function ModalityViewerRightPanel({
                     )}
                   </Button>
                   {selectedStructureId ? (
-                    <Button
-                      disabled={busy}
-                      type="button"
-                      variant="destructive"
-                      onClick={() => void handleDeleteSelectedPart()}
-                    >
-                      <Trash2Icon className="size-4" />
-                    </Button>
+                    <DeleteConfirmationDialog
+                      confirmationLabel="Part name"
+                      confirmationValue={structureForm.title.trim()}
+                      descriptionPrefix="Delete this anatomical part and all linked pins and areas. To confirm, enter the"
+                      disabled={busy || !structureForm.title.trim()}
+                      onConfirm={handleDeleteSelectedPart}
+                      placeholder={structureForm.title.trim()}
+                      title="Delete anatomical part"
+                      trigger={
+                        <Button
+                          disabled={busy}
+                          type="button"
+                          variant="destructive"
+                        >
+                          <Trash2Icon className="size-4" />
+                        </Button>
+                      }
+                    />
                   ) : null}
                 </div>
               </div>
@@ -839,10 +851,10 @@ export function ModalityViewerRightPanel({
 
                   <div className="space-y-1.5">
                     <div className="text-xs font-medium text-white/70">
-                      Color
+                      Part Color
                     </div>
                     <AnatomicalAreaColorPicker
-                      colorHex={partColorValue}
+                      colorHex={annotationColorValue}
                       onColorChange={handlePartColorChange}
                     />
                   </div>
@@ -853,6 +865,7 @@ export function ModalityViewerRightPanel({
                     </div>
                     <Group className="rounded-md bg-white/6 p-0.5">
                       <Button
+                        disabled={placementTypeLocked}
                         type="button"
                         variant={
                           partInteractionMode === "pointer"
@@ -867,6 +880,7 @@ export function ModalityViewerRightPanel({
                         Pointer
                       </Button>
                       <Button
+                        disabled={placementTypeLocked}
                         type="button"
                         variant={
                           partInteractionMode === "area"
@@ -879,12 +893,39 @@ export function ModalityViewerRightPanel({
                         Area
                       </Button>
                     </Group>
+                    <div className="flex items-center justify-between gap-2">
+                      <Button
+                        type="button"
+                        variant={
+                          placementEditingActive ? "secondary" : "default"
+                        }
+                        onClick={
+                          placementEditingActive
+                            ? onCancelAnnotationEdit
+                            : handleEnablePlacementEditing
+                        }
+                      >
+                        {placementEditingActive ? (
+                          <>
+                            <PenOff className="size-4" />
+                            Cancel edit
+                          </>
+                        ) : (
+                          <>
+                            <Pen className="size-4" />
+                            {partInteractionMode === "area"
+                              ? "Edit area"
+                              : hasPointerDraft || selectedAnnotationId
+                                ? "Edit placement"
+                                : "Place pointer"}
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="space-y-1.5">
-                    <div className="text-xs font-medium text-white/70">
-                      Description and Full Explanation
-                    </div>
+                    <div className="text-xs font-medium">Explanation</div>
 
                     <div className="mt-3 flex items-center justify-between gap-3">
                       <Button
@@ -899,11 +940,6 @@ export function ModalityViewerRightPanel({
                       >
                         Open Editor
                       </Button>
-                      <span className="truncate text-[11px] text-white/50">
-                        {structureForm.longDescription.trim()
-                          ? "Description draft ready"
-                          : "No description draft yet"}
-                      </span>
                     </div>
                   </div>
                 </div>

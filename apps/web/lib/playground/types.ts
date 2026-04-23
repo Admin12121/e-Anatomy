@@ -270,7 +270,6 @@ export type ViewerStructureGroup = {
   slug: string;
   title: string;
   description: string | null;
-  colorHex: string;
   iconName: string | null;
   sortOrder: number;
   isDefaultVisible: boolean;
@@ -283,6 +282,7 @@ export type ViewerStructure = {
   groupId: string | null;
   slug: string;
   title: string;
+  colorHex: string;
   latinName: string | null;
   shortDescription: string | null;
   longDescription: string | null;
@@ -341,7 +341,6 @@ export type ZoneModalityViewerManifest = {
 export type CreateViewerStructureGroupInput = {
   title: string;
   description?: string | null;
-  colorHex?: string | null;
   iconName?: string | null;
   sortOrder?: number | null;
   isDefaultVisible?: boolean | null;
@@ -352,6 +351,7 @@ export type UpdateViewerStructureGroupInput = CreateViewerStructureGroupInput;
 export type CreateViewerStructureInput = {
   groupId?: string | null;
   title: string;
+  colorHex?: string | null;
   latinName?: string | null;
   shortDescription?: string | null;
   longDescription?: string | null;

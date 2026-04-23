@@ -25,6 +25,7 @@ import type {
   ViewerAnnotation,
   ViewerAnnotationPoint,
   ViewerStructure,
+  ViewerStructureGroup,
   ZoneModalityAtlasFrame,
   ZoneModalityAtlasPage,
   ZoneModalityAsset,
@@ -49,7 +50,6 @@ import Loader from "@/components/ui/loader";
 import { ModalityViewerRightPanel } from "./right-panel";
 import {
   DEFAULT_ANNOTATION_COLOR,
-  DEFAULT_GROUP_COLOR,
   EMPTY_ANNOTATION_FORM,
   EMPTY_GROUP_FORM,
   EMPTY_STRUCTURE_FORM,
@@ -81,6 +81,7 @@ import {
   splitMultilineList,
   structureMatchesSearch,
 } from "./modality-viewer/utils";
+import { toColorInputValue } from "./modality-viewer/right-panel/utils";
 
 type NavigationSource =
   | "button"
@@ -132,11 +133,95 @@ const PRELOAD_MAX_LOW_IN_FLIGHT = 2;
 const PRELOAD_HIGH_PRIORITY_RESERVED_SLOTS = 2;
 const FILMSTRIP_SCROLL_DURATION_SECONDS = 0.26;
 const FILMSTRIP_SCROLL_JUMP_THRESHOLD_PX = 1600;
-const LOADING_INDICATOR_DELAY_MS = 260;
-const WHEEL_LOADING_INDICATOR_DELAY_MS = 700;
-const SCRUB_LOADING_INDICATOR_DELAY_MS = 1400;
 const WHEEL_DELTA_THRESHOLD = 120;
 const WHEEL_NAVIGATION_COOLDOWN_MS = 110;
+
+function buildAnnotationFormState({
+  annotation,
+  fallbackColor,
+}: {
+  annotation: ViewerAnnotation | null;
+  fallbackColor: string;
+}): AnnotationFormState {
+  const resolvedColor = toColorInputValue(annotation?.colorHex, fallbackColor);
+
+  return {
+    anchorX: annotation?.anchorX ?? EMPTY_ANNOTATION_FORM.anchorX,
+    anchorY: annotation?.anchorY ?? EMPTY_ANNOTATION_FORM.anchorY,
+    colorHex: resolvedColor,
+    labelX: annotation?.labelX ?? EMPTY_ANNOTATION_FORM.labelX,
+    labelY: annotation?.labelY ?? EMPTY_ANNOTATION_FORM.labelY,
+    leaderColorHex: toColorInputValue(
+      annotation?.leaderColorHex,
+      resolvedColor,
+    ),
+    overlayColorHex: toColorInputValue(
+      annotation?.overlayColorHex,
+      resolvedColor,
+    ),
+    overlayOpacity:
+      annotation?.overlayOpacity ?? EMPTY_ANNOTATION_FORM.overlayOpacity,
+    polygonPoints: annotation?.polygonPoints ?? [],
+  };
+}
+
+function areAnnotationPointsEqual(
+  left: ViewerAnnotationPoint[],
+  right: ViewerAnnotationPoint[],
+) {
+  const epsilon = 0.0005;
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((point, index) => {
+    const other = right[index];
+
+    if (!other) {
+      return false;
+    }
+
+    return (
+      Math.abs(point.x - other.x) <= epsilon &&
+      Math.abs(point.y - other.y) <= epsilon
+    );
+  });
+}
+
+function areAnnotationFormsEqual(
+  left: AnnotationFormState,
+  right: AnnotationFormState,
+) {
+  const epsilon = 0.0005;
+
+  return (
+    Math.abs(left.anchorX - right.anchorX) <= epsilon &&
+    Math.abs(left.anchorY - right.anchorY) <= epsilon &&
+    toColorInputValue(left.colorHex, DEFAULT_ANNOTATION_COLOR).toLowerCase() ===
+      toColorInputValue(right.colorHex, DEFAULT_ANNOTATION_COLOR).toLowerCase() &&
+    Math.abs(left.labelX - right.labelX) <= epsilon &&
+    Math.abs(left.labelY - right.labelY) <= epsilon &&
+    toColorInputValue(
+      left.leaderColorHex,
+      DEFAULT_ANNOTATION_COLOR,
+    ).toLowerCase() ===
+      toColorInputValue(
+        right.leaderColorHex,
+        DEFAULT_ANNOTATION_COLOR,
+      ).toLowerCase() &&
+    toColorInputValue(
+      left.overlayColorHex,
+      DEFAULT_ANNOTATION_COLOR,
+    ).toLowerCase() ===
+      toColorInputValue(
+        right.overlayColorHex,
+        DEFAULT_ANNOTATION_COLOR,
+      ).toLowerCase() &&
+    Math.abs(left.overlayOpacity - right.overlayOpacity) <= epsilon &&
+    areAnnotationPointsEqual(left.polygonPoints, right.polygonPoints)
+  );
+}
 const SCRUB_PREVIEW_CACHE_MAX_ASSET_COUNT = 240;
 
 function areAssetIdOrdersEqual(left: string[], right: string[]) {
@@ -314,9 +399,6 @@ function ModalityViewerShell({
   const [readyAssetIds, setReadyAssetIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [loadingIndicatorAssetId, setLoadingIndicatorAssetId] = useState<
-    string | null
-  >(null);
   const [currentImageElement, setCurrentImageElement] =
     useState<HTMLImageElement | null>(null);
   const [showBlockView, setShowBlockView] = useState(false);
@@ -979,7 +1061,6 @@ function ModalityViewerShell({
 
       if (activeCurrentAssetId === asset.id) {
         navigationRequestIdRef.current += 1;
-        setLoadingIndicatorAssetId(null);
         commitPendingAssetId(null);
         return;
       }
@@ -989,7 +1070,6 @@ function ModalityViewerShell({
       if (readyAssetIdCacheRef.current.has(cacheKey)) {
         const cachedImage = imageElementCacheRef.current.get(cacheKey) ?? null;
         navigationRequestIdRef.current += 1;
-        setLoadingIndicatorAssetId(null);
         commitPendingAssetId(null);
         commitCurrentAssetId(asset.id);
         setCurrentImageElement(cachedImage);
@@ -999,7 +1079,6 @@ function ModalityViewerShell({
       if (source === "scrub") {
         const requestId = navigationRequestIdRef.current + 1;
         navigationRequestIdRef.current = requestId;
-        setLoadingIndicatorAssetId(null);
         commitPendingAssetId(null);
         commitCurrentAssetId(asset.id);
 
@@ -1027,7 +1106,6 @@ function ModalityViewerShell({
 
       const requestId = navigationRequestIdRef.current + 1;
       navigationRequestIdRef.current = requestId;
-      setLoadingIndicatorAssetId(null);
       commitPendingAssetId(asset.id);
 
       void preloadAsset(asset, "high").then(() => {
@@ -1036,7 +1114,6 @@ function ModalityViewerShell({
         }
 
         if (!readyAssetIdCacheRef.current.has(cacheKey)) {
-          setLoadingIndicatorAssetId(null);
           commitPendingAssetId(null);
           return;
         }
@@ -1044,7 +1121,6 @@ function ModalityViewerShell({
         const cachedImage = imageElementCacheRef.current.get(cacheKey) ?? null;
         commitCurrentAssetId(asset.id);
         setCurrentImageElement(cachedImage);
-        setLoadingIndicatorAssetId(null);
         commitPendingAssetId(null);
       });
     },
@@ -1189,6 +1265,43 @@ function ModalityViewerShell({
   const selectedAnnotation = selectedAnnotationId
     ? (annotationsById.get(selectedAnnotationId) ?? null)
     : null;
+  const editableAnnotation =
+    currentAsset &&
+    selectedAnnotation &&
+    selectedAnnotation.assetId === currentAsset.id &&
+    (!selectedStructure ||
+      selectedAnnotation.structureId === selectedStructure.id)
+      ? selectedAnnotation
+      : null;
+  const annotationBaselineForm = useMemo(
+    () =>
+      buildAnnotationFormState({
+        annotation: editableAnnotation,
+        fallbackColor: selectedStructure?.colorHex ?? DEFAULT_ANNOTATION_COLOR,
+      }),
+    [editableAnnotation, selectedStructure?.colorHex],
+  );
+  const hasUnsavedSliceAnnotationChanges = useMemo(() => {
+    if (!currentAsset) {
+      return false;
+    }
+
+    return (
+      draftDisconnectedPolygons.some((polygonPoints) => polygonPoints.length >= 3) ||
+      !areAnnotationFormsEqual(annotationForm, annotationBaselineForm)
+    );
+  }, [
+    annotationForm,
+    annotationBaselineForm,
+    currentAsset,
+    draftDisconnectedPolygons,
+  ]);
+  const sliceInteractionLocked =
+    canvasMode !== "browse" || hasUnsavedSliceAnnotationChanges;
+  const resetAnnotationDraftToBaseline = useCallback(() => {
+    setDraftDisconnectedPolygons([]);
+    setAnnotationForm(annotationBaselineForm);
+  }, [annotationBaselineForm]);
 
   const searchHits = useMemo(() => {
     const query = deferredSearchQuery.trim().toLowerCase();
@@ -1347,6 +1460,7 @@ function ModalityViewerShell({
     }
 
     setStructureForm({
+      colorHex: selectedStructure.colorHex,
       groupId: selectedStructure.groupId ?? "",
       learningPoints: selectedStructure.learningPoints.join("\n"),
       longDescription: selectedStructure.longDescription ?? "",
@@ -1355,69 +1469,16 @@ function ModalityViewerShell({
   }, [selectedStructure]);
 
   useEffect(() => {
-    if (!selectedAnnotation) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setAnnotationForm((current) => {
-        const structure = selectedStructureId
-          ? (structuresById.get(selectedStructureId) ?? null)
-          : null;
-        const group = structure?.groupId
-          ? groupsById.get(structure.groupId)
-          : null;
-        const resolvedColor =
-          current.colorHex.trim() ||
-          group?.colorHex ||
-          DEFAULT_ANNOTATION_COLOR;
-
-        return {
-          ...EMPTY_ANNOTATION_FORM,
-          colorHex: resolvedColor,
-          leaderColorHex: current.leaderColorHex.trim() || resolvedColor,
-          overlayColorHex: current.overlayColorHex.trim() || resolvedColor,
-          overlayOpacity: current.overlayOpacity,
-        };
-      });
-      setDraftDisconnectedPolygons([]);
-      return;
-    }
-
-    const structure = structuresById.get(selectedAnnotation.structureId);
-    const group = structure?.groupId ? groupsById.get(structure.groupId) : null;
-    const resolvedColor =
-      selectedAnnotation.colorHex ??
-      group?.colorHex ??
-      DEFAULT_ANNOTATION_COLOR;
-
-    setAnnotationForm({
-      anchorX: selectedAnnotation.anchorX,
-      anchorY: selectedAnnotation.anchorY,
-      colorHex: resolvedColor,
-      labelX: selectedAnnotation.labelX,
-      labelY: selectedAnnotation.labelY,
-      leaderColorHex: selectedAnnotation.leaderColorHex ?? resolvedColor,
-      overlayColorHex: selectedAnnotation.overlayColorHex ?? resolvedColor,
-      overlayOpacity: selectedAnnotation.overlayOpacity,
-      polygonPoints: selectedAnnotation.polygonPoints,
-    });
-    setDraftDisconnectedPolygons([]);
-  }, [groupsById, selectedAnnotation, selectedStructureId, structuresById]);
-
-  useEffect(() => {
-    if (!currentAsset || !selectedAnnotationId) {
-      return;
-    }
-
-    const activeAnnotation = annotationsById.get(selectedAnnotationId) ?? null;
-
-    if (!activeAnnotation || activeAnnotation.assetId === currentAsset.id) {
-      return;
-    }
-
-    // Slice-specific annotation selection should not leak across slices while
-    // the same anatomical part stays selected.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSelectedAnnotationId(null);
-  }, [annotationsById, currentAsset, selectedAnnotationId]);
+    setAnnotationForm((current) =>
+      areAnnotationFormsEqual(current, annotationBaselineForm)
+        ? current
+        : annotationBaselineForm,
+    );
+    setDraftDisconnectedPolygons((current) =>
+      current.length === 0 ? current : [],
+    );
+  }, [annotationBaselineForm]);
 
   useEffect(() => {
     if (
@@ -1618,35 +1679,6 @@ function ModalityViewerShell({
     visibleGroupIds,
   ]);
 
-  const relatedAssets = useMemo(() => {
-    if (!selectedStructure) {
-      return [];
-    }
-
-    return annotations
-      .filter((annotation) => annotation.structureId === selectedStructure.id)
-      .map((annotation) => {
-        const asset = assetById.get(annotation.assetId);
-
-        if (!asset) {
-          return null;
-        }
-
-        return {
-          annotation,
-          asset,
-        };
-      })
-      .filter(
-        (
-          value,
-        ): value is {
-          annotation: ViewerAnnotation;
-          asset: ZoneModalityAsset;
-        } => Boolean(value),
-      );
-  }, [annotations, assetById, selectedStructure]);
-
   const busy =
     isCreatingAnnotation ||
     isCreatingGroup ||
@@ -1694,10 +1726,6 @@ function ModalityViewerShell({
     data?.modality.name,
     showOrientation,
   ]);
-  const showLoadingIndicator = pendingAsset
-    ? !readyAssetIds.has(pendingImageSource?.cacheKey ?? pendingAsset.id) &&
-      loadingIndicatorAssetId === pendingAsset.id
-    : false;
   const isAssetLoading = pendingAsset
     ? !readyAssetIds.has(pendingImageSource?.cacheKey ?? pendingAsset.id)
     : false;
@@ -1774,31 +1802,6 @@ function ModalityViewerShell({
       };
     }
   }, [currentAsset]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !pendingAsset) {
-      return;
-    }
-
-    if (readyAssetIds.has(pendingImageSource?.cacheKey ?? pendingAsset.id)) {
-      return;
-    }
-
-    const assetId = pendingAsset.id;
-    const delayMs =
-      lastNavigationSourceRef.current === "wheel"
-        ? WHEEL_LOADING_INDICATOR_DELAY_MS
-        : lastNavigationSourceRef.current === "scrub"
-          ? SCRUB_LOADING_INDICATOR_DELAY_MS
-          : LOADING_INDICATOR_DELAY_MS;
-    const timeoutId = window.setTimeout(() => {
-      setLoadingIndicatorAssetId(assetId);
-    }, delayMs);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [pendingAsset, pendingImageSource?.cacheKey, readyAssetIds]);
 
   const centerActiveFilmstripItem = useCallback(
     (scroller: HTMLDivElement | null) => {
@@ -1893,6 +1896,10 @@ function ModalityViewerShell({
       return;
     }
 
+    if (sliceInteractionLocked) {
+      return;
+    }
+
     lastNavigationDirectionRef.current = clamp(
       Math.sign(nextIndex - Math.max(navigationAssetIndex, 0)),
       -1,
@@ -1905,6 +1912,14 @@ function ModalityViewerShell({
     assetId: string,
     source: NavigationSource = "click",
   ) {
+    if (
+      sliceInteractionLocked &&
+      assetId !== currentAsset?.id &&
+      assetId !== pendingAsset?.id
+    ) {
+      return;
+    }
+
     const nextIndex = activeAssets.findIndex((asset) => asset.id === assetId);
 
     if (nextIndex >= 0) {
@@ -1965,11 +1980,27 @@ function ModalityViewerShell({
       return;
     }
 
-    setDraftDisconnectedPolygons([]);
-    updateAnnotationForm("polygonPoints", []);
+    resetAnnotationDraftToBaseline();
   }
 
-  async function handleSaveStructure(): Promise<ViewerStructure | null> {
+  const handleCancelAnnotationEdit = useCallback(() => {
+    resetAnnotationDraftToBaseline();
+    setCanvasMode("browse");
+  }, [resetAnnotationDraftToBaseline]);
+
+  function handleWeightingChange(nextWeighting: string) {
+    if (sliceInteractionLocked) {
+      return;
+    }
+
+    lastNavigationSourceRef.current = "weighting";
+    lastNavigationDirectionRef.current = 0;
+    setActiveWeighting(nextWeighting);
+  }
+
+  async function handleSaveStructure(options?: {
+    groupId?: string | null;
+  }): Promise<ViewerStructure | null> {
     if (readOnly) {
       return null;
     }
@@ -1979,10 +2010,18 @@ function ModalityViewerShell({
       return null;
     }
 
+    const activeGroupId =
+      options?.groupId !== undefined
+        ? (options.groupId?.trim() ?? "")
+        : structureForm.groupId;
     const preservedStructure = selectedStructure;
     const input: CreateViewerStructureInput | UpdateViewerStructureInput = {
       accessLevel: preservedStructure?.accessLevel ?? "free",
-      groupId: structureForm.groupId || null,
+      colorHex: toColorInputValue(
+        structureForm.colorHex,
+        preservedStructure?.colorHex ?? DEFAULT_ANNOTATION_COLOR,
+      ),
+      groupId: activeGroupId || null,
       isPinnedDefault: preservedStructure?.isPinnedDefault ?? true,
       latinName: preservedStructure?.latinName ?? null,
       learningPoints: splitMultilineList(structureForm.learningPoints),
@@ -2048,15 +2087,15 @@ function ModalityViewerShell({
       anchorX: annotationForm.anchorX,
       anchorY: annotationForm.anchorY,
       assetId: currentAsset.id,
-      colorHex: annotationForm.colorHex.trim() || null,
+      colorHex: null,
       isPracticeHidden: annotationDefaults.isPracticeHidden,
       isTargetedDefault: annotationDefaults.isTargetedDefault,
       isVisibleDefault: annotationDefaults.isVisibleDefault,
       labelX: annotationForm.labelX,
       labelY: annotationForm.labelY,
-      leaderColorHex: annotationForm.leaderColorHex.trim() || null,
+      leaderColorHex: null,
       note: annotationDefaults.note,
-      overlayColorHex: annotationForm.overlayColorHex.trim() || null,
+      overlayColorHex: null,
       overlayOpacity: annotationForm.overlayOpacity,
       polygonPoints: annotationForm.polygonPoints,
       structureId: activeStructureId,
@@ -2083,15 +2122,15 @@ function ModalityViewerShell({
         anchorX,
         anchorY,
         assetId: currentAsset.id,
-        colorHex: annotationForm.colorHex.trim() || null,
+        colorHex: null,
         isPracticeHidden: annotationDefaults.isPracticeHidden,
         isTargetedDefault: annotationDefaults.isTargetedDefault,
         isVisibleDefault: annotationDefaults.isVisibleDefault,
         labelX: createDefaultLabelX(anchorX),
         labelY: clamp(anchorY, 0.08, 0.92),
-        leaderColorHex: annotationForm.leaderColorHex.trim() || null,
+        leaderColorHex: null,
         note: annotationDefaults.note,
-        overlayColorHex: annotationForm.overlayColorHex.trim() || null,
+        overlayColorHex: null,
         overlayOpacity: annotationForm.overlayOpacity,
         polygonPoints,
         structureId: activeStructureId,
@@ -2149,20 +2188,19 @@ function ModalityViewerShell({
     }
   }
 
-  async function handleSaveGroup() {
+  async function handleSaveGroup(): Promise<ViewerStructureGroup | null> {
     if (readOnly) {
-      return;
+      return null;
     }
 
     if (!groupForm.title.trim()) {
       toast.error("Group title is required.");
-      return;
+      return null;
     }
 
     const input:
       | CreateViewerStructureGroupInput
       | UpdateViewerStructureGroupInput = {
-      colorHex: selectedGroup?.colorHex ?? DEFAULT_GROUP_COLOR,
       description: selectedGroup?.description ?? null,
       iconName: selectedGroup?.iconName ?? null,
       isDefaultVisible: selectedGroup?.isDefaultVisible ?? true,
@@ -2187,10 +2225,12 @@ function ModalityViewerShell({
           ? Array.from(new Set([...current, group.id]))
           : current,
       );
+      return group;
     } catch (mutationError) {
       toast.error(
         readMutationError(mutationError, "Unable to save the group."),
       );
+      return null;
     }
   }
 
@@ -2202,14 +2242,6 @@ function ModalityViewerShell({
     const group = groupsById.get(groupId);
 
     if (!group) {
-      return;
-    }
-
-    if (
-      !window.confirm(
-        `Delete group "${group.title}"? Topics in this group stay available but become ungrouped.`,
-      )
-    ) {
       return;
     }
 
@@ -2226,6 +2258,7 @@ function ModalityViewerShell({
       toast.error(
         readMutationError(mutationError, "Unable to delete the group."),
       );
+      throw mutationError;
     }
   }
 
@@ -2240,14 +2273,6 @@ function ModalityViewerShell({
       return;
     }
 
-    if (
-      !window.confirm(
-        `Delete topic "${structure.title}"? All linked pins and areas will be removed.`,
-      )
-    ) {
-      return;
-    }
-
     try {
       await deleteStructure({ modalityId, structureId, zoneId }).unwrap();
       if (selectedStructureId === structureId) {
@@ -2259,10 +2284,15 @@ function ModalityViewerShell({
       toast.error(
         readMutationError(mutationError, "Unable to delete the topic."),
       );
+      throw mutationError;
     }
   }
 
   function jumpToStructure(structureId: string) {
+    if (sliceInteractionLocked && structureId !== selectedStructureId) {
+      return;
+    }
+
     const structure = structuresById.get(structureId);
     const nextAnnotation = annotations.find(
       (annotation) => annotation.structureId === structureId,
@@ -2288,12 +2318,6 @@ function ModalityViewerShell({
     });
     lastNavigationDirectionRef.current = 0;
     void requestAssetNavigation(nextAsset, "search");
-  }
-
-  function handleWeightingChange(nextWeighting: string) {
-    lastNavigationSourceRef.current = "weighting";
-    lastNavigationDirectionRef.current = 0;
-    setActiveWeighting(nextWeighting);
   }
 
   function handleMainInteractionToolChange(nextTool: MainInteractionTool) {
@@ -2324,47 +2348,7 @@ function ModalityViewerShell({
       updateAnnotationForm("labelX", nextLabelX);
       updateAnnotationForm("labelY", nextLabelY);
       updateAnnotationForm("polygonPoints", []);
-
-      if (!activeStructureId) {
-        setCanvasMode("browse");
-        return;
-      }
-
-      const nextInput: CreateViewerAnnotationInput = {
-        anchorX: point.x,
-        anchorY: point.y,
-        assetId: currentAsset.id,
-        colorHex: annotationForm.colorHex.trim() || null,
-        isPracticeHidden: false,
-        isTargetedDefault: false,
-        isVisibleDefault: true,
-        labelX: nextLabelX,
-        labelY: nextLabelY,
-        leaderColorHex: annotationForm.leaderColorHex.trim() || null,
-        note: null,
-        overlayColorHex: annotationForm.overlayColorHex.trim() || null,
-        overlayOpacity: annotationForm.overlayOpacity,
-        polygonPoints: [],
-        structureId: activeStructureId,
-        titleOverride: null,
-      };
-
-      void createAnnotation({ input: nextInput, modalityId, zoneId })
-        .unwrap()
-        .then((annotation) => {
-          setSelectedAnnotationId(annotation.id);
-          setSelectedStructureId(annotation.structureId);
-          setCanvasMode("browse");
-          toast.success("Annotation created.");
-        })
-        .catch((mutationError) => {
-          toast.error(
-            readMutationError(
-              mutationError,
-              "Unable to create the annotation.",
-            ),
-          );
-        });
+      setCanvasMode("browse");
       return;
     }
 
@@ -2399,7 +2383,11 @@ function ModalityViewerShell({
       return;
     }
 
-    if (!selectedAnnotationId || canvasMode === "create-label") {
+    if (
+      !selectedAnnotationId ||
+      canvasMode === "browse" ||
+      canvasMode === "create-label"
+    ) {
       return;
     }
 
@@ -2412,7 +2400,7 @@ function ModalityViewerShell({
       return;
     }
 
-    if (canvasMode === "create-label") {
+    if (canvasMode === "browse" || canvasMode === "create-label") {
       return;
     }
 
@@ -2496,18 +2484,8 @@ function ModalityViewerShell({
       return;
     }
 
-    if (canvasMode !== "draw-region") {
-      return;
-    }
-
-    const activeStructureId = selectedStructure?.id ?? selectedStructureId;
-
-    if (!activeStructureId) {
-      setCanvasMode("browse");
-      return;
-    }
-
-    void handleSaveAnnotation();
+    // Painting should only save from the explicit Save button. Double-clicks
+    // are too easy to trigger while brushing and interrupt the stroke.
   }
 
   function handleWheelNavigation(deltaY: number) {
@@ -2553,6 +2531,10 @@ function ModalityViewerShell({
   }
 
   function handleFilmstripHorizontalWheel(event: WheelEvent<HTMLDivElement>) {
+    if (sliceInteractionLocked) {
+      return;
+    }
+
     const scroller = event.currentTarget;
     const horizontalDelta =
       Math.abs(event.deltaX) > Math.abs(event.deltaY)
@@ -2564,7 +2546,6 @@ function ModalityViewerShell({
     }
 
     scroller.scrollLeft += horizontalDelta;
-    event.preventDefault();
     event.stopPropagation();
   }
 
@@ -2599,6 +2580,10 @@ function ModalityViewerShell({
   }
 
   function handleReset() {
+    if (sliceInteractionLocked) {
+      return;
+    }
+
     setCanvasRotationQuarterTurns(0);
     setCanvasFlipHorizontal(false);
     setCanvasFlipVertical(false);
@@ -2887,7 +2872,6 @@ function ModalityViewerShell({
           darkMode={darkMode}
           readOnly={readOnly}
           referenceAssets={referenceAssets}
-          relatedAssets={relatedAssets}
           searchHits={searchHits}
           searchQuery={searchQuery}
           selectedAnnotation={selectedAnnotation}
@@ -2919,7 +2903,6 @@ function ModalityViewerShell({
           ingestFailureMessage={ingestFailureMessage}
           isIngesting={shouldPollViewerData && !hasSliceAssets}
           isPreparingInitialAsset={isPreparingInitialAsset}
-          showLoadingIndicator={showLoadingIndicator}
           overlayOpacity={overlayOpacity}
           overlayRef={overlayRef}
           pinsOnly={pinsOnly}
@@ -2935,7 +2918,6 @@ function ModalityViewerShell({
           mainInteractionTool={mainInteractionTool}
           currentAssetIndex={navigationAssetIndex}
           totalSliceCount={activeAssets.length}
-          groupsById={groupsById}
           structuresById={structuresById}
           visibleAnnotations={visibleAnnotations}
           draftDisconnectedPolygons={draftDisconnectedPolygons}
@@ -2967,12 +2949,17 @@ function ModalityViewerShell({
           mainInteractionTool={mainInteractionTool}
           showControlPanel={showControlPanel}
           crossReferenceToggleDisabled={readOnly}
+          overlayOpacity={annotationForm.overlayOpacity}
           showCrossReferences={effectiveShowCrossReferences}
           showStudyPanel={showStudyPanel}
           onAreaBrushSizeChange={setAreaBrushSize}
+          onAreaDraftReset={clearPolygonDraft}
           onAreaEditToolChange={setAreaEditTool}
           onAreaEraserSizeChange={setAreaEraserSize}
           onMainInteractionToolChange={handleMainInteractionToolChange}
+          onOverlayOpacityChange={(value) =>
+            updateAnnotationForm("overlayOpacity", value)
+          }
           onShowControlPanelChange={setShowControlPanel}
           onShowCrossReferencesChange={setShowCrossReferences}
           onShowStudyPanelChange={setShowStudyPanel}
@@ -3052,6 +3039,7 @@ function ModalityViewerShell({
         isApplyingSliceChanges={isApplyingSliceChanges}
         isAssetLoading={isAssetLoading}
         navigationAssetIndex={navigationAssetIndex}
+        navigationDisabled={sliceInteractionLocked}
         pendingDeletedSliceIds={pendingDeletedSliceIds}
         pendingSliceSortUpdates={pendingSliceSortUpdates}
         showSliceEditorPanel={showSliceEditorPanel}
@@ -3066,10 +3054,20 @@ function ModalityViewerShell({
         onPrevious={handlePreviousAsset}
         onRedo={handleRedoSliceTimeline}
         onSelectAsset={(assetIndex) => navigateToAsset(assetIndex, "click")}
-        onToggleBlockView={() => setShowBlockView((current) => !current)}
-        onToggleSliceEditorPanel={() =>
-          setShowSliceEditorPanel((current) => !current)
-        }
+        onToggleBlockView={() => {
+          if (sliceInteractionLocked) {
+            return;
+          }
+
+          setShowBlockView((current) => !current);
+        }}
+        onToggleSliceEditorPanel={() => {
+          if (sliceInteractionLocked) {
+            return;
+          }
+
+          setShowSliceEditorPanel((current) => !current);
+        }}
         onUndo={handleUndoSliceTimeline}
         onWheel={handleFilmstripHorizontalWheel}
       />
@@ -3079,6 +3077,7 @@ function ModalityViewerShell({
           activeWeighting={activeWeighting}
           annotationForm={annotationForm}
           busy={busy}
+          canvasMode={canvasMode}
           canvasFlipHorizontal={canvasFlipHorizontal}
           canvasFlipVertical={canvasFlipVertical}
           currentAsset={currentAsset}
@@ -3096,6 +3095,7 @@ function ModalityViewerShell({
           handleReset={handleReset}
           onAnnotationFormChange={updateAnnotationForm}
           onCanvasModeChange={setCanvasMode}
+          onCancelAnnotationEdit={handleCancelAnnotationEdit}
           onClearPolygonDraft={clearPolygonDraft}
           onDeleteGroup={handleDeleteGroup}
           onDeleteStructure={handleDeleteStructure}

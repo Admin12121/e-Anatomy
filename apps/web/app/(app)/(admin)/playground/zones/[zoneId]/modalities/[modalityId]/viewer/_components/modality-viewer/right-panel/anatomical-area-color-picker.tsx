@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "@/components/ui/popover";
 
-import { DEFAULT_GROUP_COLOR } from "../../modality-viewer.types";
+import { DEFAULT_ANNOTATION_COLOR } from "../../modality-viewer.types";
 import { toColorInputValue } from "./utils";
 
 type HsvColor = {
@@ -76,7 +76,9 @@ function hsvToHex(color: HsvColor) {
 }
 
 function hexToHsv(hex: string): HsvColor {
-  const normalizedHex = toColorInputValue(hex, DEFAULT_GROUP_COLOR).slice(1);
+  const normalizedHex = toColorInputValue(hex, DEFAULT_ANNOTATION_COLOR).slice(
+    1,
+  );
   const red = parseInt(normalizedHex.slice(0, 2), 16) / 255;
   const green = parseInt(normalizedHex.slice(2, 4), 16) / 255;
   const blue = parseInt(normalizedHex.slice(4, 6), 16) / 255;

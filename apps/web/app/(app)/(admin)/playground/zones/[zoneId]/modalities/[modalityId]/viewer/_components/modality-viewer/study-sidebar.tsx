@@ -106,20 +106,13 @@ export function TriViewStudyPanel({
 export function StructureDrawer({
   darkMode,
   readOnly,
-  relatedAssets,
   selectedAnnotation,
   selectedStructure,
-  onJumpToAsset,
 }: {
   darkMode: boolean;
   readOnly: boolean;
-  relatedAssets: Array<{
-    annotation: ViewerAnnotation;
-    asset: ZoneModalityAsset;
-  }>;
   selectedAnnotation: ViewerAnnotation | null;
   selectedStructure: ViewerStructure;
-  onJumpToAsset: (assetId: string) => void;
 }) {
   void darkMode;
   const isLocked = selectedStructure.accessLevel === "subscription";
@@ -186,37 +179,6 @@ export function StructureDrawer({
       {selectedAnnotation?.note ? (
         <div className="mt-5 rounded-2xl border border-white/8 bg-black/20 p-4 text-sm text-white/65">
           {selectedAnnotation.note}
-        </div>
-      ) : null}
-
-      {relatedAssets.length > 0 ? (
-        <div className="mt-5">
-          <div className="mb-3 text-xs uppercase tracking-[0.2em] text-white/40">
-            In this module
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {relatedAssets.slice(0, 8).map(({ asset, annotation }) => (
-              <button
-                key={annotation.id}
-                type="button"
-                className="overflow-hidden rounded-2xl border border-white/8 bg-black/20 text-left"
-                onClick={() => onJumpToAsset(asset.id)}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  alt={asset.label}
-                  className="aspect-4/3 w-full object-cover"
-                  decoding="async"
-                  fetchPriority="low"
-                  loading="lazy"
-                  src={asset.thumbnailUrl || asset.imageUrl}
-                />
-                <div className="px-3 py-2 text-xs text-white/72">
-                  {asset.label}
-                </div>
-              </button>
-            ))}
-          </div>
         </div>
       ) : null}
     </div>

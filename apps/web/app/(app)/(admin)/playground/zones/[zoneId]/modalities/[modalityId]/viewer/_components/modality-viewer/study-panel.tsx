@@ -18,17 +18,11 @@ type StudySearchHit = {
   structure: ViewerStructure;
 };
 
-type RelatedAsset = {
-  annotation: ViewerAnnotation;
-  asset: ZoneModalityAsset;
-};
-
 type StudyPanelProps = {
   activeAssetId: string | null;
   darkMode: boolean;
   readOnly: boolean;
   referenceAssets: ZoneModalityAsset[];
-  relatedAssets: RelatedAsset[];
   searchHits: StudySearchHit[];
   searchQuery: string;
   selectedAnnotation: ViewerAnnotation | null;
@@ -44,7 +38,6 @@ export function StudyPanel({
   darkMode,
   readOnly,
   referenceAssets,
-  relatedAssets,
   searchHits,
   searchQuery,
   selectedAnnotation,
@@ -109,10 +102,8 @@ export function StudyPanel({
         <StructureDrawer
           darkMode={darkMode}
           readOnly={readOnly}
-          relatedAssets={relatedAssets}
           selectedAnnotation={selectedAnnotation}
           selectedStructure={selectedStructure}
-          onJumpToAsset={onJumpToAsset}
         />
       ) : null}
     </aside>

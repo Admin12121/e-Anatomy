@@ -1135,7 +1135,6 @@ impl PlaygroundService {
 
         let title = normalize_required_name(&input.title, "Structure group title is required")?;
         let description = normalize_optional_text(input.description);
-        let color_hex = normalize_color_hex(input.color_hex, "#38bdf8");
         let icon_name = normalize_optional_text(input.icon_name);
         let sort_order = normalize_sort_order(input.sort_order)?;
         let is_default_visible = input.is_default_visible.unwrap_or(true);
@@ -1151,7 +1150,6 @@ impl PlaygroundService {
                 &slug,
                 &title,
                 description.as_deref(),
-                &color_hex,
                 icon_name.as_deref(),
                 sort_order,
                 is_default_visible,
@@ -1174,7 +1172,6 @@ impl PlaygroundService {
 
         let title = normalize_required_name(&input.title, "Structure group title is required")?;
         let description = normalize_optional_text(input.description);
-        let color_hex = normalize_color_hex(input.color_hex, "#38bdf8");
         let icon_name = normalize_optional_text(input.icon_name);
         let sort_order = normalize_sort_order(input.sort_order)?;
         let is_default_visible = input.is_default_visible.unwrap_or(true);
@@ -1189,7 +1186,6 @@ impl PlaygroundService {
                 user_id,
                 &title,
                 description.as_deref(),
-                &color_hex,
                 icon_name.as_deref(),
                 sort_order,
                 is_default_visible,
@@ -1235,6 +1231,7 @@ impl PlaygroundService {
             .normalize_optional_group_id(account_id, zone_id, modality_id, input.group_id)
             .await?;
         let title = normalize_required_name(&input.title, "Structure title is required")?;
+        let color_hex = normalize_color_hex(input.color_hex, "#6468f0");
         let latin_name = normalize_optional_text(input.latin_name);
         let short_description = normalize_optional_text(input.short_description);
         let long_description = normalize_optional_text(input.long_description);
@@ -1255,6 +1252,7 @@ impl PlaygroundService {
                 group_id,
                 &slug,
                 &title,
+                &color_hex,
                 latin_name.as_deref(),
                 short_description.as_deref(),
                 long_description.as_deref(),
@@ -1284,6 +1282,7 @@ impl PlaygroundService {
             .normalize_optional_group_id(account_id, zone_id, modality_id, input.group_id)
             .await?;
         let title = normalize_required_name(&input.title, "Structure title is required")?;
+        let color_hex = normalize_color_hex(input.color_hex, "#6468f0");
         let latin_name = normalize_optional_text(input.latin_name);
         let short_description = normalize_optional_text(input.short_description);
         let long_description = normalize_optional_text(input.long_description);
@@ -1303,6 +1302,7 @@ impl PlaygroundService {
                 user_id,
                 group_id,
                 &title,
+                &color_hex,
                 latin_name.as_deref(),
                 short_description.as_deref(),
                 long_description.as_deref(),

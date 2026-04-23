@@ -259,7 +259,6 @@ pub struct ViewerStructureGroup {
     pub slug: String,
     pub title: String,
     pub description: Option<String>,
-    pub color_hex: String,
     pub icon_name: Option<String>,
     pub sort_order: i32,
     pub is_default_visible: bool,
@@ -272,7 +271,6 @@ pub struct ViewerStructureGroup {
 pub struct CreateViewerStructureGroupInput {
     pub title: String,
     pub description: Option<String>,
-    pub color_hex: Option<String>,
     pub icon_name: Option<String>,
     pub sort_order: Option<i32>,
     pub is_default_visible: Option<bool>,
@@ -283,7 +281,6 @@ pub struct CreateViewerStructureGroupInput {
 pub struct UpdateViewerStructureGroupInput {
     pub title: String,
     pub description: Option<String>,
-    pub color_hex: Option<String>,
     pub icon_name: Option<String>,
     pub sort_order: Option<i32>,
     pub is_default_visible: Option<bool>,
@@ -296,6 +293,7 @@ pub struct ViewerStructure {
     pub group_id: Option<String>,
     pub slug: String,
     pub title: String,
+    pub color_hex: String,
     pub latin_name: Option<String>,
     pub short_description: Option<String>,
     pub long_description: Option<String>,
@@ -313,6 +311,7 @@ pub struct ViewerStructure {
 pub struct CreateViewerStructureInput {
     pub group_id: Option<String>,
     pub title: String,
+    pub color_hex: Option<String>,
     pub latin_name: Option<String>,
     pub short_description: Option<String>,
     pub long_description: Option<String>,
@@ -328,6 +327,7 @@ pub struct CreateViewerStructureInput {
 pub struct UpdateViewerStructureInput {
     pub group_id: Option<String>,
     pub title: String,
+    pub color_hex: Option<String>,
     pub latin_name: Option<String>,
     pub short_description: Option<String>,
     pub long_description: Option<String>,

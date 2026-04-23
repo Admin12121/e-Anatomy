@@ -10,6 +10,7 @@ export type ViewerCanvasMode =
 export type FontScaleMode = "auto" | "large";
 
 export type StructureFormState = {
+  colorHex: string;
   groupId: string;
   learningPoints: string;
   longDescription: string;
@@ -32,14 +33,14 @@ export type AnnotationFormState = {
   polygonPoints: ViewerAnnotationPoint[];
 };
 
-export const DEFAULT_GROUP_COLOR = "#40d6ff";
-export const DEFAULT_ANNOTATION_COLOR = "#94f8ff";
+export const DEFAULT_ANNOTATION_COLOR = "#6468f0";
 
 export const EMPTY_GROUP_FORM: GroupFormState = {
   title: "",
 };
 
 export const EMPTY_STRUCTURE_FORM: StructureFormState = {
+  colorHex: DEFAULT_ANNOTATION_COLOR,
   groupId: "",
   learningPoints: "",
   longDescription: "",
