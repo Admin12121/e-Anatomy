@@ -1162,40 +1162,38 @@ impl PlaygroundService {
             });
         }
 
-        let mut tx = self.pool.begin().await?;
-        let mut updated_count = 0usize;
-
-        for (asset_id, sort_order) in updates {
-            let result = sqlx::query(
-                r#"
-                UPDATE anatomy_zone_modality_assets AS asset
-                SET
-                    sort_order = $5,
-                    updated_by_user_id = $6,
-                    updated_at = NOW()
-                FROM anatomy_zone_modalities AS modality
-                INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
-                WHERE
-                    zone.account_id = $1
-                    AND modality.zone_id = $2
-                    AND modality.id = $3
-                    AND asset.id = $4
-                    AND asset.modality_id = modality.id
-                "#,
+        let (asset_ids, sort_orders): (Vec<_>, Vec<_>) = updates.into_iter().unzip();
+        let result = sqlx::query(
+            r#"
+            WITH requested_updates(asset_id, sort_order) AS (
+                SELECT * FROM UNNEST($4::uuid[], $5::integer[])
             )
-            .bind(account_id)
-            .bind(zone_id)
-            .bind(modality_id)
-            .bind(asset_id)
-            .bind(sort_order)
-            .bind(user_id)
-            .execute(tx.as_mut())
-            .await?;
+            UPDATE anatomy_zone_modality_assets AS asset
+            SET
+                sort_order = requested_updates.sort_order,
+                updated_by_user_id = $6,
+                updated_at = NOW()
+            FROM requested_updates,
+                anatomy_zone_modalities AS modality
+                INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+            WHERE
+                zone.account_id = $1
+                AND modality.zone_id = $2
+                AND modality.id = $3
+                AND asset.id = requested_updates.asset_id
+                AND asset.modality_id = modality.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(modality_id)
+        .bind(asset_ids)
+        .bind(sort_orders)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
 
-            updated_count += result.rows_affected() as usize;
-        }
-
-        tx.commit().await?;
+        let updated_count = result.rows_affected() as usize;
 
         Ok(ReorderZoneModalityAssetsResponse {
             requested_count,

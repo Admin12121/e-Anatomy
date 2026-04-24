@@ -451,27 +451,6 @@
   }
 }
 
-.transition-overlay {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  display: grid;
-  grid-template-columns: repeat(
-    var(--transition-columns),
-    var(--transition-block-size)
-  );
-  grid-auto-rows: var(--transition-block-size);
-  transform: translate(-50%, -50%);
-  visibility: hidden;
-  pointer-events: none;
-  z-index: 1000000;
-}
-
-.transition-cell {
-  aspect-ratio: 1;
-  background-color: var(--base-300);
-}
-
 @layer utilities {
   .main-container {
     margin-left: auto;

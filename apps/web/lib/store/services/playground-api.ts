@@ -148,6 +148,10 @@ export const playgroundApi = createApi({
           type: "ZoneModalities" as const,
           id: variant.modalityId,
         })),
+        ...input.variants.map((variant) => ({
+          type: "ZoneViewer" as const,
+          id: `VIEWER:${variant.modalityId}`,
+        })),
       ],
       query: ({ zoneId, familyId, input }) => ({
         url: `/playground/zones/${zoneId}/modality-families/${familyId}`,

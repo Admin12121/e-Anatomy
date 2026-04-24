@@ -1,6 +1,5 @@
 "use client";
 
-import { skipToken } from "@reduxjs/toolkit/query";
 import { useRouter } from "next/navigation";
 import {
   useCallback,
@@ -17,7 +16,6 @@ import gsap from "gsap";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { formatModalityWeightingLabel } from "@/lib/playground/modality-options";
 import type {
   CreateViewerAnnotationInput,
   CreateViewerStructureGroupInput,
@@ -29,12 +27,10 @@ import type {
   ViewerAnnotationPoint,
   ViewerStructure,
   ViewerStructureGroup,
-  ZoneModality,
   ZoneModalityAtlasFrame,
   ZoneModalityAtlasPage,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
-import { useGetPublicZoneModalityViewerManifestQuery } from "@/lib/store/services/public-playground-api";
 import {
   useCreateViewerAnnotationMutation,
   useCreateViewerStructureGroupMutation,
@@ -42,7 +38,6 @@ import {
   useDeleteZoneModalityAssetsBulkMutation,
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
-  useGetZoneModalityViewerManifestQuery,
   useReorderZoneModalityAssetsMutation,
   useRebuildZoneModalityAtlasesMutation,
   useUpdateViewerAnnotationMutation,
@@ -66,7 +61,9 @@ import {
 import EmptyParticle from "./empty";
 import { ViewerBlockView } from "./modality-viewer/block-view";
 import { SliceFilmstrip } from "./modality-viewer/slice-filmstrip";
+import { areAssetIdOrdersEqual } from "./modality-viewer/slice-timeline";
 import { StudyPanel } from "./modality-viewer/study-panel";
+import { useViewerManifest } from "./modality-viewer/use-viewer-manifest";
 import { ViewerToolbar } from "./modality-viewer/viewer-toolbar";
 import {
   ViewerCanvas,
@@ -85,6 +82,13 @@ import {
   splitMultilineList,
   structureMatchesSearch,
 } from "./modality-viewer/utils";
+import {
+  createAssetWeightingOptions,
+  createVariantWeightingOptions,
+  filterAssetsByWeighting,
+  findNearestWeightingAsset,
+  getAssetWeightings,
+} from "./modality-viewer/weighting";
 import {
   toColorInputValue,
 } from "./modality-viewer/right-panel/utils";
@@ -115,25 +119,6 @@ type PreloadQueueItem = {
   priority: PreloadPriority;
   resolve: () => void;
 };
-
-type WeightingSelectOption = {
-  label: string;
-  value: string;
-};
-
-const ACTIVE_INGEST_STATUSES = new Set([
-  "queued",
-  "uploaded",
-  "validating",
-  "needs_review",
-  "deriving",
-]);
-
-const TERMINAL_INGEST_STATUSES = new Set([
-  "failed",
-  "ready_for_edit",
-  "cancelled",
-]);
 
 const IMAGE_PRELOAD_RADIUS = 16;
 const IMMEDIATE_PRELOAD_BURST = 6;
@@ -235,74 +220,6 @@ function areAnnotationFormsEqual(
 }
 const SCRUB_PREVIEW_CACHE_MAX_ASSET_COUNT = 240;
 
-function areAssetIdOrdersEqual(left: string[], right: string[]) {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((value, index) => value === right[index]);
-}
-
-function filterAssetsByWeighting(
-  assets: ZoneModalityAsset[],
-  weighting: string,
-) {
-  if (weighting === "all") {
-    return assets;
-  }
-
-  const weightedAssets = assets.filter(
-    (asset) => (asset.weightingCode ?? "all") === weighting,
-  );
-
-  return weightedAssets.length > 0 ? weightedAssets : assets;
-}
-
-function findNearestWeightingAsset(
-  assets: ZoneModalityAsset[],
-  currentAsset: ZoneModalityAsset | null,
-) {
-  if (assets.length === 0) {
-    return null;
-  }
-
-  if (!currentAsset) {
-    return assets[0] ?? null;
-  }
-
-  return assets.reduce<ZoneModalityAsset | null>((nearestAsset, asset) => {
-    if (!nearestAsset) {
-      return asset;
-    }
-
-    const currentDistance = Math.abs(asset.sortOrder - currentAsset.sortOrder);
-    const nearestDistance = Math.abs(
-      nearestAsset.sortOrder - currentAsset.sortOrder,
-    );
-
-    return currentDistance < nearestDistance ? asset : nearestAsset;
-  }, null);
-}
-
-function createVariantWeightingOptions(
-  variants: ZoneModality[],
-): WeightingSelectOption[] {
-  const seenLabels = new Map<string, number>();
-
-  return variants.map((variant) => {
-    const rawLabel = formatModalityWeightingLabel(variant.weightingCode);
-    const baseLabel = rawLabel;
-    const seenCount = seenLabels.get(baseLabel) ?? 0;
-
-    seenLabels.set(baseLabel, seenCount + 1);
-
-    return {
-      label: seenCount === 0 ? baseLabel : `${baseLabel} ${seenCount + 1}`,
-      value: variant.id,
-    };
-  });
-}
-
 function preloadPriorityRank(priority: PreloadPriority) {
   return priority === "high" ? 0 : 1;
 }
@@ -377,43 +294,21 @@ function ModalityViewerShell({
 }: ModalityViewerShellProps) {
   const router = useRouter();
   const readOnly = mode === "public";
-  const [viewerPollingIntervalMs, setViewerPollingIntervalMs] = useState(0);
-
-  const adminViewerQuery = useGetZoneModalityViewerManifestQuery(
-    readOnly
-      ? skipToken
-      : {
-          zoneId,
-          modalityId,
-        },
-    {
-      pollingInterval: viewerPollingIntervalMs,
-      refetchOnFocus: true,
-      refetchOnMountOrArgChange: true,
-      refetchOnReconnect: true,
-    },
-  );
-  const publicViewerQuery = useGetPublicZoneModalityViewerManifestQuery(
-    readOnly
-      ? {
-          modalitySlug,
-          zoneSlug,
-        }
-      : skipToken,
-    {
-      pollingInterval: viewerPollingIntervalMs,
-      refetchOnFocus: true,
-      refetchOnMountOrArgChange: true,
-      refetchOnReconnect: true,
-    },
-  );
-
   const {
     data,
     error,
+    hasSliceAssets,
+    ingestFailureMessage,
     isLoading,
     refetch: refetchViewerManifest,
-  } = readOnly ? publicViewerQuery : adminViewerQuery;
+    shouldPollViewerData,
+  } = useViewerManifest({
+    modalityId,
+    modalitySlug,
+    readOnly,
+    zoneId,
+    zoneSlug,
+  });
   const [createGroup, { isLoading: isCreatingGroup }] =
     useCreateViewerStructureGroupMutation();
   const [updateGroup, { isLoading: isUpdatingGroup }] =
@@ -549,33 +444,6 @@ function ModalityViewerShell({
     () => new Map(modalityVariants.map((variant) => [variant.id, variant])),
     [modalityVariants],
   );
-  const ingestStatus = data?.ingestJob?.status;
-  const hasSliceAssets = useMemo(() => assets.some(isSliceAsset), [assets]);
-  const shouldPollViewerData = useMemo(() => {
-    if (!data || error) {
-      return false;
-    }
-
-    if (ingestStatus && ACTIVE_INGEST_STATUSES.has(ingestStatus)) {
-      return true;
-    }
-
-    if (!hasSliceAssets && data.modality.processingStatus === "processing") {
-      return !ingestStatus || !TERMINAL_INGEST_STATUSES.has(ingestStatus);
-    }
-
-    return false;
-  }, [data, error, hasSliceAssets, ingestStatus]);
-  const ingestFailureMessage = useMemo(() => {
-    if (!data || data.ingestJob?.status !== "failed") {
-      return null;
-    }
-
-    return (
-      data.ingestJob.errorMessage ??
-      "Study intake failed before any slices were produced."
-    );
-  }, [data]);
   const groups = useMemo(
     () => data?.structureGroups ?? [],
     [data?.structureGroups],
@@ -665,21 +533,10 @@ function ModalityViewerShell({
         .filter((asset): asset is ZoneModalityAsset => Boolean(asset)),
     [normalizedSliceTimelineIds, sliceAssetById],
   );
-  const weightings = useMemo<string[]>(() => {
-    const specificValues = Array.from(
-      new Set(
-        orderedSliceAssets.flatMap((asset) =>
-          asset.weightingCode ? [asset.weightingCode] : [],
-        ),
-      ),
-    );
-
-    if (specificValues.length === 0) {
-      return ["all"];
-    }
-
-    return ["all", ...specificValues];
-  }, [orderedSliceAssets]);
+  const weightings = useMemo(
+    () => getAssetWeightings(orderedSliceAssets),
+    [orderedSliceAssets],
+  );
   const activeAssets = useMemo(() => {
     return filterAssetsByWeighting(orderedSliceAssets, activeWeighting);
   }, [activeWeighting, orderedSliceAssets]);
@@ -1455,20 +1312,6 @@ function ModalityViewerShell({
   }, [annotations, assetById, deferredSearchQuery, structures]);
 
   useEffect(() => {
-    const nextInterval = shouldPollViewerData ? 2500 : 0;
-
-    const timeoutId = window.setTimeout(() => {
-      setViewerPollingIntervalMs((current) =>
-        current === nextInterval ? current : nextInterval,
-      );
-    }, 0);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [shouldPollViewerData]);
-
-  useEffect(() => {
     if (!data) {
       return;
     }
@@ -1950,12 +1793,8 @@ function ModalityViewerShell({
     Boolean(pendingWeighting) ||
     isWeightingTransitionPending ||
     Boolean(pendingVariantId);
-  const assetWeightingOptions = useMemo<WeightingSelectOption[]>(
-    () =>
-      weightings.map((weighting) => ({
-        label: formatModalityWeightingLabel(weighting),
-        value: weighting,
-      })),
+  const assetWeightingOptions = useMemo(
+    () => createAssetWeightingOptions(weightings),
     [weightings],
   );
   const usingVariantWeightingOptions = variantWeightingOptions.length > 0;

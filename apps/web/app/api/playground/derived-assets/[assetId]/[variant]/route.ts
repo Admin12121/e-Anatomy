@@ -5,6 +5,7 @@ import { INTERNAL_API_BASE_URL, buildApiUrl } from "@/lib/api/config"
 import { ApiClientError, parseApiError } from "@/lib/api/errors"
 import { requireAdminApiSession } from "@/lib/auth/session"
 import {
+  DERIVED_ASSET_TOKEN_TTL_SECONDS,
   type DerivedAssetVariant,
   verifyDerivedAssetToken,
 } from "@/lib/playground/derived-asset-token"
@@ -38,34 +39,27 @@ export async function GET(request: Request, context: RouteContext) {
   }
 
   const url = new URL(request.url)
-  const accountId = url.searchParams.get("accountId")
-  const userId = url.searchParams.get("userId")
   const token = url.searchParams.get("token")
-  const expiresRaw = url.searchParams.get("expires")
-  const expires = expiresRaw ? Number(expiresRaw) : Number.NaN
-  const hasSignedAccess =
-    Boolean(accountId) &&
-    Boolean(userId) &&
-    Boolean(token) &&
-    verifyDerivedAssetToken({
-      accountId: accountId ?? "",
-      assetId,
-      expires,
-      token: token ?? "",
-      userId: userId ?? "",
-      variant: variant as DerivedAssetVariant,
-    })
+  const signedAssetAccess = token
+    ? verifyDerivedAssetToken({
+        assetId,
+        token,
+        variant: variant as DerivedAssetVariant,
+      })
+    : null
 
-  const result = hasSignedAccess ? null : await requireAdminApiSession(request.headers)
+  const result = signedAssetAccess
+    ? null
+    : await requireAdminApiSession(request.headers)
 
-  if (!hasSignedAccess && !result) {
+  if (!signedAssetAccess && !result) {
     return jsonError(401, "unauthorized", "You are not signed in.")
   }
 
-  const requestUser = hasSignedAccess
+  const requestUser = signedAssetAccess
     ? {
-        apiAccountId: accountId!,
-        id: userId!,
+        apiAccountId: signedAssetAccess.accountId,
+        id: signedAssetAccess.userId,
       }
     : result!.user
   const ifNoneMatch = request.headers.get("if-none-match")
@@ -91,8 +85,8 @@ export async function GET(request: Request, context: RouteContext) {
       },
     )
 
-    const cacheControl = hasSignedAccess
-      ? "private, max-age=31536000, immutable"
+    const cacheControl = signedAssetAccess
+      ? `private, max-age=${DERIVED_ASSET_TOKEN_TTL_SECONDS}, immutable`
       : response.headers.get("cache-control") ?? "private, max-age=86400"
     const contentType =
       response.headers.get("content-type") ?? "application/octet-stream"
@@ -105,6 +99,8 @@ export async function GET(request: Request, context: RouteContext) {
         status: 304,
         headers: {
           "cache-control": cacheControl,
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
           ...(etag ? { etag } : {}),
           ...(lastModified ? { "last-modified": lastModified } : {}),
         },
@@ -120,6 +116,8 @@ export async function GET(request: Request, context: RouteContext) {
       headers: {
         "cache-control": cacheControl,
         "content-type": contentType,
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
         ...(contentLength ? { "content-length": contentLength } : {}),
         ...(etag ? { etag } : {}),
         ...(lastModified ? { "last-modified": lastModified } : {}),

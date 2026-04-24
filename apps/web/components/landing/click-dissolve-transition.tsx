@@ -2,16 +2,21 @@
 
 import { useEffect, useRef, type RefObject } from "react";
 import gsap from "gsap";
+import { toCanvas } from "html-to-image";
 import * as THREE from "three";
 
 import { cn } from "@/lib/utils";
 
 type ClickDissolveTransitionProps = {
   className?: string;
+  onLeaveReady?: () => void;
+  onTransitionComplete?: () => void;
+  phase?: ClickDissolveTransitionPhase;
   runId: number;
   sourceRootRef: RefObject<HTMLElement | null>;
-  targetRootRef: RefObject<HTMLElement | null>;
 };
+
+export type ClickDissolveTransitionPhase = "idle" | "leaving" | "entering";
 
 type ShaderRuntime = {
   camera: THREE.OrthographicCamera;
@@ -138,7 +143,7 @@ const transitionFragmentShader = `
 
     float maxDist = length(vec2(aspect * 0.5, 0.5));
     float normalizedDist = noisyDist / maxDist;
-    float dissolveThreshold = uDissolve * 1.5;
+    float dissolveThreshold = uDissolve * 1.7;
 
     vec2 texelSize = 1.0 / uResolution;
     float edge = sobel(uTexture, uv, texelSize);
@@ -147,7 +152,8 @@ const transitionFragmentShader = `
 
     float dissolveMask = smoothstep(dissolveThreshold - 0.03, dissolveThreshold, normalizedDist);
     vec3 edgeColor = vec3(1.0, 1.0, 1.0);
-    vec3 baseColor = mix(texColor.rgb, vec3(0.0), uGrayscale);
+    vec3 sketchBase = grayscaleColor * 0.26;
+    vec3 baseColor = mix(texColor.rgb, sketchBase, uGrayscale);
     vec3 finalColor = baseColor;
 
     float edgeGlowIntensity = uEdgeIntensity * 2.0;
@@ -356,32 +362,47 @@ function querySceneCanvas(root: HTMLElement | null) {
     return null;
   }
 
-  const canvas = root.querySelector("canvas");
+  const canvases = Array.from(root.querySelectorAll("canvas")).filter((canvas) => {
+    if (canvas.closest("[data-click-dissolve-transition]")) {
+      return false;
+    }
 
-  return canvas instanceof HTMLCanvasElement ? canvas : null;
+    const rect = canvas.getBoundingClientRect();
+    const style = window.getComputedStyle(canvas);
+
+    return (
+      canvas.width > 0 &&
+      canvas.height > 0 &&
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0"
+    );
+  });
+
+  canvases.sort((a, b) => {
+    const aRect = a.getBoundingClientRect();
+    const bRect = b.getBoundingClientRect();
+
+    return bRect.width * bRect.height - aRect.width * aRect.height;
+  });
+
+  return canvases[0] ?? null;
 }
 
-function drawCanvasCover(
+function drawCanvasInViewport(
   context: CanvasRenderingContext2D,
   sourceCanvas: HTMLCanvasElement,
-  width: number,
-  height: number,
 ) {
-  const sourceWidth = sourceCanvas.width || sourceCanvas.clientWidth;
-  const sourceHeight = sourceCanvas.height || sourceCanvas.clientHeight;
+  const rect = sourceCanvas.getBoundingClientRect();
 
-  if (!sourceWidth || !sourceHeight) {
+  if (!rect.width || !rect.height) {
     return;
   }
 
-  const scale = Math.max(width / sourceWidth, height / sourceHeight);
-  const drawWidth = sourceWidth * scale;
-  const drawHeight = sourceHeight * scale;
-  const offsetX = (width - drawWidth) * 0.5;
-  const offsetY = (height - drawHeight) * 0.5;
-
   try {
-    context.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight);
+    context.drawImage(sourceCanvas, rect.left, rect.top, rect.width, rect.height);
   } catch (error) {
     console.warn("Failed to capture transition canvas.", error);
   }
@@ -392,57 +413,8 @@ function drawLandingBackdrop(
   width: number,
   height: number,
 ) {
-  const baseGradient = context.createLinearGradient(0, 0, 0, height);
-  baseGradient.addColorStop(0, "#02060c");
-  baseGradient.addColorStop(1, "#020617");
-  context.fillStyle = baseGradient;
+  context.fillStyle = "#02060c";
   context.fillRect(0, 0, width, height);
-
-  const indigoGlowLeft = context.createRadialGradient(
-    width * 0.18,
-    height * 0.2,
-    0,
-    width * 0.18,
-    height * 0.2,
-    width * 0.34,
-  );
-  indigoGlowLeft.addColorStop(0, "rgba(14,165,233,0.22)");
-  indigoGlowLeft.addColorStop(1, "rgba(14,165,233,0)");
-  context.fillStyle = indigoGlowLeft;
-  context.fillRect(0, 0, width, height);
-
-  const indigoGlowRight = context.createRadialGradient(
-    width * 0.76,
-    height * 0.16,
-    0,
-    width * 0.76,
-    height * 0.16,
-    width * 0.28,
-  );
-  indigoGlowRight.addColorStop(0, "rgba(125,211,252,0.16)");
-  indigoGlowRight.addColorStop(1, "rgba(125,211,252,0)");
-  context.fillStyle = indigoGlowRight;
-  context.fillRect(0, 0, width, height);
-
-  context.save();
-  context.strokeStyle = "rgba(255,255,255,0.035)";
-  context.lineWidth = 1;
-
-  for (let x = 0; x <= width; x += 96) {
-    context.beginPath();
-    context.moveTo(x, 0);
-    context.lineTo(x, height);
-    context.stroke();
-  }
-
-  for (let y = 0; y <= height; y += 96) {
-    context.beginPath();
-    context.moveTo(0, y);
-    context.lineTo(width, y);
-    context.stroke();
-  }
-
-  context.restore();
 }
 
 function drawStageBackdrop(
@@ -450,57 +422,39 @@ function drawStageBackdrop(
   width: number,
   height: number,
 ) {
-  context.fillStyle = "#7e80fc";
+  context.fillStyle = "#141414";
   context.fillRect(0, 0, width, height);
-
-  const topGlow = context.createRadialGradient(
-    width * 0.5,
-    height * 0.1,
-    0,
-    width * 0.5,
-    height * 0.1,
-    width * 0.55,
-  );
-  topGlow.addColorStop(0, "rgba(255,255,255,0.22)");
-  topGlow.addColorStop(1, "rgba(255,255,255,0)");
-  context.fillStyle = topGlow;
-  context.fillRect(0, 0, width, height);
-
-  const centerGlow = context.createRadialGradient(
-    width * 0.5,
-    height * 0.55,
-    0,
-    width * 0.5,
-    height * 0.55,
-    Math.min(width, height) * 0.42,
-  );
-  centerGlow.addColorStop(0, "rgba(255,255,255,0.08)");
-  centerGlow.addColorStop(1, "rgba(255,255,255,0)");
-  context.fillStyle = centerGlow;
-  context.fillRect(0, 0, width, height);
-
-  context.save();
-  context.strokeStyle = "rgba(255,255,255,0.04)";
-  context.lineWidth = 1;
-
-  for (let x = 0; x <= width; x += 96) {
-    context.beginPath();
-    context.moveTo(x, 0);
-    context.lineTo(x, height);
-    context.stroke();
-  }
-
-  for (let y = 0; y <= height; y += 96) {
-    context.beginPath();
-    context.moveTo(0, y);
-    context.lineTo(width, y);
-    context.stroke();
-  }
-
-  context.restore();
 }
 
-function createSnapshotCanvas(root: HTMLElement | null, variant: "source" | "target") {
+function shouldCaptureNode(node: HTMLElement) {
+  const ignoredSelector = [
+    "[data-click-dissolve-transition]",
+    "[data-nextjs-dialog]",
+    "[data-nextjs-dev-tools-button]",
+    ".preloader",
+    ".preloader-backdrop",
+    ".preloader-revealer",
+    "nextjs-portal",
+  ].join(",");
+
+  if (!(node instanceof Element)) {
+    return true;
+  }
+
+  return !node.closest(ignoredSelector);
+}
+
+function getSnapshotRoot(root: HTMLElement | null) {
+  const bounds = root?.getBoundingClientRect();
+
+  if (root && bounds && bounds.width > 0 && bounds.height > 0) {
+    return root;
+  }
+
+  return document.body;
+}
+
+async function createSnapshotCanvas(root: HTMLElement | null, variant: "source" | "target") {
   const width = Math.max(1, window.innerWidth);
   const height = Math.max(1, window.innerHeight);
   const snapshot = document.createElement("canvas");
@@ -513,18 +467,50 @@ function createSnapshotCanvas(root: HTMLElement | null, variant: "source" | "tar
     return snapshot;
   }
 
-  if (variant === "source") {
-    drawLandingBackdrop(context, width, height);
-  } else {
-    drawStageBackdrop(context, width, height);
+  const snapshotRoot = getSnapshotRoot(root);
+
+  try {
+    const domCanvas = await toCanvas(snapshotRoot, {
+      backgroundColor: variant === "source" ? "#02060c" : "#141414",
+      cacheBust: false,
+      canvasHeight: height,
+      canvasWidth: width,
+      filter: shouldCaptureNode,
+      height,
+      pixelRatio: 1,
+      skipAutoScale: true,
+      skipFonts: true,
+      width,
+    });
+
+    context.drawImage(domCanvas, 0, 0, width, height);
+
+    const sceneCanvas = querySceneCanvas(snapshotRoot);
+
+    if (sceneCanvas) {
+      context.save();
+      context.globalAlpha = variant === "source" ? 0.96 : 1;
+      context.globalCompositeOperation = "screen";
+      drawCanvasInViewport(context, sceneCanvas);
+      context.restore();
+    }
+
+    return snapshot;
+  } catch (error) {
+    console.warn("Failed to capture transition DOM snapshot.", error);
   }
 
-  const sceneCanvas = querySceneCanvas(root);
+  const sceneCanvas = querySceneCanvas(snapshotRoot);
 
   if (sceneCanvas) {
     context.save();
+    if (variant === "source") {
+      drawLandingBackdrop(context, width, height);
+    } else {
+      drawStageBackdrop(context, width, height);
+    }
     context.globalAlpha = variant === "source" ? 0.94 : 1;
-    drawCanvasCover(context, sceneCanvas, width, height);
+    drawCanvasInViewport(context, sceneCanvas);
     context.restore();
   }
 
@@ -540,11 +526,15 @@ async function waitForPaint() {
   });
 }
 
+const ROUTE_SWAP_TIME = 0.62;
+
 export function ClickDissolveTransition({
   className,
+  onLeaveReady,
+  onTransitionComplete,
+  phase = "idle",
   runId,
   sourceRootRef,
-  targetRootRef,
 }: ClickDissolveTransitionProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const lowerHostRef = useRef<HTMLDivElement>(null);
@@ -552,6 +542,7 @@ export function ClickDissolveTransition({
   const lowerRuntimeRef = useRef<ShaderRuntime | null>(null);
   const upperRuntimeRef = useRef<ShaderRuntime | null>(null);
   const timelineRef = useRef<gsap.core.Timeline | null>(null);
+  const leaveGateRef = useRef<gsap.core.Tween | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -630,6 +621,7 @@ export function ClickDissolveTransition({
         cancelAnimationFrame(rafIdRef.current);
       }
 
+      leaveGateRef.current?.kill();
       timelineRef.current?.kill();
       disposeRuntime(lowerRuntimeRef.current);
       disposeRuntime(upperRuntimeRef.current);
@@ -639,19 +631,13 @@ export function ClickDissolveTransition({
   }, []);
 
   useEffect(() => {
-    if (!runId) {
+    if (!runId || phase !== "leaving") {
       return;
     }
 
     let cancelled = false;
 
-    const playTransition = async () => {
-      await waitForPaint();
-
-      if (cancelled) {
-        return;
-      }
-
+    const beginTransition = async () => {
       const wrapper = wrapperRef.current;
       const lowerHost = lowerHostRef.current;
       const upperHost = upperHostRef.current;
@@ -665,17 +651,20 @@ export function ClickDissolveTransition({
         !lowerRuntime ||
         !upperRuntime
       ) {
+        onLeaveReady?.();
         return;
       }
 
-      updateRuntimeTexture(
-        upperRuntime,
-        createSnapshotCanvas(sourceRootRef.current, "source"),
+      const sourceSnapshot = await createSnapshotCanvas(
+        sourceRootRef.current,
+        "source",
       );
-      updateRuntimeTexture(
-        lowerRuntime,
-        createSnapshotCanvas(targetRootRef.current, "target"),
-      );
+
+      if (cancelled) {
+        return;
+      }
+
+      updateRuntimeTexture(upperRuntime, sourceSnapshot);
 
       upperRuntime.material.uniforms.uDissolve.value = 0;
       upperRuntime.material.uniforms.uGrayscale.value = 0;
@@ -687,9 +676,11 @@ export function ClickDissolveTransition({
       lowerRuntime.material.uniforms.uEdgeIntensity.value = 0.65;
 
       timelineRef.current?.kill();
+      leaveGateRef.current?.kill();
 
       gsap.set(wrapper, { autoAlpha: 1 });
-      gsap.set([lowerHost, upperHost], { opacity: 1 });
+      gsap.set(lowerHost, { opacity: 0 });
+      gsap.set(upperHost, { opacity: 1 });
 
       timelineRef.current = gsap.timeline({
         defaults: {
@@ -697,22 +688,15 @@ export function ClickDissolveTransition({
         },
         onComplete: () => {
           gsap.set(wrapper, { autoAlpha: 0 });
+          onTransitionComplete?.();
         },
       });
 
       timelineRef.current
         .to(
-          upperRuntime.material.uniforms.uDissolve,
-          {
-            duration: 3.5,
-            value: 1,
-          },
-          0,
-        )
-        .to(
           upperRuntime.material.uniforms.uGrayscale,
           {
-            duration: 1.8,
+            duration: 0.72,
             ease: "power2.inOut",
             value: 1,
           },
@@ -721,47 +705,72 @@ export function ClickDissolveTransition({
         .to(
           upperRuntime.material.uniforms.uEdgeIntensity,
           {
-            duration: 2.1,
+            duration: 0.72,
+            ease: "power2.inOut",
+            value: 0.66,
+          },
+          0,
+        )
+        .to(
+          upperRuntime.material.uniforms.uDissolve,
+          {
+            duration: 2.28,
+            value: 1,
+          },
+          ROUTE_SWAP_TIME,
+        )
+        .to(
+          upperRuntime.material.uniforms.uGrayscale,
+          {
+            duration: 1.4,
+            ease: "power2.inOut",
+            value: 1,
+          },
+          ROUTE_SWAP_TIME,
+        )
+        .to(
+          upperRuntime.material.uniforms.uEdgeIntensity,
+          {
+            duration: 1.4,
             ease: "power2.inOut",
             value: 0.5,
           },
-          0,
+          ROUTE_SWAP_TIME,
         )
         .to(
           upperRuntime.material.uniforms.uEdgeBrightness,
           {
-            duration: 3.1,
+            duration: 2,
             ease: "power2.inOut",
             value: 0,
           },
-          0,
+          ROUTE_SWAP_TIME,
         )
         .to(
           lowerRuntime.material.uniforms.uDarkness,
           {
-            duration: 3.35,
-            ease: "expo.inOut",
+            duration: 2.05,
             value: 0,
           },
-          0,
+          ROUTE_SWAP_TIME,
         )
         .to(
           lowerRuntime.material.uniforms.uGrayscale,
           {
-            duration: 3.05,
+            duration: 1.85,
             ease: "power2.inOut",
             value: 0,
           },
-          0,
+          ROUTE_SWAP_TIME,
         )
         .to(
           lowerRuntime.material.uniforms.uEdgeIntensity,
           {
-            duration: 2.7,
+            duration: 1.72,
             ease: "power2.inOut",
             value: 0,
           },
-          0,
+          ROUTE_SWAP_TIME,
         )
         .to(
           upperHost,
@@ -770,30 +779,88 @@ export function ClickDissolveTransition({
             ease: "power2.out",
             opacity: 0,
           },
-          2.88,
+          2.58,
         )
         .to(
           lowerHost,
           {
-            duration: 0.65,
+            duration: 0.5,
             ease: "power2.out",
             opacity: 0,
           },
-          2.96,
+          2.7,
         );
+
+      timelineRef.current.play(0);
+      leaveGateRef.current = gsap.delayedCall(ROUTE_SWAP_TIME, () => {
+        timelineRef.current?.pause(ROUTE_SWAP_TIME);
+        leaveGateRef.current = null;
+        onLeaveReady?.();
+      });
     };
 
-    void playTransition();
+    void beginTransition();
+
+    return () => {
+      cancelled = true;
+      leaveGateRef.current?.kill();
+      leaveGateRef.current = null;
+    };
+  }, [onLeaveReady, onTransitionComplete, phase, runId, sourceRootRef]);
+
+  useEffect(() => {
+    if (!runId || phase !== "entering") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const finishTransition = async () => {
+      await waitForPaint();
+
+      if (cancelled) {
+        return;
+      }
+
+      const timeline = timelineRef.current;
+      const lowerHost = lowerHostRef.current;
+      const lowerRuntime = lowerRuntimeRef.current;
+
+      if (!timeline || !lowerHost || !lowerRuntime) {
+        onTransitionComplete?.();
+        return;
+      }
+
+      const targetSnapshot = await createSnapshotCanvas(
+        sourceRootRef.current,
+        "target",
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      updateRuntimeTexture(lowerRuntime, targetSnapshot);
+      lowerRuntime.material.uniforms.uDarkness.value = 1;
+      lowerRuntime.material.uniforms.uGrayscale.value = 1;
+      lowerRuntime.material.uniforms.uEdgeIntensity.value = 0.65;
+      gsap.set(lowerHost, { opacity: 1 });
+
+      timeline.play(ROUTE_SWAP_TIME);
+    };
+
+    void finishTransition();
 
     return () => {
       cancelled = true;
     };
-  }, [runId, sourceRootRef, targetRootRef]);
+  }, [onTransitionComplete, phase, runId, sourceRootRef]);
 
   return (
     <div
       ref={wrapperRef}
       aria-hidden="true"
+      data-click-dissolve-transition=""
       className={cn("pointer-events-none absolute inset-0 z-[5]", className)}
     >
       <div ref={lowerHostRef} className="absolute inset-0" />

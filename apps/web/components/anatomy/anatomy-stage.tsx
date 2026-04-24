@@ -29,8 +29,11 @@ import {
   Vector3,
 } from "three";
 
+import { installThreeCompatibilityConsoleFilter } from "@/lib/three/console";
 import type { ZoneAnchor } from "@/lib/playground/types";
 import { cn } from "@/lib/utils";
+
+installThreeCompatibilityConsoleFilter();
 
 type AnatomyLayerId =
   | "body"
