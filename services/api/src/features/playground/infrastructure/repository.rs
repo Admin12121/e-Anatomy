@@ -1,10 +1,12 @@
-use sqlx::{PgPool, types::Json};
+use std::collections::HashMap;
+
+use sqlx::{Executor, PgPool, Postgres, types::Json};
 use uuid::Uuid;
 
 use crate::features::playground::domain::models::{
     ModalityIngestJob, ModalitySourceAsset, PublicZoneModalityListItem, ViewerAnnotation,
     ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneAnchor, ZoneDetail,
-    ZoneListItem, ZoneModality, ZoneModalityAsset,
+    ZoneListItem, ZoneModality, ZoneModalityAsset, ZoneModalityFamily,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -320,27 +322,38 @@ impl PlaygroundRepository {
         pool: &PgPool,
         account_id: Uuid,
         zone_id: Uuid,
-    ) -> Result<Vec<ZoneModality>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, ZoneModalityRow>(
+    ) -> Result<Vec<ZoneModalityFamily>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, ZoneModalityFamilyVariantRow>(
             r#"
             SELECT
-                modality.id::text AS id,
-                modality.slug,
-                modality.name,
-                modality.modality_type,
+                family.id::text AS family_id,
+                family.name AS family_name,
+                family.modality_type AS family_modality_type,
+                family.notes AS family_notes,
+                modality.id::text AS modality_id,
+                modality.family_id::text AS modality_family_id,
+                modality.slug AS modality_slug,
+                modality.name AS modality_name,
+                modality.modality_type AS modality_modality_type,
                 modality.weighting_code,
                 modality.cover_image_url,
                 modality.source_kind,
                 modality.source_label,
                 modality.source_file_count,
                 modality.processing_status,
-                modality.notes,
-                TO_CHAR(modality.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-                TO_CHAR(modality.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
-            FROM anatomy_zone_modalities AS modality
-            INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
-            WHERE zone.account_id = $1 AND modality.zone_id = $2
-            ORDER BY modality.updated_at DESC, modality.name ASC
+                modality.notes AS modality_notes,
+                TO_CHAR(modality.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS modality_created_at,
+                TO_CHAR(modality.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS modality_updated_at
+            FROM anatomy_zone_modality_families AS family
+            INNER JOIN anatomy_zone_modalities AS modality ON modality.family_id = family.id
+            INNER JOIN anatomy_zones AS zone ON zone.id = family.zone_id
+            WHERE zone.account_id = $1 AND family.zone_id = $2
+            ORDER BY
+                GREATEST(family.updated_at, modality.updated_at) DESC,
+                family.name ASC,
+                CASE WHEN modality.processing_status = 'ready' THEN 0 ELSE 1 END,
+                modality.updated_at DESC,
+                modality.created_at ASC
             "#,
         )
         .bind(account_id)
@@ -348,7 +361,7 @@ impl PlaygroundRepository {
         .fetch_all(pool)
         .await?;
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        Ok(group_zone_modality_family_rows(rows))
     }
 
     pub async fn list_public_zone_modalities(
@@ -356,28 +369,36 @@ impl PlaygroundRepository {
         pool: &PgPool,
         zone_id: Uuid,
     ) -> Result<Vec<PublicZoneModalityListItem>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, PublicZoneModalityRow>(
+        let rows = sqlx::query_as::<_, PublicZoneModalityFamilyVariantRow>(
             r#"
             SELECT
-                id::text AS id,
-                slug,
-                name
-            FROM anatomy_zone_modalities
-            WHERE zone_id = $1
-            ORDER BY updated_at DESC, name ASC
+                family.id::text AS family_id,
+                family.name AS family_name,
+                modality.slug AS modality_slug,
+                modality.processing_status
+            FROM anatomy_zone_modality_families AS family
+            INNER JOIN anatomy_zone_modalities AS modality ON modality.family_id = family.id
+            WHERE family.zone_id = $1
+            ORDER BY
+                GREATEST(family.updated_at, modality.updated_at) DESC,
+                family.name ASC,
+                CASE WHEN modality.processing_status = 'ready' THEN 0 ELSE 1 END,
+                modality.updated_at DESC,
+                modality.created_at ASC
             "#,
         )
         .bind(zone_id)
         .fetch_all(pool)
         .await?;
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        Ok(group_public_zone_modality_rows(rows))
     }
 
-    pub async fn create_zone_modality(
+    pub async fn create_zone_modality<'e, E>(
         &self,
-        pool: &PgPool,
+        executor: E,
         zone_id: Uuid,
+        family_id: Uuid,
         user_id: &str,
         slug: &str,
         name: &str,
@@ -389,11 +410,15 @@ impl PlaygroundRepository {
         source_file_count: i32,
         processing_status: &str,
         notes: Option<&str>,
-    ) -> Result<ZoneModality, sqlx::Error> {
+    ) -> Result<ZoneModality, sqlx::Error>
+    where
+        E: Executor<'e, Database = Postgres>,
+    {
         let row = sqlx::query_as::<_, ZoneModalityRow>(
             r#"
             INSERT INTO anatomy_zone_modalities (
                 zone_id,
+                family_id,
                 slug,
                 name,
                 modality_type,
@@ -407,9 +432,10 @@ impl PlaygroundRepository {
                 created_by_user_id,
                 updated_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
             RETURNING
                 id::text AS id,
+                family_id::text AS family_id,
                 slug,
                 name,
                 modality_type,
@@ -425,6 +451,7 @@ impl PlaygroundRepository {
             "#,
         )
         .bind(zone_id)
+        .bind(family_id)
         .bind(slug)
         .bind(name)
         .bind(modality_type)
@@ -436,12 +463,13 @@ impl PlaygroundRepository {
         .bind(processing_status)
         .bind(notes)
         .bind(user_id)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await?;
 
         Ok(row.into())
     }
 
+    #[allow(dead_code)]
     pub async fn update_zone_modality(
         &self,
         pool: &PgPool,
@@ -482,6 +510,7 @@ impl PlaygroundRepository {
                 AND zone.account_id = $1
             RETURNING
                 modality.id::text AS id,
+                modality.family_id::text AS family_id,
                 modality.slug,
                 modality.name,
                 modality.modality_type,
@@ -927,6 +956,7 @@ impl PlaygroundRepository {
             r#"
             SELECT
                 modality.id::text AS id,
+                modality.family_id::text AS family_id,
                 modality.slug,
                 modality.name,
                 modality.modality_type,
@@ -2399,6 +2429,7 @@ impl From<ZoneDetailRow> for ZoneDetail {
 #[derive(Debug, sqlx::FromRow)]
 struct ZoneModalityRow {
     id: String,
+    family_id: String,
     slug: String,
     name: String,
     modality_type: String,
@@ -2417,6 +2448,7 @@ impl From<ZoneModalityRow> for ZoneModality {
     fn from(value: ZoneModalityRow) -> Self {
         Self {
             id: value.id,
+            family_id: value.family_id,
             slug: value.slug,
             name: value.name,
             modality_type: value.modality_type,
@@ -2434,20 +2466,115 @@ impl From<ZoneModalityRow> for ZoneModality {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct PublicZoneModalityRow {
-    id: String,
-    slug: String,
-    name: String,
+struct ZoneModalityFamilyVariantRow {
+    family_id: String,
+    family_name: String,
+    family_modality_type: String,
+    family_notes: Option<String>,
+    modality_id: String,
+    modality_family_id: String,
+    modality_slug: String,
+    modality_name: String,
+    modality_modality_type: String,
+    weighting_code: Option<String>,
+    cover_image_url: Option<String>,
+    source_kind: String,
+    source_label: Option<String>,
+    source_file_count: i32,
+    processing_status: String,
+    modality_notes: Option<String>,
+    modality_created_at: String,
+    modality_updated_at: String,
 }
 
-impl From<PublicZoneModalityRow> for PublicZoneModalityListItem {
-    fn from(value: PublicZoneModalityRow) -> Self {
-        Self {
-            id: value.id,
-            slug: value.slug,
-            name: value.name,
+#[derive(Debug, sqlx::FromRow)]
+struct PublicZoneModalityFamilyVariantRow {
+    family_id: String,
+    family_name: String,
+    modality_slug: String,
+    processing_status: String,
+}
+
+fn group_zone_modality_family_rows(
+    rows: Vec<ZoneModalityFamilyVariantRow>,
+) -> Vec<ZoneModalityFamily> {
+    let mut families: Vec<ZoneModalityFamily> = Vec::new();
+    let mut family_indices = HashMap::<String, usize>::new();
+
+    for row in rows {
+        let is_ready = row.processing_status == "ready";
+        let family_id = row.family_id.clone();
+        let variant = ZoneModality {
+            id: row.modality_id,
+            family_id: row.modality_family_id,
+            slug: row.modality_slug,
+            name: row.modality_name,
+            modality_type: row.modality_modality_type,
+            weighting_code: row.weighting_code,
+            cover_image_url: row.cover_image_url,
+            source_kind: row.source_kind,
+            source_label: row.source_label,
+            source_file_count: row.source_file_count,
+            processing_status: row.processing_status,
+            notes: row.modality_notes,
+            created_at: row.modality_created_at,
+            updated_at: row.modality_updated_at,
+        };
+
+        if let Some(index) = family_indices.get(&family_id).copied() {
+            let family = &mut families[index];
+            family.total_variant_count += 1;
+            if is_ready {
+                family.ready_variant_count += 1;
+            }
+            family.variants.push(variant);
+            continue;
         }
+
+        family_indices.insert(family_id.clone(), families.len());
+        families.push(ZoneModalityFamily {
+            id: family_id,
+            name: row.family_name,
+            modality_type: row.family_modality_type,
+            notes: row.family_notes,
+            ready_variant_count: usize::from(is_ready),
+            total_variant_count: 1,
+            variants: vec![variant],
+        });
     }
+
+    families
+}
+
+fn group_public_zone_modality_rows(
+    rows: Vec<PublicZoneModalityFamilyVariantRow>,
+) -> Vec<PublicZoneModalityListItem> {
+    let mut items: Vec<PublicZoneModalityListItem> = Vec::new();
+    let mut item_indices = HashMap::<String, usize>::new();
+
+    for row in rows {
+        let is_ready = row.processing_status == "ready";
+
+        if let Some(index) = item_indices.get(&row.family_id).copied() {
+            let item = &mut items[index];
+            item.total_variant_count += 1;
+            if is_ready {
+                item.ready_variant_count += 1;
+            }
+            continue;
+        }
+
+        item_indices.insert(row.family_id.clone(), items.len());
+        items.push(PublicZoneModalityListItem {
+            id: row.family_id,
+            slug: row.modality_slug,
+            name: row.family_name,
+            ready_variant_count: usize::from(is_ready),
+            total_variant_count: 1,
+        });
+    }
+
+    items
 }
 
 #[derive(Debug, sqlx::FromRow)]

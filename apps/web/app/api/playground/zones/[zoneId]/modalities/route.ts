@@ -7,7 +7,7 @@ import { serverApiFetch } from "@/lib/api/server"
 import { requireAdminApiSession } from "@/lib/auth/session"
 import type {
   CreateZoneModalityInput,
-  ZoneModalityListResponse,
+  ZoneModalityFamilyListResponse,
 } from "@/lib/playground/types"
 
 export const dynamic = "force-dynamic"
@@ -40,7 +40,7 @@ export async function GET(request: Request, context: RouteContext) {
   const { zoneId } = await context.params
 
   try {
-    const modalities = await serverApiFetch<ZoneModalityListResponse>(
+    const modalities = await serverApiFetch<ZoneModalityFamilyListResponse>(
       `/playground/zones/${zoneId}/modalities`,
       {
         cache: "no-store",

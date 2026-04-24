@@ -15,18 +15,20 @@ import type {
   UpdateViewerStructureGroupInput,
   UpdateViewerStructureInput,
   UpdateZoneModalityAssetInput,
+  UpdateZoneModalityFamilyInput,
   UpdateZoneModalityInput,
   UpdateZoneInput,
   ViewerAnnotation,
   ViewerStructure,
   ViewerStructureGroup,
+  ZoneModalityFamily,
+  ZoneModalityFamilyListResponse,
   ZoneModalityViewerManifest,
   ZoneModalityAsset,
   ZoneModalityAssetListResponse,
   ZoneDetail,
   ZoneListResponse,
   ZoneModality,
-  ZoneModalityListResponse,
 } from "@/lib/playground/types"
 
 export const playgroundApi = createApi({
@@ -76,7 +78,7 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
-    getZoneModalities: builder.query<ZoneModalityListResponse, string>({
+    getZoneModalities: builder.query<ZoneModalityFamilyListResponse, string>({
       providesTags: (result, _error, zoneId) =>
         result
           ? [
@@ -85,6 +87,12 @@ export const playgroundApi = createApi({
                 type: "ZoneModalities" as const,
                 id: item.id,
               })),
+              ...result.items.flatMap((item) =>
+                item.variants.map((variant) => ({
+                  type: "ZoneModalities" as const,
+                  id: variant.id,
+                })),
+              ),
             ]
           : [{ type: "ZoneModalities", id: `LIST:${zoneId}` }],
       query: (zoneId) => `/playground/zones/${zoneId}/modalities`,
@@ -119,6 +127,28 @@ export const playgroundApi = createApi({
       ],
       query: ({ zoneId, modalityId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}`,
+        method: "PATCH",
+        body: input,
+      }),
+    }),
+    updateZoneModalityFamily: builder.mutation<
+      ZoneModalityFamily,
+      {
+        zoneId: string
+        familyId: string
+        input: UpdateZoneModalityFamilyInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { zoneId, familyId, input }) => [
+        { type: "ZoneModalities", id: `LIST:${zoneId}` },
+        { type: "ZoneModalities", id: familyId },
+        ...input.variants.map((variant) => ({
+          type: "ZoneModalities" as const,
+          id: variant.modalityId,
+        })),
+      ],
+      query: ({ zoneId, familyId, input }) => ({
+        url: `/playground/zones/${zoneId}/modality-families/${familyId}`,
         method: "PATCH",
         body: input,
       }),
@@ -445,5 +475,6 @@ export const {
   useUpdateViewerStructureMutation,
   useUpdateZoneMutation,
   useUpdateZoneModalityAssetMutation,
+  useUpdateZoneModalityFamilyMutation,
   useUpdateZoneModalityMutation,
 } = playgroundApi

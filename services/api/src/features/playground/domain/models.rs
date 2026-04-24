@@ -31,6 +31,8 @@ pub struct PublicZoneModalityListItem {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub ready_variant_count: usize,
+    pub total_variant_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +70,7 @@ pub struct UpdateZoneInput {
 #[serde(rename_all = "camelCase")]
 pub struct ZoneModality {
     pub id: String,
+    pub family_id: String,
     pub slug: String,
     pub name: String,
     pub modality_type: String,
@@ -80,6 +83,18 @@ pub struct ZoneModality {
     pub notes: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoneModalityFamily {
+    pub id: String,
+    pub name: String,
+    pub modality_type: String,
+    pub notes: Option<String>,
+    pub ready_variant_count: usize,
+    pub total_variant_count: usize,
+    pub variants: Vec<ZoneModality>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,9 +133,9 @@ pub struct ModalitySourceAsset {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ZoneModalityListResponse {
+pub struct ZoneModalityFamilyListResponse {
     pub total: usize,
-    pub items: Vec<ZoneModality>,
+    pub items: Vec<ZoneModalityFamily>,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,6 +148,7 @@ pub struct PublicZoneModalityListResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateZoneModalityInput {
+    pub family_id: Option<String>,
     pub name: String,
     pub modality_type: String,
     pub weighting_code: Option<String>,
@@ -156,6 +172,22 @@ pub struct UpdateZoneModalityInput {
     pub source_file_count: Option<i32>,
     pub processing_status: Option<String>,
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateZoneModalityFamilyVariantInput {
+    pub modality_id: String,
+    pub weighting_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateZoneModalityFamilyInput {
+    pub name: String,
+    pub modality_type: String,
+    pub notes: Option<String>,
+    pub variants: Vec<UpdateZoneModalityFamilyVariantInput>,
 }
 
 #[derive(Debug, Clone, Serialize)]

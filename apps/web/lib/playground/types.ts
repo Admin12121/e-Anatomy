@@ -75,6 +75,7 @@ export type ModalityProcessingStatus =
 
 export type ZoneModality = {
   id: string;
+  familyId: string;
   slug: string;
   name: string;
   modalityType: ModalityType;
@@ -87,6 +88,16 @@ export type ZoneModality = {
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ZoneModalityFamily = {
+  id: string;
+  name: string;
+  modalityType: ModalityType;
+  notes: string | null;
+  readyVariantCount: number;
+  totalVariantCount: number;
+  variants: ZoneModality[];
 };
 
 export type ModalityIngestJobStatus =
@@ -129,15 +140,18 @@ export type ModalitySourceAsset = {
   createdAt: string;
 };
 
-export type ZoneModalityListResponse = {
+export type ZoneModalityFamilyListResponse = {
   total: number;
-  items: ZoneModality[];
+  items: ZoneModalityFamily[];
 };
 
-export type PublicZoneModalitySummary = Pick<
-  ZoneModality,
-  "id" | "slug" | "name"
->;
+export type PublicZoneModalitySummary = {
+  id: string;
+  slug: string;
+  name: string;
+  readyVariantCount: number;
+  totalVariantCount: number;
+};
 
 export type PublicZoneModalityListResponse = {
   total: number;
@@ -145,6 +159,7 @@ export type PublicZoneModalityListResponse = {
 };
 
 export type CreateZoneModalityInput = {
+  familyId?: string | null;
   name: string;
   modalityType: ModalityType;
   weightingCode?: ModalityWeightingCode | null;
@@ -166,6 +181,18 @@ export type UpdateZoneModalityInput = {
   sourceFileCount?: number | null;
   processingStatus?: ModalityProcessingStatus;
   notes?: string | null;
+};
+
+export type UpdateZoneModalityFamilyVariantInput = {
+  modalityId: string;
+  weightingCode?: ModalityWeightingCode | null;
+};
+
+export type UpdateZoneModalityFamilyInput = {
+  name: string;
+  modalityType: ModalityType;
+  notes?: string | null;
+  variants: UpdateZoneModalityFamilyVariantInput[];
 };
 
 export type ModalityAssetKind =

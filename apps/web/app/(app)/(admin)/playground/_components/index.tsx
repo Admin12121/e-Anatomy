@@ -2,20 +2,12 @@
 
 import dynamic from "next/dynamic";
 import { skipToken } from "@reduxjs/toolkit/query";
-import {
-  LoaderCircleIcon,
-  SaveIcon,
-  Sparkle,
-} from "lucide-react";
+import { LoaderCircleIcon, SaveIcon, Sparkle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { AnatomyStageZone } from "@/components/anatomy/anatomy-stage";
@@ -87,9 +79,8 @@ export function AnatomyPlayground() {
     selectedZoneId && zones.some((zone) => zone.id === selectedZoneId)
       ? selectedZoneId
       : null;
-  const { data: selectedZone, isFetching: isSelectedZoneFetching } = useGetZoneDetailQuery(
-    activeSelectedZoneId ?? skipToken,
-  );
+  const { data: selectedZone, isFetching: isSelectedZoneFetching } =
+    useGetZoneDetailQuery(activeSelectedZoneId ?? skipToken);
 
   function getErrorMessage(error: unknown, fallback: string) {
     if (typeof error === "object" && error !== null) {
@@ -354,7 +345,7 @@ export function AnatomyPlayground() {
                   onSave={handleSaveZoneChanges}
                 />
               ) : (
-                <div className="flex h-20 items-center justify-center gap-2 text-sm text-muted-foreground">
+                <div className="flex h-60 items-center justify-center gap-2 text-sm text-muted-foreground">
                   {isSelectedZoneFetching ? (
                     <LoaderCircleIcon className="size-4 animate-spin" />
                   ) : null}

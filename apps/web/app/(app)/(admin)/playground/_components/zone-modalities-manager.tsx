@@ -1,20 +1,21 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircleIcon,
   FileArchiveIcon,
   ImageUpIcon,
   LoaderCircleIcon,
+  Plus,
   SaveIcon,
-  Trash2Icon,
+  SquareArrowOutUpRight,
+  Trash,
   UploadIcon,
   XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -22,7 +23,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   analyzeModalityUploadFiles,
-  formatSourceKindLabel,
   isLikelyDicomFilename,
   isZipFilename,
   type DetectedModalityUpload,
@@ -31,16 +31,17 @@ import {
 import type {
   ModalityType,
   ModalityWeightingCode,
-  UpdateZoneModalityInput,
+  UpdateZoneModalityFamilyInput,
   ZoneModality,
-  ZoneModalityListResponse,
+  ZoneModalityFamily,
+  ZoneModalityFamilyListResponse,
 } from "@/lib/playground/types";
 import { useAppDispatch } from "@/lib/store/hooks";
 import {
   playgroundApi,
   useDeleteZoneModalityMutation,
   useGetZoneModalitiesQuery,
-  useUpdateZoneModalityMutation,
+  useUpdateZoneModalityFamilyMutation,
 } from "@/lib/store/services/playground-api";
 import { PlaygroundSelect } from "./playground-select";
 import {
@@ -58,8 +59,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import Link from "next/link";
+import { Spinner } from "@/components/ui/spinner";
 
-const EMPTY_MODALITIES: ZoneModality[] = [];
+const EMPTY_MODALITY_FAMILIES: ZoneModalityFamily[] = [];
 
 const MODALITY_TYPE_OPTIONS: Array<{ label: string; value: ModalityType }> = [
   { label: "MRI", value: "mri" },
@@ -92,6 +94,24 @@ const MODALITY_WEIGHTING_OPTIONS: Array<{
 ];
 
 type EditorMode = "create" | "edit";
+type CreateContext =
+  | {
+      kind: "new";
+    }
+  | {
+      kind: "variant";
+      familyId: string;
+      modalityType: ModalityType;
+      name: string;
+      notes: string;
+    };
+
+type ModalityFamilySaveInput = {
+  modalityType: ModalityType;
+  name: string;
+  notes: string;
+  weightingByVariantId: Record<string, ModalityWeightingSelectValue>;
+};
 
 type FileWithRelativePath = File & {
   webkitRelativePath?: string;
@@ -192,7 +212,9 @@ function getClientUploadValidationError(files: File[]) {
       return "A suspicious file name was detected. Upload was blocked.";
     }
 
-    const relativePath = (file as FileWithRelativePath).webkitRelativePath?.trim();
+    const relativePath = (
+      file as FileWithRelativePath
+    ).webkitRelativePath?.trim();
 
     if (relativePath && isSuspiciousUploadPath(relativePath)) {
       return "A suspicious folder path was detected. Upload was blocked.";
@@ -225,19 +247,31 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function formatModalitySourceKindLabel(kind: ZoneModality["sourceKind"]) {
-  if (kind === "manual") {
-    return "Manual metadata";
-  }
-
-  return formatSourceKindLabel(kind);
+function formatModalityVariantCount(count: number) {
+  return `${count} variant${count === 1 ? "" : "s"}`;
 }
 
-function hasActiveModalityIngest(modalities: ZoneModality[]) {
-  return modalities.some(
-    (modality) =>
-      modality.processingStatus === "processing" ||
-      modality.processingStatus === "uploaded",
+function formatFamilyProcessingStatus(family: ZoneModalityFamily) {
+  if (family.totalVariantCount === 1) {
+    return family.variants[0]?.processingStatus.replaceAll("_", " ") ?? "draft";
+  }
+
+  return `${family.readyVariantCount}/${family.totalVariantCount} (ready / total)`;
+}
+
+function buildFamilyWeightingState(family: ZoneModalityFamily) {
+  return Object.fromEntries(
+    family.variants.map((variant) => [variant.id, variant.weightingCode ?? ""]),
+  ) as Record<string, ModalityWeightingSelectValue>;
+}
+
+function hasActiveModalityIngest(families: ZoneModalityFamily[]) {
+  return families.some((family) =>
+    family.variants.some(
+      (modality) =>
+        modality.processingStatus === "processing" ||
+        modality.processingStatus === "uploaded",
+    ),
   );
 }
 
@@ -463,8 +497,15 @@ async function extractFilesFromDroppedItems(
 export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   const dispatch = useAppDispatch();
   const { data, isLoading } = useGetZoneModalitiesQuery(zoneId);
-  const modalities = data?.items ?? EMPTY_MODALITIES;
+  const modalityFamilies = data?.items ?? EMPTY_MODALITY_FAMILIES;
+  const modalities = useMemo(
+    () => modalityFamilies.flatMap((family) => family.variants),
+    [modalityFamilies],
+  );
   const [editorMode, setEditorMode] = useState<EditorMode>("edit");
+  const [createContext, setCreateContext] = useState<CreateContext>({
+    kind: "new",
+  });
   const [activeModalityId, setActiveModalityId] = useState<string | null>(null);
   const [createName, setCreateName] = useState("");
   const [createNotes, setCreateNotes] = useState("");
@@ -485,8 +526,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   const [showReadyPreview, setShowReadyPreview] = useState(false);
   const [uploadProgress, setUploadProgress] =
     useState<StudyUploadProgressState | null>(null);
-  const [updateModality, { isLoading: isUpdating }] =
-    useUpdateZoneModalityMutation();
+  const [updateModalityFamily, { isLoading: isUpdatingFamily }] =
+    useUpdateZoneModalityFamilyMutation();
   const [deleteModality, { isLoading: isDeleting }] =
     useDeleteZoneModalityMutation();
   const dragCounterRef = useRef(0);
@@ -502,9 +543,14 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
         (modality) => modality.id === resolvedActiveModalityId,
       ) ?? null)
     : null;
+  const activeModalityFamily = activeModality
+    ? (modalityFamilies.find((family) =>
+        family.variants.some((variant) => variant.id === activeModality.id),
+      ) ?? null)
+    : null;
   const isPending =
-    isAnalyzingSource || isCreatingFromStudy || isUpdating || isDeleting;
-  const hasActiveIngest = hasActiveModalityIngest(modalities);
+    isAnalyzingSource || isCreatingFromStudy || isUpdatingFamily || isDeleting;
+  const hasActiveIngest = hasActiveModalityIngest(modalityFamilies);
 
   useEffect(() => {
     if (!hasActiveIngest) {
@@ -517,7 +563,9 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
 
     function handleModalitiesEvent(event: MessageEvent<string>) {
       try {
-        const payload = JSON.parse(event.data) as ZoneModalityListResponse;
+        const payload = JSON.parse(
+          event.data,
+        ) as ZoneModalityFamilyListResponse;
         dispatch(
           playgroundApi.util.updateQueryData(
             "getZoneModalities",
@@ -589,9 +637,14 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     };
   }, [isPending, selectedSourceFiles.length]);
 
-  function clearSelectedSource() {
+  function clearSelectedSource(options?: { preserveModalityType?: boolean }) {
+    const preserveModalityType =
+      options?.preserveModalityType ?? createContext.kind === "variant";
+
     setCreateDetectedUpload(null);
-    setCreateModalityTypeOverride("other");
+    if (!preserveModalityType) {
+      setCreateModalityTypeOverride("other");
+    }
     setSelectedSourceLabel(null);
     setSelectedSourceFiles([]);
     setShowReadyPreview(false);
@@ -609,11 +662,17 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     }
   }
 
-  function resetCreateState() {
-    setCreateName("");
-    setCreateNotes("");
+  function resetCreateState(nextContext: CreateContext = { kind: "new" }) {
+    setCreateContext(nextContext);
+    setCreateName(nextContext.kind === "variant" ? nextContext.name : "");
+    setCreateNotes(nextContext.kind === "variant" ? nextContext.notes : "");
+    setCreateModalityTypeOverride(
+      nextContext.kind === "variant" ? nextContext.modalityType : "other",
+    );
     setCreateWeightingCode("");
-    clearSelectedSource();
+    clearSelectedSource({
+      preserveModalityType: nextContext.kind === "variant",
+    });
   }
 
   function startCreateMode() {
@@ -621,8 +680,25 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     resetCreateState();
   }
 
-  function selectModality(modalityId: string) {
-    setActiveModalityId(modalityId);
+  function startVariantCreateMode(family: ZoneModalityFamily) {
+    setEditorMode("create");
+    resetCreateState({
+      kind: "variant",
+      familyId: family.id,
+      modalityType: family.modalityType,
+      name: family.name,
+      notes: family.notes ?? "",
+    });
+  }
+
+  function selectModality(family: ZoneModalityFamily) {
+    const nextActiveVariantId = family.variants.some(
+      (variant) => variant.id === resolvedActiveModalityId,
+    )
+      ? resolvedActiveModalityId
+      : (family.variants[0]?.id ?? null);
+
+    setActiveModalityId(nextActiveVariantId);
     setEditorMode("edit");
   }
 
@@ -652,11 +728,15 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     try {
       const detectedUpload = await analyzeModalityUploadFiles(files);
       setCreateDetectedUpload(detectedUpload);
-      setCreateModalityTypeOverride(detectedUpload.detectedModalityType);
+      if (createContext.kind === "new") {
+        setCreateModalityTypeOverride(detectedUpload.detectedModalityType);
+      }
       setShowReadyPreview(true);
     } catch (error) {
       setCreateDetectedUpload(null);
-      setCreateModalityTypeOverride("other");
+      if (createContext.kind === "new") {
+        setCreateModalityTypeOverride("other");
+      }
       const message =
         error instanceof ModalityUploadValidationError
           ? error.message
@@ -734,6 +814,9 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
         "name",
         createName.trim() || createDetectedUpload.suggestedName,
       );
+      if (createContext.kind === "variant") {
+        formData.append("familyId", createContext.familyId);
+      }
       formData.append("modalityType", createModalityTypeOverride);
       if (createWeightingCode) {
         formData.append("weightingCode", createWeightingCode);
@@ -781,16 +864,38 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
           "getZoneModalities",
           zoneId,
           (draft) => {
-            const existingIndex = draft.items.findIndex(
-              (item) => item.id === createdModality.id,
+            const existingFamily = draft.items.find(
+              (family) => family.id === createdModality.familyId,
             );
 
-            if (existingIndex >= 0) {
-              draft.items[existingIndex] = createdModality;
+            if (existingFamily) {
+              const existingVariantIndex = existingFamily.variants.findIndex(
+                (variant) => variant.id === createdModality.id,
+              );
+
+              if (existingVariantIndex >= 0) {
+                existingFamily.variants[existingVariantIndex] = createdModality;
+              } else {
+                existingFamily.variants.unshift(createdModality);
+                existingFamily.totalVariantCount += 1;
+                if (createdModality.processingStatus === "ready") {
+                  existingFamily.readyVariantCount += 1;
+                }
+              }
+
               return;
             }
 
-            draft.items.unshift(createdModality);
+            draft.items.unshift({
+              id: createdModality.familyId,
+              modalityType: createdModality.modalityType,
+              name: createdModality.name,
+              notes: createdModality.notes,
+              readyVariantCount:
+                createdModality.processingStatus === "ready" ? 1 : 0,
+              totalVariantCount: 1,
+              variants: [createdModality],
+            });
             draft.total += 1;
           },
         ),
@@ -813,24 +918,58 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     }
   }
 
-  async function handleSaveModalityChanges(
-    modality: ZoneModality,
-    input: UpdateZoneModalityInput,
+  async function handleSaveModalityFamilyChanges(
+    family: ZoneModalityFamily,
+    input: ModalityFamilySaveInput,
   ) {
-    try {
-      await updateModality({
-        zoneId,
-        modalityId: modality.id,
-        input,
-      }).unwrap();
+    const nextName = input.name.trim();
+    const nextNotes = input.notes.trim() || null;
+    const hasChanges =
+      nextName !== family.name ||
+      input.modalityType !== family.modalityType ||
+      nextNotes !== (family.notes ?? null) ||
+      family.variants.some(
+        (variant) =>
+          (input.weightingByVariantId[variant.id] || "") !==
+          (variant.weightingCode ?? ""),
+      );
 
-      toast.success("Modality updated.");
+    if (!hasChanges) {
+      return;
+    }
+
+    const nextInput: UpdateZoneModalityFamilyInput = {
+      name: nextName,
+      modalityType: input.modalityType,
+      notes: nextNotes,
+      variants: family.variants.map((variant) => ({
+        modalityId: variant.id,
+        weightingCode: input.weightingByVariantId[variant.id] || null,
+      })),
+    };
+
+    try {
+      await updateModalityFamily({
+        zoneId,
+        familyId: family.id,
+        input: nextInput,
+      }).unwrap();
+      toast.success(
+        family.totalVariantCount === 1
+          ? "Modality updated."
+          : "Modality variants updated.",
+      );
     } catch (error) {
-      toast.error(getErrorMessage(error, "Unable to update the modality."));
+      toast.error(
+        getErrorMessage(error, "Unable to update the modality variants."),
+      );
     }
   }
 
-  async function handleDeleteModality(modality: ZoneModality) {
+  async function handleDeleteModality(
+    modality: ZoneModality,
+    family: ZoneModalityFamily,
+  ) {
     try {
       await deleteModality({
         zoneId,
@@ -838,10 +977,17 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       }).unwrap();
 
       if (activeModalityId === modality.id) {
-        setActiveModalityId(null);
+        const nextActiveVariant = family.variants.find(
+          (variant) => variant.id !== modality.id,
+        );
+        setActiveModalityId(nextActiveVariant?.id ?? null);
       }
 
-      toast.success("Modality deleted.");
+      toast.success(
+        family.variants.length > 1
+          ? "Modality source variant deleted."
+          : "Modality deleted.",
+      );
     } catch (error) {
       toast.error(getErrorMessage(error, "Unable to delete the modality."));
       throw error;
@@ -871,56 +1017,56 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
           <TableHeader>
             <TableRow>
               <TableHead>Modality</TableHead>
-              <TableHead>Source</TableHead>
-              <TableHead className="text-right">Files</TableHead>
+              <TableHead>Variants</TableHead>
+              <TableHead>Type</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-24">
+                <TableCell colSpan={3} className="h-24">
                   <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
                     <LoaderCircleIcon className="size-4 animate-spin" />
                     Loading modalities...
                   </div>
                 </TableCell>
               </TableRow>
-            ) : modalities.length === 0 ? (
+            ) : modalityFamilies.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={3}
                   className="h-24 text-center text-sm text-muted-foreground"
                 >
                   No modalities are attached to this zone yet.
                 </TableCell>
               </TableRow>
             ) : (
-              modalities.map((modality) => {
+              modalityFamilies.map((family) => {
                 const isActive =
                   editorMode === "edit" &&
-                  resolvedActiveModalityId === modality.id;
+                  family.variants.some(
+                    (variant) => variant.id === resolvedActiveModalityId,
+                  );
 
                 return (
                   <TableRow
-                    key={modality.id}
+                    key={family.id}
                     className="cursor-pointer"
                     data-state={isActive ? "selected" : undefined}
-                    onClick={() => selectModality(modality.id)}
+                    onClick={() => selectModality(family)}
                   >
                     <TableCell className="font-medium text-foreground">
-                      {modality.name}
+                      {family.name}
                     </TableCell>
-                    <TableCell>
-                      <Badge>
-                        {formatModalitySourceKindLabel(modality.sourceKind)}
-                      </Badge>
+                    <TableCell className="text-muted-foreground">
+                      {formatModalityVariantCount(family.totalVariantCount)}
                     </TableCell>
-                    <TableCell className="text-right text-muted-foreground">
-                      {modality.sourceFileCount}
+                    <TableCell className="text-muted-foreground">
+                      {family.modalityType}
                     </TableCell>
                     <TableCell className="capitalize text-muted-foreground">
-                      {modality.processingStatus.replaceAll("_", " ")}
+                      {formatFamilyProcessingStatus(family)}
                     </TableCell>
                   </TableRow>
                 );
@@ -933,7 +1079,11 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       {editorMode === "create" ? (
         <Frame>
           <FrameHeader className="p-2">
-            <FrameTitle className="text-base">Attach Source Study</FrameTitle>
+            <FrameTitle className="text-base">
+              {createContext.kind === "variant"
+                ? "Attach Source Variant"
+                : "Attach Source Study"}
+            </FrameTitle>
           </FrameHeader>
           <FramePanel>
             <input
@@ -1063,13 +1213,14 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                 ) : null}
               </Field>
 
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2">
                 <Field>
                   <FieldLabel htmlFor={`modality-name-${zoneId}`}>
                     Modality name
                   </FieldLabel>
                   <Input
                     id={`modality-name-${zoneId}`}
+                    disabled={createContext.kind === "variant"}
                     value={createName}
                     onChange={(event) => setCreateName(event.target.value)}
                     placeholder={
@@ -1087,10 +1238,13 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                     id={`modality-type-${zoneId}`}
                     options={MODALITY_TYPE_OPTIONS}
                     value={createModalityTypeOverride}
+                    disabled={createContext.kind === "variant"}
                     onValueChange={setCreateModalityTypeOverride}
                   />
                 </Field>
+              </div>
 
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <Field>
                   <FieldLabel htmlFor={`modality-weighting-${zoneId}`}>
                     Weighting
@@ -1110,6 +1264,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                 </FieldLabel>
                 <Textarea
                   id={`modality-notes-${zoneId}`}
+                  disabled={createContext.kind === "variant"}
                   value={createNotes}
                   onChange={(event) => setCreateNotes(event.target.value)}
                   placeholder="Internal guidance about this uploaded study or series."
@@ -1128,7 +1283,9 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                 ) : (
                   <FileArchiveIcon />
                 )}
-                Create modality draft
+                {createContext.kind === "variant"
+                  ? "Create source variant"
+                  : "Create modality draft"}
               </Button>
               <Button
                 type="button"
@@ -1142,18 +1299,26 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                 Cancel
               </Button>
             </div>
-
           </FramePanel>
         </Frame>
       ) : (
+        activeModalityFamily &&
         activeModality && (
           <ZoneModalityEditorCard
-            key={`modality-editor-${activeModality.id}`}
-            modality={activeModality}
+            key={`modality-editor-${activeModalityFamily.id}-${activeModalityFamily.variants
+              .map(
+                (variant) =>
+                  `${variant.id}:${variant.name}:${variant.modalityType}:${variant.weightingCode ?? ""}:${variant.notes ?? ""}:${variant.updatedAt}`,
+              )
+              .join("|")}`}
+            activeVariantId={activeModality.id}
+            family={activeModalityFamily}
+            onActiveVariantChange={setActiveModalityId}
+            onAddVariant={startVariantCreateMode}
             onDelete={handleDeleteModality}
             pending={isPending}
             zoneId={zoneId}
-            onSave={handleSaveModalityChanges}
+            onSave={handleSaveModalityFamilyChanges}
           />
         )
       )}
@@ -1162,38 +1327,58 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
 }
 
 function ZoneModalityEditorCard({
-  modality,
+  activeVariantId,
+  family,
+  onActiveVariantChange,
+  onAddVariant,
   onDelete,
   onSave,
   pending,
   zoneId,
 }: {
-  modality: ZoneModality;
-  onDelete: (modality: ZoneModality) => Promise<void>;
-  onSave: (
+  activeVariantId: string;
+  family: ZoneModalityFamily;
+  onActiveVariantChange: (modalityId: string) => void;
+  onAddVariant: (family: ZoneModalityFamily) => void;
+  onDelete: (
     modality: ZoneModality,
-    input: UpdateZoneModalityInput,
+    family: ZoneModalityFamily,
+  ) => Promise<void>;
+  onSave: (
+    family: ZoneModalityFamily,
+    input: ModalityFamilySaveInput,
   ) => Promise<void>;
   pending: boolean;
   zoneId: string;
 }) {
-  const [name, setName] = useState(modality.name);
+  const [name, setName] = useState(family.name);
   const [modalityType, setModalityType] = useState<ModalityType>(
-    modality.modalityType,
+    family.modalityType,
   );
-  const [weightingCode, setWeightingCode] =
-    useState<ModalityWeightingSelectValue>(modality.weightingCode ?? "");
-  const [notes, setNotes] = useState(modality.notes ?? "");
-  const isViewerReady = modality.processingStatus === "ready";
+  const [notes, setNotes] = useState(family.notes ?? "");
+  const [weightingByVariantId, setWeightingByVariantId] = useState<
+    Record<string, ModalityWeightingSelectValue>
+  >(() => buildFamilyWeightingState(family));
+  const activeVariant =
+    family.variants.find((variant) => variant.id === activeVariantId) ??
+    family.variants[0] ??
+    null;
+  const isViewerReady = activeVariant?.processingStatus === "ready";
   const isViewerPreparing =
-    modality.processingStatus === "uploaded" ||
-    modality.processingStatus === "processing";
-  const viewerHref = `/playground/zones/${zoneId}/modalities/${modality.id}/viewer`;
+    activeVariant?.processingStatus === "uploaded" ||
+    activeVariant?.processingStatus === "processing";
+  const viewerHref = activeVariant
+    ? `/playground/zones/${zoneId}/modalities/${activeVariant.id}/viewer`
+    : null;
   const hasChanges =
-    name.trim() !== modality.name ||
-    modalityType !== modality.modalityType ||
-    weightingCode !== (modality.weightingCode ?? "") ||
-    notes.trim() !== (modality.notes ?? "");
+    name.trim() !== family.name ||
+    modalityType !== family.modalityType ||
+    notes.trim() !== (family.notes ?? "") ||
+    family.variants.some(
+      (variant) =>
+        (weightingByVariantId[variant.id] ?? "") !==
+        (variant.weightingCode ?? ""),
+    );
 
   async function handleSave() {
     const nextName = name.trim();
@@ -1203,117 +1388,207 @@ function ZoneModalityEditorCard({
       return;
     }
 
-    await onSave(modality, {
+    await onSave(family, {
       name: nextName,
       modalityType,
-      weightingCode: weightingCode || null,
-      notes: notes.trim() || null,
-      coverImageUrl: modality.coverImageUrl,
-      processingStatus: modality.processingStatus,
-      sourceFileCount: modality.sourceFileCount,
-      sourceKind: modality.sourceKind,
-      sourceLabel: modality.sourceLabel,
+      notes,
+      weightingByVariantId,
     });
   }
 
   return (
-    <Frame>
-      <FrameHeader className="p-2 flex flex-row justify-between items-center">
-        <FrameTitle className="text-base">Edit Modality</FrameTitle>
-        {isViewerReady ? (
-          <Link href={viewerHref}>Open viewer</Link>
-        ) : (
-          <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-            {isViewerPreparing ? (
-              <LoaderCircleIcon className="size-4 animate-spin" />
-            ) : null}
-            {isViewerPreparing ? "Preparing viewer..." : "Viewer not ready"}
-          </span>
-        )}
-      </FrameHeader>
-      <FramePanel>
-        <FieldGroup className="gap-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <Field>
-              <FieldLabel htmlFor={`edit-modality-name-${modality.id}`}>
-                Modality name
-              </FieldLabel>
-              <Input
-                id={`edit-modality-name-${modality.id}`}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </Field>
+    <>
+      <Frame>
+        <FrameHeader className="p-2 flex flex-row justify-between items-center">
+          <FrameTitle className="text-base">Edit Modality</FrameTitle>
+          {isViewerReady && viewerHref ? (
+            <Link href={viewerHref}>Open viewer</Link>
+          ) : (
+            <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+              {isViewerPreparing ? (
+                <LoaderCircleIcon className="size-4 animate-spin" />
+              ) : null}
+              {isViewerPreparing ? "Preparing viewer..." : "Viewer not ready"}
+            </span>
+          )}
+        </FrameHeader>
+        <FramePanel>
+          <FieldGroup className="gap-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor={`edit-modality-name-${family.id}`}>
+                  Modality name
+                </FieldLabel>
+                <Input
+                  id={`edit-modality-name-${family.id}`}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor={`edit-modality-type-${family.id}`}>
+                  Modality type
+                </FieldLabel>
+                <PlaygroundSelect
+                  id={`edit-modality-type-${family.id}`}
+                  options={MODALITY_TYPE_OPTIONS}
+                  value={modalityType}
+                  onValueChange={setModalityType}
+                />
+              </Field>
+            </div>
 
             <Field>
-              <FieldLabel htmlFor={`edit-modality-type-${modality.id}`}>
-                Modality type
+              <FieldLabel htmlFor={`edit-modality-notes-${family.id}`}>
+                Internal notes
               </FieldLabel>
-              <PlaygroundSelect
-                id={`edit-modality-type-${modality.id}`}
-                options={MODALITY_TYPE_OPTIONS}
-                value={modalityType}
-                onValueChange={setModalityType}
+              <Textarea
+                id={`edit-modality-notes-${family.id}`}
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                placeholder="Internal guidance about this study, series, or presentation."
               />
             </Field>
+          </FieldGroup>
 
-            <Field>
-              <FieldLabel htmlFor={`edit-modality-weighting-${modality.id}`}>
-                Weighting
-              </FieldLabel>
-              <PlaygroundSelect
-                id={`edit-modality-weighting-${modality.id}`}
-                options={MODALITY_WEIGHTING_OPTIONS}
-                value={weightingCode}
-                onValueChange={setWeightingCode}
-              />
-            </Field>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              disabled={!hasChanges || pending}
+              onClick={handleSave}
+            >
+              {pending ? (
+                <LoaderCircleIcon className="animate-spin" />
+              ) : (
+                <SaveIcon />
+              )}
+              Save modality
+            </Button>
           </div>
-
-          <Field>
-            <FieldLabel htmlFor={`edit-modality-notes-${modality.id}`}>
-              Internal notes
-            </FieldLabel>
-            <Textarea
-              id={`edit-modality-notes-${modality.id}`}
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              placeholder="Internal guidance about this study, series, or presentation."
-            />
-          </Field>
-        </FieldGroup>
-
-        <div className="mt-4 flex flex-wrap gap-2">
+        </FramePanel>
+      </Frame>
+      <Frame>
+        <FrameHeader className="flex flex-row items-center justify-between p-2">
+          <FrameTitle className="text-base">Source Variants</FrameTitle>
           <Button
             type="button"
-            disabled={!hasChanges || pending}
-            onClick={handleSave}
-          >
-            {pending ? (
-              <LoaderCircleIcon className="animate-spin" />
-            ) : (
-              <SaveIcon />
-            )}
-            Save modality
-          </Button>
-          <DeleteConfirmationDialog
-            confirmationLabel="modality name"
-            confirmationValue={modality.name}
+            variant="secondary"
             disabled={pending}
-            pending={pending}
-            placeholder="Type the modality name"
-            title="Delete modality"
-            descriptionPrefix="This will permanently remove the modality and its derived study data. To confirm, enter the"
-            onConfirm={() => onDelete(modality)}
-            trigger={
-              <Button type="button" variant="destructive-outline">
-                <Trash2Icon />
-                Delete modality
-              </Button>
-            }
-          />
-        </div>
-      </FramePanel>
-    </Frame>
+            onClick={() => onAddVariant(family)}
+          >
+            <Plus />
+            Add source
+          </Button>
+        </FrameHeader>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>SN</TableHead>
+              <TableHead>Modality Name</TableHead>
+              <TableHead>Weighting</TableHead>
+              <TableHead>Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {family.variants.map((variant, index) => {
+              const variantViewerReady = variant.processingStatus === "ready";
+              return (
+                <TableRow
+                  key={variant.id}
+                  className="cursor-pointer"
+                  data-state={
+                    variant.id === activeVariantId ? "selected" : undefined
+                  }
+                  onClick={() => onActiveVariantChange(variant.id)}
+                >
+                  <TableCell className="font-medium text-foreground">
+                    {index + 1}
+                  </TableCell>
+                  <TableCell className="font-medium text-foreground">
+                    {name}
+                  </TableCell>
+                  <TableCell className="min-w-44 text-muted-foreground">
+                    <PlaygroundSelect
+                      id={`edit-modality-weighting-${variant.id}`}
+                      options={MODALITY_WEIGHTING_OPTIONS}
+                      value={weightingByVariantId[variant.id] ?? ""}
+                      onValueChange={(value) => {
+                        onActiveVariantChange(variant.id);
+                        setWeightingByVariantId((current) => ({
+                          ...current,
+                          [variant.id]: value,
+                        }));
+                      }}
+                    />
+                  </TableCell>
+                  <TableCell className="capitalize text-muted-foreground">
+                    <span className="flex gap-2">
+                      {variantViewerReady ? (
+                        <Button asChild size="icon-sm" variant="secondary">
+                          <Link
+                            href={`/playground/zones/${zoneId}/modalities/${variant.id}/viewer`}
+                          >
+                            <SquareArrowOutUpRight />
+                          </Link>
+                        </Button>
+                      ) : (
+                        <Button
+                          size={"icon-sm"}
+                          variant="secondary"
+                          disabled
+                        >
+                          <Spinner />
+                        </Button>
+                      )}
+                      <DeleteConfirmationDialog
+                        confirmationLabel={
+                          family.variants.length > 1
+                            ? "source label"
+                            : "modality name"
+                        }
+                        confirmationValue={
+                          family.variants.length > 1
+                            ? variant.sourceLabel?.trim() ||
+                              `Source ${index + 1}`
+                            : family.name
+                        }
+                        disabled={pending}
+                        pending={pending}
+                        placeholder={
+                          family.variants.length > 1
+                            ? "Type the source label"
+                            : "Type the modality name"
+                        }
+                        title={
+                          family.variants.length > 1
+                            ? "Delete source variant"
+                            : "Delete modality"
+                        }
+                        descriptionPrefix={
+                          family.variants.length > 1
+                            ? "This will permanently remove this source variant and its derived study data. To confirm, enter the"
+                            : "This will permanently remove the modality and its derived study data. To confirm, enter the"
+                        }
+                        onConfirm={() => onDelete(variant, family)}
+                        trigger={
+                          <Button
+                            size={"icon-sm"}
+                            variant="destructive"
+                            disabled={!variantViewerReady}
+                          >
+                            <Trash />
+                          </Button>
+                        }
+                      />
+                    </span>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </Frame>
+    </>
   );
 }

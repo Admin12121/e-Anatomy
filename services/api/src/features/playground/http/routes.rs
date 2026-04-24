@@ -28,7 +28,7 @@ use crate::features::playground::domain::models::{
     CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
     DeleteZoneModalityAssetsInput, UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput,
     UpdateViewerStructureInput, UpdateZoneInput, UpdateZoneModalityAssetInput,
-    UpdateZoneModalityInput,
+    UpdateZoneModalityFamilyInput, UpdateZoneModalityInput,
 };
 use crate::infrastructure::{
     error::AppError,
@@ -52,6 +52,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/zones/{zone_id}/modalities",
             get(list_zone_modalities).post(create_zone_modality),
+        )
+        .route(
+            "/zones/{zone_id}/modality-families/{family_id}",
+            axum::routing::patch(update_zone_modality_family),
         )
         .route(
             "/zones/{zone_id}/modalities/intake",
@@ -360,6 +364,22 @@ async fn update_zone_modality(
         .await?;
 
     Ok((StatusCode::OK, Json(modality)))
+}
+
+async fn update_zone_modality_family(
+    State(state): State<AppState>,
+    Path((zone_id, family_id)): Path<(Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(input): Json<UpdateZoneModalityFamilyInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    let family = state
+        .playground_service
+        .update_zone_modality_family(actor.account_id, zone_id, family_id, &actor.user_id, input)
+        .await?;
+
+    Ok((StatusCode::OK, Json(family)))
 }
 
 async fn delete_zone_modality(
@@ -766,6 +786,7 @@ async fn parse_study_upload_multipart(
     })?;
 
     let mut name: Option<String> = None;
+    let mut family_id: Option<String> = None;
     let mut modality_type: Option<String> = None;
     let mut weighting_code: Option<String> = None;
     let mut notes: Option<String> = None;
@@ -783,6 +804,11 @@ async fn parse_study_upload_multipart(
         let field_name = field.name().unwrap_or_default().to_string();
 
         match field_name.as_str() {
+            "familyId" => {
+                family_id = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid modality family id: {error}"))
+                })?);
+            }
             "name" => {
                 name = Some(field.text().await.map_err(|error| {
                     AppError::bad_request(format!("Invalid modality name: {error}"))
@@ -930,6 +956,7 @@ async fn parse_study_upload_multipart(
     }
 
     Ok(CreateZoneModalityStudyUploadInput {
+        family_id,
         name: name.unwrap_or_default(),
         modality_type: modality_type.unwrap_or_default(),
         weighting_code,
@@ -979,10 +1006,12 @@ fn has_suspicious_upload_path(value: &str) -> bool {
 }
 
 fn has_active_modality_ingest(
-    response: &crate::features::playground::domain::models::ZoneModalityListResponse,
+    response: &crate::features::playground::domain::models::ZoneModalityFamilyListResponse,
 ) -> bool {
-    response.items.iter().any(|modality| {
-        modality.processing_status == "processing" || modality.processing_status == "uploaded"
+    response.items.iter().any(|family| {
+        family.variants.iter().any(|modality| {
+            modality.processing_status == "processing" || modality.processing_status == "uploaded"
+        })
     })
 }
 

@@ -14,7 +14,7 @@ use image::{
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use tokio::{fs, sync::broadcast, task::JoinSet};
 use tracing::error;
 use uuid::Uuid;
@@ -26,10 +26,11 @@ use crate::features::playground::{
         DeleteZoneModalityAssetsInput, DeleteZoneModalityAssetsResponse, ModalitySourceAsset,
         PublicZoneModalityListResponse, UpdateViewerAnnotationInput,
         UpdateViewerStructureGroupInput, UpdateViewerStructureInput, UpdateZoneInput,
-        UpdateZoneModalityAssetInput, UpdateZoneModalityInput, ViewerAnnotationPoint,
-        ViewerStructure, ViewerStructureGroup, ZoneDetail, ZoneListResponse, ZoneModality,
-        ZoneModalityAsset, ZoneModalityAssetListResponse, ZoneModalityAtlasFrame,
-        ZoneModalityAtlasPage, ZoneModalityListResponse, ZoneModalityViewerManifest,
+        UpdateZoneModalityAssetInput, UpdateZoneModalityFamilyInput, UpdateZoneModalityInput,
+        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneDetail, ZoneListResponse,
+        ZoneModality, ZoneModalityAsset, ZoneModalityAssetListResponse, ZoneModalityAtlasFrame,
+        ZoneModalityAtlasPage, ZoneModalityFamily, ZoneModalityFamilyListResponse,
+        ZoneModalityViewerManifest,
     },
     infrastructure::repository::PlaygroundRepository,
 };
@@ -76,6 +77,7 @@ pub struct UploadedSourceFile {
 
 #[derive(Debug, Clone)]
 pub struct CreateZoneModalityStudyUploadInput {
+    pub family_id: Option<String>,
     pub name: String,
     pub modality_type: String,
     pub weighting_code: Option<String>,
@@ -113,6 +115,19 @@ struct DerivedSliceCandidate {
 struct DerivedSliceBuild {
     candidate: DerivedSliceCandidate,
     atlas_source_image: RgbaImage,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct ZoneModalityFamilyRecord {
+    id: Uuid,
+    name: String,
+    modality_type: String,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct ZoneModalityVariantRecord {
+    id: Uuid,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -265,7 +280,7 @@ impl PlaygroundService {
         &self,
         account_id: Uuid,
         zone_id: Uuid,
-    ) -> Result<ZoneModalityListResponse, AppError> {
+    ) -> Result<ZoneModalityFamilyListResponse, AppError> {
         self.ensure_zone_exists(account_id, zone_id).await?;
 
         let items = self
@@ -273,7 +288,7 @@ impl PlaygroundService {
             .list_zone_modalities(&self.pool, account_id, zone_id)
             .await?;
 
-        Ok(ZoneModalityListResponse {
+        Ok(ZoneModalityFamilyListResponse {
             total: items.len(),
             items,
         })
@@ -317,35 +332,52 @@ impl PlaygroundService {
     ) -> Result<ZoneModality, AppError> {
         self.ensure_zone_exists(account_id, zone_id).await?;
 
-        let name = normalize_required_name(&input.name, "Modality name is required")?;
-        let modality_type = normalize_modality_type(&input.modality_type)?;
+        let family_id = normalize_optional_uuid(input.family_id, "Modality family id is invalid")?;
+        let requested_name = normalize_required_name(&input.name, "Modality name is required")?;
+        let requested_modality_type = normalize_modality_type(&input.modality_type)?;
         let weighting_code = normalize_weighting_code(input.weighting_code)?;
         let cover_image_url = normalize_optional_text(input.cover_image_url);
         let source_kind = normalize_source_kind(input.source_kind)?;
         let source_label = normalize_optional_text(input.source_label);
         let source_file_count = normalize_source_file_count(input.source_file_count)?;
         let processing_status = normalize_processing_status(input.processing_status)?;
-        let notes = normalize_optional_text(input.notes);
-        let slug = self.allocate_modality_slug(zone_id, &name).await?;
+        let requested_notes = normalize_optional_text(input.notes);
+        let mut tx = self.pool.begin().await?;
+        let family = self
+            .resolve_modality_family_for_create(
+                &mut tx,
+                account_id,
+                zone_id,
+                user_id,
+                family_id,
+                &requested_name,
+                &requested_modality_type,
+                requested_notes.as_deref(),
+            )
+            .await?;
+        let slug = self.allocate_modality_slug(zone_id, &family.name).await?;
 
         let modality = self
             .repo
             .create_zone_modality(
-                &self.pool,
+                &mut *tx,
                 zone_id,
+                family.id,
                 user_id,
                 &slug,
-                &name,
-                &modality_type,
+                &family.name,
+                &family.modality_type,
                 weighting_code.as_deref(),
                 cover_image_url.as_deref(),
                 &source_kind,
                 source_label.as_deref(),
                 source_file_count,
                 &processing_status,
-                notes.as_deref(),
+                family.notes.as_deref(),
             )
             .await?;
+
+        tx.commit().await?;
 
         self.notify_zone_modality_list_changed(account_id, zone_id);
 
@@ -368,8 +400,9 @@ impl PlaygroundService {
             ));
         }
 
-        let name = normalize_required_name(&input.name, "Modality name is required")?;
-        let modality_type = normalize_modality_type(&input.modality_type)?;
+        let family_id = normalize_optional_uuid(input.family_id, "Modality family id is invalid")?;
+        let requested_name = normalize_required_name(&input.name, "Modality name is required")?;
+        let requested_modality_type = normalize_modality_type(&input.modality_type)?;
         let weighting_code = normalize_weighting_code(input.weighting_code)?;
         let source_kind = normalize_source_kind(Some(input.source_kind.clone()))?;
 
@@ -380,30 +413,46 @@ impl PlaygroundService {
         }
 
         let source_label = normalize_optional_text(input.source_label);
-        let notes = normalize_optional_text(input.notes);
+        let requested_notes = normalize_optional_text(input.notes);
         let source_file_count = normalize_source_file_count(
             input.source_file_count.or(Some(input.files.len() as i32)),
         )?;
-        let slug = self.allocate_modality_slug(zone_id, &name).await?;
+        let mut tx = self.pool.begin().await?;
+        let family = self
+            .resolve_modality_family_for_create(
+                &mut tx,
+                account_id,
+                zone_id,
+                user_id,
+                family_id,
+                &requested_name,
+                &requested_modality_type,
+                requested_notes.as_deref(),
+            )
+            .await?;
+        let slug = self.allocate_modality_slug(zone_id, &family.name).await?;
 
         let modality = self
             .repo
             .create_zone_modality(
-                &self.pool,
+                &mut *tx,
                 zone_id,
+                family.id,
                 user_id,
                 &slug,
-                &name,
-                &modality_type,
+                &family.name,
+                &family.modality_type,
                 weighting_code.as_deref(),
                 None,
                 &source_kind,
                 source_label.as_deref(),
                 source_file_count,
                 "processing",
-                notes.as_deref(),
+                family.notes.as_deref(),
             )
             .await?;
+
+        tx.commit().await?;
 
         let modality_id = Uuid::parse_str(&modality.id)
             .map_err(|_| AppError::internal("Created modality id is invalid"))?;
@@ -720,25 +769,65 @@ impl PlaygroundService {
         let source_file_count = normalize_source_file_count(input.source_file_count)?;
         let processing_status = normalize_processing_status(input.processing_status)?;
         let notes = normalize_optional_text(input.notes);
+        let current_modality = self
+            .repo
+            .get_zone_modality_detail(&self.pool, account_id, zone_id, modality_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
+        let family_id = Uuid::parse_str(&current_modality.family_id)
+            .map_err(|_| AppError::internal("Modality family id is invalid"))?;
+        let mut tx = self.pool.begin().await?;
 
+        self.update_modality_family_shared_fields(
+            &mut tx,
+            family_id,
+            user_id,
+            &name,
+            &modality_type,
+            notes.as_deref(),
+        )
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE anatomy_zone_modalities AS modality
+            SET
+                weighting_code = $4,
+                cover_image_url = $5,
+                source_kind = $6,
+                source_label = $7,
+                source_file_count = $8,
+                processing_status = $9,
+                updated_by_user_id = $10,
+                updated_at = NOW()
+            FROM anatomy_zone_modality_families AS family
+            INNER JOIN anatomy_zones AS zone ON zone.id = family.zone_id
+            WHERE
+                zone.account_id = $1
+                AND family.zone_id = $2
+                AND family.id = $3
+                AND modality.id = $11
+                AND modality.family_id = family.id
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(family_id)
+        .bind(weighting_code.as_deref())
+        .bind(cover_image_url.as_deref())
+        .bind(&source_kind)
+        .bind(source_label.as_deref())
+        .bind(source_file_count)
+        .bind(&processing_status)
+        .bind(user_id)
+        .bind(modality_id)
+        .execute(tx.as_mut())
+        .await?;
+
+        tx.commit().await?;
         let modality = self
             .repo
-            .update_zone_modality(
-                &self.pool,
-                account_id,
-                zone_id,
-                modality_id,
-                user_id,
-                &name,
-                &modality_type,
-                weighting_code.as_deref(),
-                cover_image_url.as_deref(),
-                &source_kind,
-                source_label.as_deref(),
-                source_file_count,
-                &processing_status,
-                notes.as_deref(),
-            )
+            .get_zone_modality_detail(&self.pool, account_id, zone_id, modality_id)
             .await?
             .ok_or_else(|| AppError::not_found("Modality was not found"))?;
 
@@ -755,6 +844,11 @@ impl PlaygroundService {
     ) -> Result<(), AppError> {
         self.ensure_modality_exists(account_id, zone_id, modality_id)
             .await?;
+        let current_modality = self
+            .repo
+            .get_zone_modality_detail(&self.pool, account_id, zone_id, modality_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
 
         let ingest_job_ids = self
             .repo
@@ -770,6 +864,10 @@ impl PlaygroundService {
             return Err(AppError::not_found("Modality was not found"));
         }
 
+        let family_id = Uuid::parse_str(&current_modality.family_id)
+            .map_err(|_| AppError::internal("Modality family id is invalid"))?;
+        self.delete_orphan_modality_family(family_id).await?;
+
         for ingest_job_id in ingest_job_ids {
             self.cleanup_ingest_storage(ingest_job_id).await;
         }
@@ -777,6 +875,99 @@ impl PlaygroundService {
         self.notify_zone_modality_list_changed(account_id, zone_id);
 
         Ok(())
+    }
+
+    pub async fn update_zone_modality_family(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        family_id: Uuid,
+        user_id: &str,
+        input: UpdateZoneModalityFamilyInput,
+    ) -> Result<ZoneModalityFamily, AppError> {
+        self.ensure_zone_exists(account_id, zone_id).await?;
+
+        let name = normalize_required_name(&input.name, "Modality name is required")?;
+        let modality_type = normalize_modality_type(&input.modality_type)?;
+        let notes = normalize_optional_text(input.notes);
+        let mut variant_weightings = BTreeMap::new();
+
+        for variant in input.variants {
+            let modality_id = Uuid::parse_str(&variant.modality_id)
+                .map_err(|_| AppError::bad_request("Variant modality id is invalid"))?;
+            let weighting_code = normalize_weighting_code(variant.weighting_code)?;
+            variant_weightings.insert(modality_id, weighting_code);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let family = self
+            .load_modality_family_for_update(&mut tx, account_id, zone_id, family_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality family was not found"))?;
+        let variant_ids = self
+            .list_modality_family_variant_ids(&mut tx, account_id, zone_id, family_id)
+            .await?;
+
+        for modality_id in variant_weightings.keys() {
+            if !variant_ids.iter().any(|current| current == modality_id) {
+                return Err(AppError::bad_request(
+                    "One or more variant ids do not belong to this modality family.",
+                ));
+            }
+        }
+
+        if family.name != name || family.modality_type != modality_type || family.notes != notes {
+            self.update_modality_family_shared_fields(
+                &mut tx,
+                family_id,
+                user_id,
+                &name,
+                &modality_type,
+                notes.as_deref(),
+            )
+            .await?;
+        }
+
+        for (modality_id, weighting_code) in variant_weightings {
+            sqlx::query(
+                r#"
+                UPDATE anatomy_zone_modalities AS modality
+                SET
+                    weighting_code = $4,
+                    updated_by_user_id = $5,
+                    updated_at = NOW()
+                FROM anatomy_zone_modality_families AS family
+                INNER JOIN anatomy_zones AS zone ON zone.id = family.zone_id
+                WHERE
+                    zone.account_id = $1
+                    AND family.zone_id = $2
+                    AND family.id = $3
+                    AND modality.family_id = family.id
+                    AND modality.id = $6
+                "#,
+            )
+            .bind(account_id)
+            .bind(zone_id)
+            .bind(family_id)
+            .bind(weighting_code.as_deref())
+            .bind(user_id)
+            .bind(modality_id)
+            .execute(tx.as_mut())
+            .await?;
+        }
+
+        tx.commit().await?;
+        self.notify_zone_modality_list_changed(account_id, zone_id);
+
+        let updated_family = self
+            .repo
+            .list_zone_modalities(&self.pool, account_id, zone_id)
+            .await?
+            .into_iter()
+            .find(|current| current.id == family_id.to_string())
+            .ok_or_else(|| AppError::not_found("Modality family was not found"))?;
+
+        Ok(updated_family)
     }
 
     pub async fn list_zone_modality_assets(
@@ -1862,6 +2053,245 @@ impl PlaygroundService {
         Ok(candidates)
     }
 
+    async fn load_modality_family_for_update(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        account_id: Uuid,
+        zone_id: Uuid,
+        family_id: Uuid,
+    ) -> Result<Option<ZoneModalityFamilyRecord>, AppError> {
+        let family = sqlx::query_as::<_, ZoneModalityFamilyRecord>(
+            r#"
+            SELECT
+                family.id,
+                family.name,
+                family.modality_type,
+                family.notes
+            FROM anatomy_zone_modality_families AS family
+            INNER JOIN anatomy_zones AS zone ON zone.id = family.zone_id
+            WHERE
+                zone.account_id = $1
+                AND family.zone_id = $2
+                AND family.id = $3
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(family_id)
+        .fetch_optional(tx.as_mut())
+        .await?;
+
+        Ok(family)
+    }
+
+    async fn list_modality_family_variant_ids(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        account_id: Uuid,
+        zone_id: Uuid,
+        family_id: Uuid,
+    ) -> Result<Vec<Uuid>, AppError> {
+        let variant_ids = sqlx::query_as::<_, ZoneModalityVariantRecord>(
+            r#"
+            SELECT modality.id
+            FROM anatomy_zone_modalities AS modality
+            INNER JOIN anatomy_zone_modality_families AS family ON family.id = modality.family_id
+            INNER JOIN anatomy_zones AS zone ON zone.id = family.zone_id
+            WHERE
+                zone.account_id = $1
+                AND family.zone_id = $2
+                AND family.id = $3
+            ORDER BY modality.updated_at DESC, modality.created_at ASC
+            "#,
+        )
+        .bind(account_id)
+        .bind(zone_id)
+        .bind(family_id)
+        .fetch_all(tx.as_mut())
+        .await?;
+
+        Ok(variant_ids.into_iter().map(|variant| variant.id).collect())
+    }
+
+    async fn find_modality_family_by_identity(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        zone_id: Uuid,
+        name: &str,
+        modality_type: &str,
+    ) -> Result<Option<ZoneModalityFamilyRecord>, AppError> {
+        let family = sqlx::query_as::<_, ZoneModalityFamilyRecord>(
+            r#"
+            SELECT
+                id,
+                name,
+                modality_type,
+                notes
+            FROM anatomy_zone_modality_families
+            WHERE
+                zone_id = $1
+                AND modality_type = $2
+                AND lower(trim(name)) = lower(trim($3))
+            LIMIT 1
+            "#,
+        )
+        .bind(zone_id)
+        .bind(modality_type)
+        .bind(name)
+        .fetch_optional(tx.as_mut())
+        .await?;
+
+        Ok(family)
+    }
+
+    async fn create_modality_family(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        zone_id: Uuid,
+        user_id: &str,
+        name: &str,
+        modality_type: &str,
+        notes: Option<&str>,
+    ) -> Result<ZoneModalityFamilyRecord, AppError> {
+        let family = sqlx::query_as::<_, ZoneModalityFamilyRecord>(
+            r#"
+            INSERT INTO anatomy_zone_modality_families (
+                zone_id,
+                name,
+                modality_type,
+                notes,
+                created_by_user_id,
+                updated_by_user_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $5)
+            RETURNING
+                id,
+                name,
+                modality_type,
+                notes
+            "#,
+        )
+        .bind(zone_id)
+        .bind(name)
+        .bind(modality_type)
+        .bind(notes)
+        .bind(user_id)
+        .fetch_one(tx.as_mut())
+        .await?;
+
+        Ok(family)
+    }
+
+    async fn resolve_modality_family_for_create(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        account_id: Uuid,
+        zone_id: Uuid,
+        user_id: &str,
+        family_id: Option<Uuid>,
+        name: &str,
+        modality_type: &str,
+        notes: Option<&str>,
+    ) -> Result<ZoneModalityFamilyRecord, AppError> {
+        if let Some(family_id) = family_id {
+            return self
+                .load_modality_family_for_update(tx, account_id, zone_id, family_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("Modality family was not found"));
+        }
+
+        if let Some(existing_family) = self
+            .find_modality_family_by_identity(tx, zone_id, name, modality_type)
+            .await?
+        {
+            return Ok(existing_family);
+        }
+
+        self.create_modality_family(tx, zone_id, user_id, name, modality_type, notes)
+            .await
+    }
+
+    async fn update_modality_family_shared_fields(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        family_id: Uuid,
+        user_id: &str,
+        name: &str,
+        modality_type: &str,
+        notes: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE anatomy_zone_modality_families
+            SET
+                name = $2,
+                modality_type = $3,
+                notes = $4,
+                updated_by_user_id = $5,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(family_id)
+        .bind(name)
+        .bind(modality_type)
+        .bind(notes)
+        .bind(user_id)
+        .execute(tx.as_mut())
+        .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE anatomy_zone_modalities
+            SET
+                name = $2,
+                modality_type = $3,
+                notes = $4,
+                updated_by_user_id = $5,
+                updated_at = NOW()
+            WHERE family_id = $1
+            "#,
+        )
+        .bind(family_id)
+        .bind(name)
+        .bind(modality_type)
+        .bind(notes)
+        .bind(user_id)
+        .execute(tx.as_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    async fn delete_orphan_modality_family(&self, family_id: Uuid) -> Result<(), AppError> {
+        let remaining_variant_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM anatomy_zone_modalities
+            WHERE family_id = $1
+            "#,
+        )
+        .bind(family_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        if remaining_variant_count > 0 {
+            return Ok(());
+        }
+
+        sqlx::query(
+            r#"
+            DELETE FROM anatomy_zone_modality_families
+            WHERE id = $1
+            "#,
+        )
+        .bind(family_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     async fn allocate_zone_slug(&self, account_id: Uuid, name: &str) -> Result<String, AppError> {
         let base = slugify(name, "zone");
         let mut candidate = base.clone();
@@ -1994,6 +2424,22 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
             Some(normalized.to_string())
         }
     })
+}
+
+fn normalize_optional_uuid(value: Option<String>, message: &str) -> Result<Option<Uuid>, AppError> {
+    let Some(raw_value) = value else {
+        return Ok(None);
+    };
+
+    let normalized = raw_value.trim();
+
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+
+    Uuid::parse_str(normalized)
+        .map(Some)
+        .map_err(|_| AppError::bad_request(message))
 }
 
 fn normalize_color_hex(value: Option<String>, fallback: &str) -> String {
