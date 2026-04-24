@@ -699,7 +699,7 @@ export default function Page() {
         <div className="preloader-btn-container">
           <Image
             id="pbc-logo"
-            src="/logo-light.png"
+            src="/preloader.png"
             alt=""
             width={64}
             height={64}

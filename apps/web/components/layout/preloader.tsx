@@ -518,12 +518,12 @@ export default function Preloader({
         >
           <div ref={buttonLogoRef} id="pbc-logo">
             <Image
-              src="/logo-light.png"
+              src="/preloader.png"
               alt=""
               width={64}
               height={64}
               sizes="64px"
-              className="h-full w-full object-contain"
+              className="h-full w-full object-cover"
             />
           </div>
 

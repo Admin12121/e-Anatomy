@@ -30,12 +30,16 @@ import {
 } from "@/lib/playground/modality-upload-shared";
 import type {
   ModalityType,
-  ModalityWeightingCode,
   UpdateZoneModalityFamilyInput,
   ZoneModality,
   ZoneModalityFamily,
   ZoneModalityFamilyListResponse,
 } from "@/lib/playground/types";
+import {
+  MODALITY_TYPE_OPTIONS,
+  MODALITY_WEIGHTING_OPTIONS,
+  type ModalityWeightingSelectValue,
+} from "@/lib/playground/modality-options";
 import { useAppDispatch } from "@/lib/store/hooks";
 import {
   playgroundApi,
@@ -62,36 +66,6 @@ import Link from "next/link";
 import { Spinner } from "@/components/ui/spinner";
 
 const EMPTY_MODALITY_FAMILIES: ZoneModalityFamily[] = [];
-
-const MODALITY_TYPE_OPTIONS: Array<{ label: string; value: ModalityType }> = [
-  { label: "MRI", value: "mri" },
-  { label: "CT", value: "ct" },
-  { label: "MRA", value: "mra" },
-  { label: "MRV", value: "mrv" },
-  { label: "Angiography", value: "angiography" },
-  { label: "CBCT", value: "cbct" },
-  { label: "Illustration", value: "illustration" },
-  { label: "Photography", value: "photography" },
-  { label: "Endoscopy", value: "endoscopy" },
-  { label: "Other", value: "other" },
-];
-
-type ModalityWeightingSelectValue = ModalityWeightingCode | "";
-
-const MODALITY_WEIGHTING_OPTIONS: Array<{
-  label: string;
-  value: ModalityWeightingSelectValue;
-}> = [
-  { label: "Not set", value: "" },
-  { label: "T1", value: "t1" },
-  { label: "T1 Gado", value: "t1_gado" },
-  { label: "T2", value: "t2" },
-  { label: "T2*", value: "t2_star" },
-  { label: "FLAIR", value: "flair" },
-  { label: "ADC", value: "adc" },
-  { label: "DWI", value: "dwi" },
-  { label: "Other", value: "other" },
-];
 
 type EditorMode = "create" | "edit";
 type CreateContext =
@@ -1025,7 +999,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={3} className="h-24">
+                <TableCell colSpan={4} className="h-24">
                   <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
                     <LoaderCircleIcon className="size-4 animate-spin" />
                     Loading modalities...
@@ -1035,7 +1009,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
             ) : modalityFamilies.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={3}
+                  colSpan={4}
                   className="h-24 text-center text-sm text-muted-foreground"
                 >
                   No modalities are attached to this zone yet.

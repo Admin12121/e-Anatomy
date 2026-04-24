@@ -24,7 +24,8 @@ use crate::features::playground::{
         CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
         CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
         DeleteZoneModalityAssetsInput, DeleteZoneModalityAssetsResponse, ModalitySourceAsset,
-        PublicZoneModalityListResponse, UpdateViewerAnnotationInput,
+        PublicZoneModalityListResponse, ReorderZoneModalityAssetsInput,
+        ReorderZoneModalityAssetsResponse, UpdateViewerAnnotationInput,
         UpdateViewerStructureGroupInput, UpdateViewerStructureInput, UpdateZoneInput,
         UpdateZoneModalityAssetInput, UpdateZoneModalityFamilyInput, UpdateZoneModalityInput,
         ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneDetail, ZoneListResponse,
@@ -1131,6 +1132,77 @@ impl PlaygroundService {
         })
     }
 
+    pub async fn reorder_zone_modality_assets(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        user_id: &str,
+        input: ReorderZoneModalityAssetsInput,
+    ) -> Result<ReorderZoneModalityAssetsResponse, AppError> {
+        self.ensure_modality_exists(account_id, zone_id, modality_id)
+            .await?;
+
+        let mut updates = BTreeMap::new();
+
+        for update in input.updates {
+            let asset_id = Uuid::parse_str(&update.asset_id)
+                .map_err(|_| AppError::bad_request("Asset id is invalid"))?;
+            let sort_order = normalize_sort_order(Some(update.sort_order))?;
+
+            updates.insert(asset_id, sort_order);
+        }
+
+        let requested_count = updates.len();
+
+        if requested_count == 0 {
+            return Ok(ReorderZoneModalityAssetsResponse {
+                requested_count: 0,
+                updated_count: 0,
+            });
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let mut updated_count = 0usize;
+
+        for (asset_id, sort_order) in updates {
+            let result = sqlx::query(
+                r#"
+                UPDATE anatomy_zone_modality_assets AS asset
+                SET
+                    sort_order = $5,
+                    updated_by_user_id = $6,
+                    updated_at = NOW()
+                FROM anatomy_zone_modalities AS modality
+                INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
+                WHERE
+                    zone.account_id = $1
+                    AND modality.zone_id = $2
+                    AND modality.id = $3
+                    AND asset.id = $4
+                    AND asset.modality_id = modality.id
+                "#,
+            )
+            .bind(account_id)
+            .bind(zone_id)
+            .bind(modality_id)
+            .bind(asset_id)
+            .bind(sort_order)
+            .bind(user_id)
+            .execute(tx.as_mut())
+            .await?;
+
+            updated_count += result.rows_affected() as usize;
+        }
+
+        tx.commit().await?;
+
+        Ok(ReorderZoneModalityAssetsResponse {
+            requested_count,
+            updated_count,
+        })
+    }
+
     pub async fn get_zone_modality_viewer_manifest(
         &self,
         account_id: Uuid,
@@ -1146,6 +1218,14 @@ impl PlaygroundService {
             .get_zone_modality_detail(&self.pool, account_id, zone_id, modality_id)
             .await?
             .ok_or_else(|| AppError::not_found("Modality was not found"))?;
+        let modality_variants = self
+            .repo
+            .list_zone_modalities(&self.pool, account_id, zone_id)
+            .await?
+            .into_iter()
+            .find(|family| family.id == modality.family_id)
+            .map(|family| family.variants)
+            .unwrap_or_else(|| vec![modality.clone()]);
         let ingest_job = self
             .repo
             .get_latest_modality_ingest_job(&self.pool, account_id, zone_id, modality_id)
@@ -1179,6 +1259,7 @@ impl PlaygroundService {
         Ok(ZoneModalityViewerManifest {
             zone,
             modality,
+            modality_variants,
             ingest_job,
             source_assets,
             assets,
@@ -1214,6 +1295,19 @@ impl PlaygroundService {
             )
             .await?
             .ok_or_else(|| AppError::not_found("Modality was not found"))?;
+        let mut modality_variants = self
+            .repo
+            .list_zone_modalities(&self.pool, lookup.account_id, lookup.zone_id)
+            .await?
+            .into_iter()
+            .find(|family| family.id == modality.family_id)
+            .map(|family| family.variants)
+            .unwrap_or_else(|| vec![modality.clone()]);
+        modality_variants
+            .retain(|variant| variant.processing_status == "ready" || variant.id == modality.id);
+        if modality_variants.is_empty() {
+            modality_variants.push(modality.clone());
+        }
         let assets = self
             .repo
             .list_zone_modality_assets(
@@ -1267,6 +1361,7 @@ impl PlaygroundService {
         Ok(ZoneModalityViewerManifest {
             zone,
             modality,
+            modality_variants,
             ingest_job: None,
             source_assets: Vec::new(),
             assets,

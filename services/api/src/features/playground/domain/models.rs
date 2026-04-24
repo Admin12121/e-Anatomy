@@ -284,6 +284,26 @@ pub struct DeleteZoneModalityAssetsResponse {
     pub deleted_count: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderZoneModalityAssetInput {
+    pub asset_id: String,
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderZoneModalityAssetsInput {
+    pub updates: Vec<ReorderZoneModalityAssetInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderZoneModalityAssetsResponse {
+    pub requested_count: usize,
+    pub updated_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewerStructureGroup {
@@ -457,6 +477,7 @@ pub struct UpdateViewerAnnotationInput {
 pub struct ZoneModalityViewerManifest {
     pub zone: ZoneDetail,
     pub modality: ZoneModality,
+    pub modality_variants: Vec<ZoneModality>,
     pub ingest_job: Option<ModalityIngestJob>,
     pub source_assets: Vec<ModalitySourceAsset>,
     pub assets: Vec<ZoneModalityAsset>,

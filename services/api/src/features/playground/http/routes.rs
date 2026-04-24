@@ -26,9 +26,9 @@ use crate::features::playground::application::service::{
 use crate::features::playground::domain::models::{
     CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
     CreateZoneInput, CreateZoneModalityAssetInput, CreateZoneModalityInput,
-    DeleteZoneModalityAssetsInput, UpdateViewerAnnotationInput, UpdateViewerStructureGroupInput,
-    UpdateViewerStructureInput, UpdateZoneInput, UpdateZoneModalityAssetInput,
-    UpdateZoneModalityFamilyInput, UpdateZoneModalityInput,
+    DeleteZoneModalityAssetsInput, ReorderZoneModalityAssetsInput, UpdateViewerAnnotationInput,
+    UpdateViewerStructureGroupInput, UpdateViewerStructureInput, UpdateZoneInput,
+    UpdateZoneModalityAssetInput, UpdateZoneModalityFamilyInput, UpdateZoneModalityInput,
 };
 use crate::infrastructure::{
     error::AppError,
@@ -73,6 +73,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/assets/bulk-delete",
             axum::routing::post(delete_zone_modality_assets),
+        )
+        .route(
+            "/zones/{zone_id}/modalities/{modality_id}/assets/reorder",
+            axum::routing::post(reorder_zone_modality_assets),
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/assets/{asset_id}",
@@ -486,6 +490,28 @@ async fn delete_zone_modality_assets(
     let response = state
         .playground_service
         .delete_zone_modality_assets(actor.account_id, zone_id, modality_id, input)
+        .await?;
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+async fn reorder_zone_modality_assets(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(input): Json<ReorderZoneModalityAssetsInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    let response = state
+        .playground_service
+        .reorder_zone_modality_assets(
+            actor.account_id,
+            zone_id,
+            modality_id,
+            &actor.user_id,
+            input,
+        )
         .await?;
 
     Ok((StatusCode::OK, Json(response)))

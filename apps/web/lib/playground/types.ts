@@ -290,6 +290,20 @@ export type DeleteZoneModalityAssetsResponse = {
   deletedCount: number;
 };
 
+export type ReorderZoneModalityAssetInput = {
+  assetId: string;
+  sortOrder: number;
+};
+
+export type ReorderZoneModalityAssetsInput = {
+  updates: ReorderZoneModalityAssetInput[];
+};
+
+export type ReorderZoneModalityAssetsResponse = {
+  requestedCount: number;
+  updatedCount: number;
+};
+
 export type ViewerAccessLevel = "free" | "subscription";
 
 export type ViewerStructureGroup = {
@@ -355,6 +369,7 @@ export type ViewerAnnotation = {
 export type ZoneModalityViewerManifest = {
   zone: ZoneDetail;
   modality: ZoneModality;
+  modalityVariants: ZoneModality[];
   ingestJob: ModalityIngestJob | null;
   sourceAssets: ModalitySourceAsset[];
   assets: ZoneModalityAsset[];

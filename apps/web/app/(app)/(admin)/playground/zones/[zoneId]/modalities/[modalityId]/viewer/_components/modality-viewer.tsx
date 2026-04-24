@@ -1,6 +1,7 @@
 "use client";
 
 import { skipToken } from "@reduxjs/toolkit/query";
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   startTransition,
@@ -9,12 +10,14 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
   type WheelEvent,
 } from "react";
 import gsap from "gsap";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { formatModalityWeightingLabel } from "@/lib/playground/modality-options";
 import type {
   CreateViewerAnnotationInput,
   CreateViewerStructureGroupInput,
@@ -26,6 +29,7 @@ import type {
   ViewerAnnotationPoint,
   ViewerStructure,
   ViewerStructureGroup,
+  ZoneModality,
   ZoneModalityAtlasFrame,
   ZoneModalityAtlasPage,
   ZoneModalityAsset,
@@ -39,11 +43,11 @@ import {
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
   useGetZoneModalityViewerManifestQuery,
+  useReorderZoneModalityAssetsMutation,
   useRebuildZoneModalityAtlasesMutation,
   useUpdateViewerAnnotationMutation,
   useUpdateViewerStructureGroupMutation,
   useUpdateViewerStructureMutation,
-  useUpdateZoneModalityAssetMutation,
 } from "@/lib/store/services/playground-api";
 import { cn } from "@/lib/utils";
 import Loader from "@/components/ui/loader";
@@ -81,7 +85,9 @@ import {
   splitMultilineList,
   structureMatchesSearch,
 } from "./modality-viewer/utils";
-import { toColorInputValue } from "./modality-viewer/right-panel/utils";
+import {
+  toColorInputValue,
+} from "./modality-viewer/right-panel/utils";
 
 type NavigationSource =
   | "button"
@@ -108,6 +114,11 @@ type PreloadQueueItem = {
   order: number;
   priority: PreloadPriority;
   resolve: () => void;
+};
+
+type WeightingSelectOption = {
+  label: string;
+  value: string;
 };
 
 const ACTIVE_INGEST_STATUSES = new Set([
@@ -232,6 +243,66 @@ function areAssetIdOrdersEqual(left: string[], right: string[]) {
   return left.every((value, index) => value === right[index]);
 }
 
+function filterAssetsByWeighting(
+  assets: ZoneModalityAsset[],
+  weighting: string,
+) {
+  if (weighting === "all") {
+    return assets;
+  }
+
+  const weightedAssets = assets.filter(
+    (asset) => (asset.weightingCode ?? "all") === weighting,
+  );
+
+  return weightedAssets.length > 0 ? weightedAssets : assets;
+}
+
+function findNearestWeightingAsset(
+  assets: ZoneModalityAsset[],
+  currentAsset: ZoneModalityAsset | null,
+) {
+  if (assets.length === 0) {
+    return null;
+  }
+
+  if (!currentAsset) {
+    return assets[0] ?? null;
+  }
+
+  return assets.reduce<ZoneModalityAsset | null>((nearestAsset, asset) => {
+    if (!nearestAsset) {
+      return asset;
+    }
+
+    const currentDistance = Math.abs(asset.sortOrder - currentAsset.sortOrder);
+    const nearestDistance = Math.abs(
+      nearestAsset.sortOrder - currentAsset.sortOrder,
+    );
+
+    return currentDistance < nearestDistance ? asset : nearestAsset;
+  }, null);
+}
+
+function createVariantWeightingOptions(
+  variants: ZoneModality[],
+): WeightingSelectOption[] {
+  const seenLabels = new Map<string, number>();
+
+  return variants.map((variant) => {
+    const rawLabel = formatModalityWeightingLabel(variant.weightingCode);
+    const baseLabel = rawLabel;
+    const seenCount = seenLabels.get(baseLabel) ?? 0;
+
+    seenLabels.set(baseLabel, seenCount + 1);
+
+    return {
+      label: seenCount === 0 ? baseLabel : `${baseLabel} ${seenCount + 1}`,
+      value: variant.id,
+    };
+  });
+}
+
 function preloadPriorityRank(priority: PreloadPriority) {
   return priority === "high" ? 0 : 1;
 }
@@ -304,6 +375,7 @@ function ModalityViewerShell({
   zoneId,
   zoneSlug,
 }: ModalityViewerShellProps) {
+  const router = useRouter();
   const readOnly = mode === "public";
   const [viewerPollingIntervalMs, setViewerPollingIntervalMs] = useState(0);
 
@@ -358,11 +430,15 @@ function ModalityViewerShell({
     useDeleteViewerStructureGroupMutation();
   const [deleteStructure, { isLoading: isDeletingStructure }] =
     useDeleteViewerStructureMutation();
-  const [updateModalityAsset] = useUpdateZoneModalityAssetMutation();
+  const [reorderModalityAssets] = useReorderZoneModalityAssetsMutation();
   const [deleteModalityAssetsBulk] = useDeleteZoneModalityAssetsBulkMutation();
   const [rebuildZoneModalityAtlases] = useRebuildZoneModalityAtlasesMutation();
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
+  const [pendingWeighting, setPendingWeighting] = useState<string | null>(null);
+  const [pendingVariantId, setPendingVariantId] = useState<string | null>(null);
+  const [isWeightingTransitionPending, startWeightingTransition] =
+    useTransition();
   const [currentAssetId, setCurrentAssetId] = useState<string | null>(null);
   const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
@@ -457,9 +533,22 @@ function ModalityViewerShell({
   const queuedNavigationAssetIdRef = useRef<string | null>(null);
   const queuedNavigationSourceRef = useRef<NavigationSource>("wheel");
   const navigationRequestIdRef = useRef(0);
+  const weightingChangeRequestIdRef = useRef(0);
   const lastNavigationSourceRef = useRef<NavigationSource>("button");
 
   const assets = useMemo(() => data?.assets ?? [], [data?.assets]);
+  const modalityVariants = useMemo(
+    () => data?.modalityVariants ?? [],
+    [data?.modalityVariants],
+  );
+  const variantWeightingOptions = useMemo(
+    () => createVariantWeightingOptions(modalityVariants),
+    [modalityVariants],
+  );
+  const variantWeightingById = useMemo(
+    () => new Map(modalityVariants.map((variant) => [variant.id, variant])),
+    [modalityVariants],
+  );
   const ingestStatus = data?.ingestJob?.status;
   const hasSliceAssets = useMemo(() => assets.some(isSliceAsset), [assets]);
   const shouldPollViewerData = useMemo(() => {
@@ -592,15 +681,7 @@ function ModalityViewerShell({
     return ["all", ...specificValues];
   }, [orderedSliceAssets]);
   const activeAssets = useMemo(() => {
-    if (activeWeighting === "all") {
-      return orderedSliceAssets;
-    }
-
-    const weighted = orderedSliceAssets.filter(
-      (asset) => (asset.weightingCode ?? "all") === activeWeighting,
-    );
-
-    return weighted.length > 0 ? weighted : orderedSliceAssets;
+    return filterAssetsByWeighting(orderedSliceAssets, activeWeighting);
   }, [activeWeighting, orderedSliceAssets]);
   const viewerSliceItems = useMemo<ViewerSliceItem[]>(
     () =>
@@ -1033,6 +1114,32 @@ function ModalityViewerShell({
     [assetImageSourceById, pumpPreloadQueue],
   );
 
+  const queueWeightingPreload = useCallback(
+    (assetsForWeighting: ZoneModalityAsset[], targetAsset: ZoneModalityAsset) => {
+      const targetIndex = Math.max(
+        0,
+        assetsForWeighting.findIndex((asset) => asset.id === targetAsset.id),
+      );
+      const preloadOrder = buildImmediatePreloadOrder(
+        assetsForWeighting,
+        targetIndex,
+        0,
+        Math.max(IMAGE_PRELOAD_RADIUS, IMMEDIATE_PRELOAD_BURST),
+      );
+      const nearAssets = preloadOrder.slice(0, IMMEDIATE_PRELOAD_BURST);
+      const farAssets = preloadOrder.slice(IMMEDIATE_PRELOAD_BURST);
+
+      for (const asset of nearAssets) {
+        void preloadAsset(asset, "high");
+      }
+
+      for (const asset of farAssets) {
+        void preloadAsset(asset, "low");
+      }
+    },
+    [preloadAsset],
+  );
+
   const requestAssetNavigation = useCallback(
     (asset: ZoneModalityAsset, source: NavigationSource) => {
       const activeCurrentAssetId = currentAssetIdRef.current;
@@ -1403,7 +1510,54 @@ function ModalityViewerShell({
   }, [activeWeighting, weightings]);
 
   useEffect(() => {
+    if (!pendingWeighting || weightings.includes(pendingWeighting)) {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPendingWeighting(null);
+  }, [pendingWeighting, weightings]);
+
+  useEffect(() => {
+    if (!pendingVariantId || data?.modality.id !== pendingVariantId) {
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPendingVariantId(null);
+  }, [data?.modality.id, pendingVariantId]);
+
+  useEffect(() => {
+    if (!data || modalityVariants.length <= 1) {
+      return;
+    }
+
+    for (const variant of modalityVariants) {
+      if (variant.id === data.modality.id) {
+        continue;
+      }
+
+      router.prefetch(
+        readOnly
+          ? `/${zoneSlug}/${variant.slug}`
+          : `/playground/zones/${zoneId}/modalities/${variant.id}/viewer`,
+      );
+    }
+  }, [
+    data,
+    modalityVariants,
+    readOnly,
+    router,
+    zoneId,
+    zoneSlug,
+  ]);
+
+  useEffect(() => {
     if (activeAssets.length === 0) {
+      return;
+    }
+
+    if (pendingAsset) {
       return;
     }
 
@@ -1438,7 +1592,13 @@ function ModalityViewerShell({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [activeAssets, assetById, currentAssetId, requestAssetNavigation]);
+  }, [
+    activeAssets,
+    assetById,
+    currentAssetId,
+    pendingAsset,
+    requestAssetNavigation,
+  ]);
 
   useEffect(() => {
     if (!selectedGroup) {
@@ -1566,6 +1726,62 @@ function ModalityViewerShell({
     navigationAssetIndex,
     pendingAsset,
     preloadAsset,
+  ]);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      weightings.length <= 2 ||
+      orderedSliceAssets.length === 0
+    ) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      for (const weighting of weightings) {
+        if (weighting === activeWeighting) {
+          continue;
+        }
+
+        const assetsForWeighting = filterAssetsByWeighting(
+          orderedSliceAssets,
+          weighting,
+        );
+        const targetAsset = findNearestWeightingAsset(
+          assetsForWeighting,
+          currentAsset,
+        );
+
+        if (!targetAsset) {
+          continue;
+        }
+
+        const targetIndex = Math.max(
+          0,
+          assetsForWeighting.findIndex((asset) => asset.id === targetAsset.id),
+        );
+        const backgroundAssets = buildImmediatePreloadOrder(
+          assetsForWeighting,
+          targetIndex,
+          0,
+          IMMEDIATE_PRELOAD_BURST,
+        );
+
+        for (const asset of backgroundAssets) {
+          void preloadAsset(asset, "low");
+        }
+      }
+    }, 550);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    activeWeighting,
+    currentAsset,
+    orderedSliceAssets,
+    preloadAsset,
+    weightings,
   ]);
 
   useEffect(() => {
@@ -1729,6 +1945,26 @@ function ModalityViewerShell({
   const isAssetLoading = pendingAsset
     ? !readyAssetIds.has(pendingImageSource?.cacheKey ?? pendingAsset.id)
     : false;
+  const displayedWeighting = pendingWeighting ?? activeWeighting;
+  const isWeightingPending =
+    Boolean(pendingWeighting) ||
+    isWeightingTransitionPending ||
+    Boolean(pendingVariantId);
+  const assetWeightingOptions = useMemo<WeightingSelectOption[]>(
+    () =>
+      weightings.map((weighting) => ({
+        label: formatModalityWeightingLabel(weighting),
+        value: weighting,
+      })),
+    [weightings],
+  );
+  const usingVariantWeightingOptions = variantWeightingOptions.length > 0;
+  const viewerWeightingOptions = usingVariantWeightingOptions
+    ? variantWeightingOptions
+    : assetWeightingOptions;
+  const activeViewerWeightingValue = usingVariantWeightingOptions
+    ? (pendingVariantId ?? data?.modality.id ?? "")
+    : displayedWeighting;
   const activeFilmstripAssetId = currentAsset?.id ?? pendingAsset?.id ?? null;
   const isPreparingInitialAsset = activeAssets.length > 0 && !currentAsset;
   const activeAreaToolSize =
@@ -1747,6 +1983,10 @@ function ModalityViewerShell({
     return baseSliceAssetIds.filter((assetId) => !nextOrderSet.has(assetId));
   }, [baseSliceAssetIds, normalizedSliceTimelineIds]);
   const pendingSliceSortUpdates = useMemo(() => {
+    if (areAssetIdOrdersEqual(normalizedSliceTimelineIds, baseSliceAssetIds)) {
+      return [];
+    }
+
     const sortStart = baseSliceAssets.reduce(
       (minimum, asset) => Math.min(minimum, asset.sortOrder),
       Number.POSITIVE_INFINITY,
@@ -1780,7 +2020,12 @@ function ModalityViewerShell({
           nextSortOrder: number;
         } => Boolean(value),
       );
-  }, [baseSliceAssets, normalizedSliceTimelineIds, sliceAssetById]);
+  }, [
+    baseSliceAssetIds,
+    baseSliceAssets,
+    normalizedSliceTimelineIds,
+    sliceAssetById,
+  ]);
   const hasPendingSliceTimelineChanges =
     pendingDeletedSliceIds.length > 0 || pendingSliceSortUpdates.length > 0;
 
@@ -1993,9 +2238,65 @@ function ModalityViewerShell({
       return;
     }
 
+    if (nextWeighting === activeWeighting && !pendingWeighting) {
+      return;
+    }
+
+    const assetsForWeighting = filterAssetsByWeighting(
+      orderedSliceAssets,
+      nextWeighting,
+    );
+    const targetAsset = findNearestWeightingAsset(
+      assetsForWeighting,
+      currentAsset,
+    );
+
+    if (!targetAsset) {
+      return;
+    }
+
+    const requestId = weightingChangeRequestIdRef.current + 1;
+    weightingChangeRequestIdRef.current = requestId;
     lastNavigationSourceRef.current = "weighting";
     lastNavigationDirectionRef.current = 0;
-    setActiveWeighting(nextWeighting);
+    setPendingWeighting(nextWeighting);
+    queueWeightingPreload(assetsForWeighting, targetAsset);
+
+    void preloadAsset(targetAsset, "high").then(() => {
+      if (weightingChangeRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      startWeightingTransition(() => {
+        setActiveWeighting(nextWeighting);
+        setPendingWeighting(null);
+      });
+      void requestAssetNavigation(targetAsset, "weighting");
+    });
+  }
+
+  function handleViewerWeightingChange(value: string) {
+    if (usingVariantWeightingOptions) {
+      if (sliceInteractionLocked) {
+        return;
+      }
+
+      const variant = variantWeightingById.get(value);
+
+      if (!variant || variant.id === data?.modality.id) {
+        return;
+      }
+
+      setPendingVariantId(variant.id);
+      router.push(
+        readOnly
+          ? `/${zoneSlug}/${variant.slug}`
+          : `/playground/zones/${zoneId}/modalities/${variant.id}/viewer`,
+      );
+      return;
+    }
+
+    handleWeightingChange(value);
   }
 
   async function handleSaveStructure(options?: {
@@ -2806,25 +3107,26 @@ function ModalityViewerShell({
       }
     }
 
-    for (const { asset, nextSortOrder } of pendingSliceSortUpdates) {
+    if (pendingSliceSortUpdates.length > 0) {
       try {
-        await updateModalityAsset({
-          assetId: asset.id,
+        const reorderSummary = await reorderModalityAssets({
           input: {
-            assetKind: asset.assetKind,
-            imageUrl: asset.imageUrl,
-            label: asset.label,
-            notes: asset.notes,
-            sortOrder: nextSortOrder,
-            thumbnailUrl: asset.thumbnailUrl,
-            weightingCode: asset.weightingCode,
+            updates: pendingSliceSortUpdates.map(({ asset, nextSortOrder }) => ({
+              assetId: asset.id,
+              sortOrder: nextSortOrder,
+            })),
           },
           modalityId,
           zoneId,
         }).unwrap();
-        updatedCount += 1;
+
+        updatedCount += reorderSummary.updatedCount;
+        failedCount += Math.max(
+          0,
+          reorderSummary.requestedCount - reorderSummary.updatedCount,
+        );
       } catch {
-        failedCount += 1;
+        failedCount += pendingSliceSortUpdates.length;
       }
     }
 
@@ -3074,7 +3376,7 @@ function ModalityViewerShell({
 
       {showControlPanel ? (
         <ModalityViewerRightPanel
-          activeWeighting={activeWeighting}
+          activeWeighting={activeViewerWeightingValue}
           annotationForm={annotationForm}
           busy={busy}
           canvasMode={canvasMode}
@@ -3091,7 +3393,9 @@ function ModalityViewerShell({
           structureForm={structureForm}
           structures={structures}
           visibleGroupIds={visibleGroupIds}
-          weightings={weightings}
+          weightingBusy={isWeightingPending}
+          weightingDisabled={sliceInteractionLocked}
+          weightingOptions={viewerWeightingOptions}
           handleReset={handleReset}
           onAnnotationFormChange={updateAnnotationForm}
           onCanvasModeChange={setCanvasMode}
@@ -3115,7 +3419,7 @@ function ModalityViewerShell({
           onShowLabelsChange={setShowLabels}
           onStructureFormChange={updateStructureForm}
           onVisibleGroupIdsChange={setVisibleGroupIds}
-          onWeightingChange={handleWeightingChange}
+          onWeightingChange={handleViewerWeightingChange}
         />
       ) : null}
     </div>

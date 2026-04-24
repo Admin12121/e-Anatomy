@@ -8,6 +8,8 @@ import type {
   CreateViewerStructureInput,
   DeleteZoneModalityAssetsInput,
   DeleteZoneModalityAssetsResponse,
+  ReorderZoneModalityAssetsInput,
+  ReorderZoneModalityAssetsResponse,
   CreateZoneModalityAssetInput,
   CreateZoneModalityInput,
   CreateZoneInput,
@@ -267,6 +269,24 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    reorderZoneModalityAssets: builder.mutation<
+      ReorderZoneModalityAssetsResponse,
+      {
+        zoneId: string
+        modalityId: string
+        input: ReorderZoneModalityAssetsInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneModalityAssets", id: `LIST:${modalityId}` },
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/assets/reorder`,
+        method: "POST",
+        body: input,
+      }),
+    }),
     rebuildZoneModalityAtlases: builder.mutation<
       void,
       {
@@ -470,6 +490,7 @@ export const {
   useGetZoneModalityAssetsQuery,
   useGetZoneModalitiesQuery,
   useGetZonesQuery,
+  useReorderZoneModalityAssetsMutation,
   useUpdateViewerAnnotationMutation,
   useUpdateViewerStructureGroupMutation,
   useUpdateViewerStructureMutation,

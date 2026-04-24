@@ -67,10 +67,7 @@ import {
   parsePartInteractionModeFromDraft,
   parsePartInteractionModeFromStructure,
 } from "./modality-viewer/right-panel/shared";
-import {
-  formatWeightingLabel,
-  toColorInputValue,
-} from "./modality-viewer/right-panel/utils";
+import { toColorInputValue } from "./modality-viewer/right-panel/utils";
 import { ViewerSidebarSection } from "./modality-viewer/right-panel/viewer-sidebar-section";
 
 type UpdateAnnotationForm = <Key extends keyof AnnotationFormState>(
@@ -87,6 +84,11 @@ type UpdateStructureForm = <Key extends keyof StructureFormState>(
   key: Key,
   value: StructureFormState[Key],
 ) => void;
+
+type WeightingSelectOption = {
+  label: string;
+  value: string;
+};
 
 type RightPanelProps = {
   activeWeighting: string;
@@ -106,7 +108,9 @@ type RightPanelProps = {
   structureForm: StructureFormState;
   structures: ViewerStructure[];
   visibleGroupIds: string[];
-  weightings: string[];
+  weightingBusy: boolean;
+  weightingDisabled: boolean;
+  weightingOptions: WeightingSelectOption[];
   onAnnotationFormChange: UpdateAnnotationForm;
   onCanvasModeChange: (mode: ViewerCanvasMode) => void;
   onCancelAnnotationEdit: () => void;
@@ -179,7 +183,9 @@ export function ModalityViewerRightPanel({
   structureForm,
   structures,
   visibleGroupIds,
-  weightings,
+  weightingBusy,
+  weightingDisabled,
+  weightingOptions,
   onAnnotationFormChange,
   onCanvasModeChange,
   onCancelAnnotationEdit,
@@ -215,6 +221,9 @@ export function ModalityViewerRightPanel({
   const [selectedAnatomicalPartId, setSelectedAnatomicalPartId] = useState<
     string | null
   >(null);
+  const activeWeightingLabel =
+    weightingOptions.find((option) => option.value === activeWeighting)?.label ??
+    activeWeighting;
   const allGroupIds = groups.map((group) => group.id);
   const allGroupsVisible =
     allGroupIds.length > 0 && visibleGroupIds.length === allGroupIds.length;
@@ -385,12 +394,10 @@ export function ModalityViewerRightPanel({
       <Frame>
         <div className="flex items-center justify-between px-3 py-2">Menu</div>
         <FramePanel className="p-3">
-          {weightings.length > 1 ? (
-            <ViewerSidebarSection title="Slice Weighting">
-              <p className="mb-2 text-xs text-white/55">
-                Filter slices by assigned weighting.
-              </p>
+          {weightingOptions.length > 0 ? (
+            <ViewerSidebarSection title="Weightings">
               <Select
+                disabled={weightingDisabled}
                 value={activeWeighting}
                 onValueChange={(value) => {
                   if (value) {
@@ -399,12 +406,17 @@ export function ModalityViewerRightPanel({
                 }}
               >
                 <SelectTrigger className="w-full rounded-xl text-sm">
-                  <SelectValue placeholder="Filter slices" />
+                  <SelectValue placeholder="Filter slices">
+                    {activeWeightingLabel}
+                  </SelectValue>
+                  {weightingBusy ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin text-white/65" />
+                  ) : null}
                 </SelectTrigger>
                 <SelectContent className="max-h-72">
-                  {weightings.map((weighting) => (
-                    <SelectItem key={weighting} value={weighting}>
-                      {formatWeightingLabel(weighting)}
+                  {weightingOptions.map((weighting) => (
+                    <SelectItem key={weighting.value} value={weighting.value}>
+                      {weighting.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
