@@ -535,16 +535,20 @@ export function SliceFilmstrip({
                 : "Slice editing unavailable"
             }
             className={cn(
-              "flex size-7 items-center justify-center rounded-md border border-transparent bg-black/35 transition",
-              allowEditing
-                ? "hover:border-white/30"
-                : "cursor-not-allowed opacity-60",
+              "flex size-9 items-center justify-center rounded-md border border-transparent bg-black/35 transition",
+              allowEditing && "hover:border-white/30",
               allowEditing && showSliceEditorPanel && "border-indigo-600/70",
             )}
             disabled={!allowEditing || navigationDisabled}
             onClick={onToggleSliceEditorPanel}
           >
-            <NextImage src="/logo.webp" alt="Anatomy" height={24} width={24} />
+            <NextImage
+              src="/logo.webp"
+              alt="Anatomy"
+              height={34}
+              width={34}
+              className="rounded-md dark:rounded-none"
+            />
           </button>
 
           <div className="relative ml-23.75 min-w-0">
@@ -574,7 +578,11 @@ export function SliceFilmstrip({
             >
               <LayoutGrid />
             </Button>
-            <Button size="icon" disabled={navigationDisabled} onClick={onPrevious}>
+            <Button
+              size="icon"
+              disabled={navigationDisabled}
+              onClick={onPrevious}
+            >
               <ArrowLeft />
             </Button>
             <p className="w-24 pr-1 text-center text-sm font-semibold tabular-nums dark:text-white/85">

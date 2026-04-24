@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  CameraIcon,
+  CompassIcon,
   CrosshairIcon,
   EyeIcon,
   EyeOffIcon,
@@ -9,6 +11,7 @@ import {
   FlipVertical2 as FlipVertical2Icon,
   GripVertical,
   LoaderCircleIcon,
+  MoonIcon,
   Pen,
   PenOff,
   PinIcon,
@@ -23,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Group } from "@/components/ui/group";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import {
   Select,
   SelectContent,
@@ -50,6 +54,7 @@ import {
   FrameTitle,
 } from "@/components/ui/frame";
 import { Switch } from "@/components/ui/switch";
+import { AnimatedThemeToggler } from "@/components/animated-theme-toggle";
 import {
   Table,
   TableBody,
@@ -104,7 +109,10 @@ type RightPanelProps = {
   readOnly: boolean;
   selectedAnnotationId: string | null;
   selectedStructureId: string | null;
+  overlayOpacity: number;
   showLabels: boolean;
+  showOrientation: boolean;
+  showStudyPanel: boolean;
   structureForm: StructureFormState;
   structures: ViewerStructure[];
   visibleGroupIds: string[];
@@ -121,6 +129,7 @@ type RightPanelProps = {
   onFlipCanvasVertical: () => void;
   onGroupFormChange: UpdateGroupForm;
   onGroupVisibilityChange: (groupId: string, nextVisible: boolean) => void;
+  onOverlayOpacityChange: (value: number) => void;
   onResetGroup: () => void;
   onResetStructure: () => void;
   onRotateCanvasLeft: () => void;
@@ -135,7 +144,10 @@ type RightPanelProps = {
   onSelectGroup: (groupId: string) => void;
   onSelectStructure: (structureId: string, groupId: string | null) => void;
   onShowLabelsChange: (value: boolean) => void;
+  onShowOrientationChange: (value: boolean) => void;
+  onShowStudyPanelChange: (value: boolean) => void;
   onStructureFormChange: UpdateStructureForm;
+  onTakeScreenshot: () => void | Promise<void>;
   onVisibleGroupIdsChange: (groupIds: string[]) => void;
   onWeightingChange: (weighting: string) => void;
   handleReset: () => void;
@@ -179,7 +191,10 @@ export function ModalityViewerRightPanel({
   readOnly,
   selectedAnnotationId,
   selectedStructureId,
+  overlayOpacity,
   showLabels,
+  showOrientation,
+  showStudyPanel,
   structureForm,
   structures,
   visibleGroupIds,
@@ -196,6 +211,7 @@ export function ModalityViewerRightPanel({
   onFlipCanvasVertical,
   onGroupFormChange,
   onGroupVisibilityChange,
+  onOverlayOpacityChange,
   onResetGroup,
   onResetStructure,
   onRotateCanvasLeft,
@@ -206,7 +222,10 @@ export function ModalityViewerRightPanel({
   onSelectGroup,
   onSelectStructure,
   onShowLabelsChange,
+  onShowOrientationChange,
+  onShowStudyPanelChange,
   onStructureFormChange,
+  onTakeScreenshot,
   onVisibleGroupIdsChange,
   onWeightingChange,
   handleReset,
@@ -222,8 +241,8 @@ export function ModalityViewerRightPanel({
     string | null
   >(null);
   const activeWeightingLabel =
-    weightingOptions.find((option) => option.value === activeWeighting)?.label ??
-    activeWeighting;
+    weightingOptions.find((option) => option.value === activeWeighting)
+      ?.label ?? activeWeighting;
   const allGroupIds = groups.map((group) => group.id);
   const allGroupsVisible =
     allGroupIds.length > 0 && visibleGroupIds.length === allGroupIds.length;
@@ -970,6 +989,80 @@ export function ModalityViewerRightPanel({
             />
           ) : null}
         </>
+      ) : null}
+      {readOnly ? (
+        <Frame>
+          <FrameHeader className="px-3 py-2 text-sm font-semibold">
+            Display Mode
+          </FrameHeader>
+          <FramePanel className="space-y-3 p-3">
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-3 border-b border-border/60 py-2">
+                <span className="flex min-w-0 items-center gap-2 text-sm">
+                  <svg
+                    data-v-25379b65=""
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="24"
+                    height="24"
+                    fill="none"
+                  >
+                    <path
+                      fill="currentColor"
+                      d="m8.725 1.977.151.036 5.404 1.646c.736.225 1.24.905 1.24 1.675v2.319l6.473 4.115c.989.629.646 2.151-.517 2.296l-5.956.735v5.777c0 1.173-1.47 1.7-2.216.794l-4.701-5.716-2.201.273a1.75 1.75 0 0 1-1.793-.981l-2.173-4.541a1.25 1.25 0 0 1 .981-1.782l3.844-.45V3.207a1.25 1.25 0 0 1 1.464-1.231m1.642 13.459 3.653 4.443v-4.894zm-6.428-5.363 2.022 4.225a.25.25 0 0 0 .257.14l2.61-.322 3.749-.464-4.992-4.007zm11.581 3.215 5.08-.628-5.08-3.23zM8.761 8.664l5.259 4.222V5.334a.25.25 0 0 0-.178-.239l-5.08-1.55z"
+                    ></path>
+                  </svg>
+                  <span className="truncate">Show/hide cross references</span>
+                </span>
+                <Switch
+                  aria-label="Toggle cross references"
+                  checked={showStudyPanel}
+                  onCheckedChange={onShowStudyPanelChange}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3 border-b border-border/60 py-2">
+                <span className="flex min-w-0 items-center gap-2 text-sm">
+                  <MoonIcon className="size-4 shrink-0 opacity-80" />
+                  <span className="truncate">Dark mode</span>
+                </span>
+                <AnimatedThemeToggler aria-label="Toggle dark mode" />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Overlay opacity</div>
+              <Slider
+                aria-label="Overlay opacity"
+                className="w-full"
+                max={1}
+                min={0.1}
+                step={0.05}
+                value={[overlayOpacity]}
+                onValueChange={(values) => {
+                  const nextOpacity = values[0];
+
+                  if (
+                    typeof nextOpacity !== "number" ||
+                    Number.isNaN(nextOpacity)
+                  ) {
+                    return;
+                  }
+
+                  onOverlayOpacityChange(nextOpacity);
+                }}
+              />
+            </div>
+
+            <Button
+              className="w-full"
+              type="button"
+              variant="secondary"
+              onClick={() => void onTakeScreenshot()}
+            >
+              <CameraIcon className="size-4" />
+              Take a screenshot
+            </Button>
+          </FramePanel>
+        </Frame>
       ) : null}
     </aside>
   );

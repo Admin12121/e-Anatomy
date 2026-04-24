@@ -1,4 +1,4 @@
-import { SearchIcon } from "lucide-react";
+import { ArrowLeft, SearchIcon } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import type {
@@ -12,6 +12,9 @@ import {
   StructureDrawer,
   TriViewStudyPanel,
 } from "./study-sidebar";
+import { buttonVariants } from "@/components/ui/button";
+import Link from "next/link";
+import { cn } from "@/lib/utils";
 
 type StudySearchHit = {
   asset: ZoneModalityAsset | null;
@@ -50,15 +53,25 @@ export function StudyPanel({
   return (
     <aside className="space-y-4 overflow-y-auto p-2">
       <div className="space-y-2">
-        <div className="relative">
-          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-white/40" />
-          <Input
-            className="pl-9"
-            placeholder="Search in this module"
-            value={searchQuery}
-            onChange={(event) => onSearchQueryChange(event.target.value)}
-          />
-        </div>
+        <span className={cn(readOnly && "flex items-center flex-row gap-2")}>
+          {readOnly && (
+            <Link
+              href={"/"}
+              className={cn(buttonVariants({ variant: "secondary", size: "icon" }))}
+            >
+              <ArrowLeft className="size-5" />
+            </Link>
+          )}
+          <div className="relative w-full">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2" />
+            <Input
+              className="pl-9"
+              placeholder="Search in this module"
+              value={searchQuery}
+              onChange={(event) => onSearchQueryChange(event.target.value)}
+            />
+          </div>
+        </span>
         {searchHits.length > 0 ? (
           <div className="space-y-2 rounded-2xl border border-white/8 bg-black/20 p-3">
             {searchHits.map(({ asset, structure }) => (

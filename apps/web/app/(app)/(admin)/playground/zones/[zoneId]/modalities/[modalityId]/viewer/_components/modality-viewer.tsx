@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useTheme } from "next-themes";
 import {
   useCallback,
   startTransition,
@@ -293,6 +294,7 @@ function ModalityViewerShell({
   zoneSlug,
 }: ModalityViewerShellProps) {
   const router = useRouter();
+  const { resolvedTheme } = useTheme();
   const readOnly = mode === "public";
   const {
     data,
@@ -353,10 +355,10 @@ function ModalityViewerShell({
   const practiceMode = false;
   const pinsOnly = false;
   const [targetedLabeling, setTargetedLabeling] = useState(false);
-  const showOrientation = true;
-  const [showCrossReferences, setShowCrossReferences] = useState(true);
-  const darkMode = true;
-  const overlayOpacity = 0.72;
+  const [showOrientation, setShowOrientation] = useState(true);
+  const [showCrossReferences, setShowCrossReferences] = useState(false);
+  const darkMode = resolvedTheme !== "light";
+  const [overlayOpacity, setOverlayOpacity] = useState(0.72);
   const reverseScroll = false;
   const pointAnimation = true;
   const fontScaleMode: FontScaleMode = "auto";
@@ -376,7 +378,7 @@ function ModalityViewerShell({
   const [showSliceEditorPanel, setShowSliceEditorPanel] = useState(false);
   const [mainInteractionTool, setMainInteractionTool] =
     useState<MainInteractionTool>("layers");
-  const effectiveShowCrossReferences = readOnly ? false : showCrossReferences;
+  const effectiveShowCrossReferences = showCrossReferences;
   const [showStudyPanel, setShowStudyPanel] = useState(true);
   const [showControlPanel, setShowControlPanel] = useState(true);
   const [canvasRotationQuarterTurns, setCanvasRotationQuarterTurns] =
@@ -572,7 +574,6 @@ function ModalityViewerShell({
   );
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSliceTimelineIds((current) => {
       const preserved = current.filter((assetId) =>
         baseSliceAssetIdSet.has(assetId),
@@ -1150,7 +1151,6 @@ function ModalityViewerShell({
       }
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReadyAssetIds((current) => {
       let changed = false;
       const next = new Set<string>();
@@ -1214,7 +1214,6 @@ function ModalityViewerShell({
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCurrentImageElement((current) =>
       current === cachedImage ? current : cachedImage,
     );
@@ -1316,7 +1315,6 @@ function ModalityViewerShell({
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVisibleGroupIds((current) =>
       current.length > 0
         ? current
@@ -1335,7 +1333,6 @@ function ModalityViewerShell({
       selectedStructure?.groupId &&
       groupsById.has(selectedStructure.groupId)
     ) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedGroupId(selectedStructure.groupId);
       return;
     }
@@ -1347,7 +1344,6 @@ function ModalityViewerShell({
 
   useEffect(() => {
     if (!weightings.includes(activeWeighting)) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveWeighting(weightings[0] ?? "all");
     }
   }, [activeWeighting, weightings]);
@@ -1357,7 +1353,6 @@ function ModalityViewerShell({
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPendingWeighting(null);
   }, [pendingWeighting, weightings]);
 
@@ -1366,7 +1361,6 @@ function ModalityViewerShell({
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPendingVariantId(null);
   }, [data?.modality.id, pendingVariantId]);
 
@@ -1445,7 +1439,6 @@ function ModalityViewerShell({
 
   useEffect(() => {
     if (!selectedGroup) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setGroupForm(EMPTY_GROUP_FORM);
       return;
     }
@@ -1457,7 +1450,6 @@ function ModalityViewerShell({
 
   useEffect(() => {
     if (!selectedStructure) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStructureForm(EMPTY_STRUCTURE_FORM);
       return;
     }
@@ -1472,7 +1464,6 @@ function ModalityViewerShell({
   }, [selectedStructure]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAnnotationForm((current) =>
       areAnnotationFormsEqual(current, annotationBaselineForm)
         ? current
@@ -1514,7 +1505,6 @@ function ModalityViewerShell({
     const nextSelectedAnnotationId = matchingAnnotation?.id ?? null;
 
     if (nextSelectedAnnotationId !== selectedAnnotationId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedAnnotationId(nextSelectedAnnotationId);
     }
   }, [
@@ -1755,7 +1745,7 @@ function ModalityViewerShell({
   const shellGridClass = cn(
     "grid min-h-0 flex-1 gap-2",
     readOnly
-      ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-hidden"
+      ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-hidden bg-background"
       : showSliceEditorPanel
         ? "max-h-[calc(100vh-310px)]"
         : "max-h-[calc(100vh-101px)]",
@@ -1785,6 +1775,36 @@ function ModalityViewerShell({
     data?.modality.name,
     showOrientation,
   ]);
+  const handleTakeScreenshot = useCallback(async () => {
+    const stageElement = stageRef.current;
+
+    if (!stageElement) {
+      toast.error("Viewer is not ready for a screenshot.");
+      return;
+    }
+
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(stageElement, {
+        backgroundColor: darkMode ? "#000000" : "#ffffff",
+        cacheBust: true,
+        pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      });
+      const link = document.createElement("a");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const safeTitle = viewerTitle
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+
+      link.href = dataUrl;
+      link.download = `${safeTitle || "viewer"}-${timestamp}.png`;
+      link.click();
+      toast.success("Screenshot saved.");
+    } catch {
+      toast.error("Unable to take a screenshot from this viewer.");
+    }
+  }, [darkMode, viewerTitle]);
   const isAssetLoading = pendingAsset
     ? !readyAssetIds.has(pendingImageSource?.cacheKey ?? pendingAsset.id)
     : false;
@@ -1870,7 +1890,6 @@ function ModalityViewerShell({
 
   useEffect(() => {
     if (canvasMode !== "draw-region") {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDraftDisconnectedPolygons([]);
     }
   }, [canvasMode]);
@@ -3228,7 +3247,10 @@ function ModalityViewerShell({
           readOnly={readOnly}
           selectedAnnotationId={selectedAnnotationId}
           selectedStructureId={selectedStructureId}
+          overlayOpacity={overlayOpacity}
+          showOrientation={showOrientation}
           showLabels={showLabels}
+          showStudyPanel={showStudyPanel}
           structureForm={structureForm}
           structures={structures}
           visibleGroupIds={visibleGroupIds}
@@ -3248,6 +3270,7 @@ function ModalityViewerShell({
           onGroupVisibilityChange={updateGroupVisibility}
           onResetGroup={handleResetGroupDraft}
           onResetStructure={handleResetStructureDraft}
+          onOverlayOpacityChange={setOverlayOpacity}
           onRotateCanvasLeft={handleRotateCanvasLeft}
           onRotateCanvasRight={handleRotateCanvasRight}
           onSaveAnnotation={handleSaveAnnotation}
@@ -3256,7 +3279,10 @@ function ModalityViewerShell({
           onSelectGroup={handleSelectGroupFromPanel}
           onSelectStructure={handleSelectStructureFromPanel}
           onShowLabelsChange={setShowLabels}
+          onShowOrientationChange={setShowOrientation}
+          onShowStudyPanelChange={setShowStudyPanel}
           onStructureFormChange={updateStructureForm}
+          onTakeScreenshot={handleTakeScreenshot}
           onVisibleGroupIdsChange={setVisibleGroupIds}
           onWeightingChange={handleViewerWeightingChange}
         />

@@ -14,7 +14,7 @@ import { CustomEase } from "gsap/CustomEase";
 import { SplitText } from "gsap/SplitText";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ROOT_HISTORY_RESTORE_EVENT } from "@/components/layout/history-navigation-guard";
+import { shouldRunHomePreloader } from "@/components/layout/preloader-session";
 import { Frame, FramePanel } from "@/components/ui/frame";
 
 import {
@@ -192,8 +192,10 @@ function getApiErrorMessage(error: unknown, fallbackMessage: string) {
 
 export default function Page() {
   const pageRef = useRef<HTMLDivElement | null>(null);
-  const [shellVersion, setShellVersion] = useState(0);
-  const [shouldRenderStage, setShouldRenderStage] = useState(false);
+  const [shouldRunInitialPreloader] = useState(shouldRunHomePreloader);
+  const [shouldRenderStage, setShouldRenderStage] = useState(
+    () => !shouldRunInitialPreloader,
+  );
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const stageReadyRef = useRef(false);
   const pendingEngageRef = useRef(false);
@@ -230,23 +232,11 @@ export default function Page() {
   }
 
   useEffect(() => {
-    const handleHistoryRestore = () => {
-      pendingEngageRef.current = false;
-      setShouldRenderStage(false);
-      setShellVersion((current) => current + 1);
-    };
+    if (!shouldRunInitialPreloader) {
+      stageReadyRef.current = true;
+      return;
+    }
 
-    window.addEventListener(ROOT_HISTORY_RESTORE_EVENT, handleHistoryRestore);
-
-    return () => {
-      window.removeEventListener(
-        ROOT_HISTORY_RESTORE_EVENT,
-        handleHistoryRestore,
-      );
-    };
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
     const markStageReady = () => {
       if (cancelled || stageReadyRef.current) {
@@ -282,9 +272,13 @@ export default function Page() {
       cancelled = true;
       window.clearTimeout(readyFallback);
     };
-  }, []);
+  }, [shouldRunInitialPreloader]);
 
   useLayoutEffect(() => {
+    if (!shouldRunInitialPreloader) {
+      return;
+    }
+
     const page = pageRef.current;
 
     if (!page) {
@@ -610,136 +604,144 @@ export default function Page() {
       heroSplit?.revert();
       preloaderSplits.forEach((split) => split.revert());
     };
-  }, [shellVersion]);
+  }, [shouldRunInitialPreloader]);
+
+  const heroClassName = shouldRunInitialPreloader
+    ? "hero"
+    : "relative h-[100svh] w-full overflow-hidden bg-black text-white";
 
   return (
     <div
-      key={shellVersion}
       ref={pageRef}
-      data-preloader-shell=""
+      data-preloader-shell={shouldRunInitialPreloader ? "" : undefined}
       style={{ minHeight: "100svh", backgroundColor: "#000" }}
     >
-      <style dangerouslySetInnerHTML={{ __html: PRELOADER_CRITICAL_CSS }} />
-      <div className="preloader-backdrop">
-        <div className="pb-row">
-          <div className="pb-col">
-            <p>MED//204 Neural Trace</p>
-            <p>MED//204 Neural Trace</p>
-            <p>MED//204 Neural Trace</p>
-            <p>MED//204 Neural Trace</p>
-            <p>MED//204 Neural Trace</p>
-          </div>
-          <div className="pb-col">
-            <p>Region / Cortical Mesh</p>
-            <p>0.392 MRI 008923</p>
-          </div>
-          <div className="pb-col">
-            <p>Modality / Spectral MRI</p>
-            <p>Status / Vital Resonance</p>
-          </div>
-          <div className="pb-col">
-            <Image
-              id="pb-logo"
-              src="/logo.webp"
-              alt=""
-              width={40}
-              height={40}
-              priority
-            />
-          </div>
-          <div className="pb-col">
-            <p>:::bio::scan::grid:::</p>
-          </div>
-        </div>
-
-        <div className="pb-row">
-          <div className="pb-col">
-            <p>Perfusion Memory</p>
-          </div>
-          <div className="pb-col">
-            <p>{"// / perfusion / lattice / //"}</p>
-          </div>
-          <div className="pb-col">
-            <p>Latency Drift &gt; 17%</p>
-          </div>
-          <div className="pb-col">
-            <p>Synapses Aligning</p>
-            <p>Map Emerging</p>
-          </div>
-          <div className="pb-col">
-            <p>Stasis Pending</p>
-            <p>Return -- Atlas View</p>
-          </div>
-          <div className="pb-col">
-            <p>XR-9</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="preloader">
-        <div className="p-row">
-          <p>Booting Atlas</p>
-        </div>
-        <div className="p-row">
-          <div className="p-col">
-            <div className="p-sub-col">
-              <p>Phase 01</p>
-              <p>Calibration</p>
+      {shouldRunInitialPreloader ? (
+        <>
+          <style dangerouslySetInnerHTML={{ __html: PRELOADER_CRITICAL_CSS }} />
+          <div className="preloader-backdrop">
+            <div className="pb-row">
+              <div className="pb-col">
+                <p>MED//204 Neural Trace</p>
+                <p>MED//204 Neural Trace</p>
+                <p>MED//204 Neural Trace</p>
+                <p>MED//204 Neural Trace</p>
+                <p>MED//204 Neural Trace</p>
+              </div>
+              <div className="pb-col">
+                <p>Region / Cortical Mesh</p>
+                <p>0.392 MRI 008923</p>
+              </div>
+              <div className="pb-col">
+                <p>Modality / Spectral MRI</p>
+                <p>Status / Vital Resonance</p>
+              </div>
+              <div className="pb-col">
+                <Image
+                  id="pb-logo"
+                  src="/logo.webp"
+                  alt=""
+                  width={40}
+                  height={40}
+                  priority
+                  className="rounded-md dark:rounded-none"
+                />
+              </div>
+              <div className="pb-col">
+                <p>:::bio::scan::grid:::</p>
+              </div>
             </div>
-            <div className="p-sub-col">
-              <p>Neural Scan</p>
-              <p>12 Layers</p>
+
+            <div className="pb-row">
+              <div className="pb-col">
+                <p>Perfusion Memory</p>
+              </div>
+              <div className="pb-col">
+                <p>{"// / perfusion / lattice / //"}</p>
+              </div>
+              <div className="pb-col">
+                <p>Latency Drift &gt; 17%</p>
+              </div>
+              <div className="pb-col">
+                <p>Synapses Aligning</p>
+                <p>Map Emerging</p>
+              </div>
+              <div className="pb-col">
+                <p>Stasis Pending</p>
+                <p>Return -- Atlas View</p>
+              </div>
+              <div className="pb-col">
+                <p>XR-9</p>
+              </div>
             </div>
           </div>
-          <div className="p-col">
-            <p>MX-24</p>
-          </div>
-        </div>
 
-        <div className="preloader-btn-container">
-          <Image
-            id="pbc-logo"
-            src="/preloader.webp"
-            alt=""
-            width={64}
-            height={64}
-            priority
-          />
-          <p id="pbc-label">Engage</p>
-          <p id="pbc-outro-label">Atlas Ready</p>
+          <div className="preloader">
+            <div className="p-row">
+              <p>Booting Atlas</p>
+            </div>
+            <div className="p-row">
+              <div className="p-col">
+                <div className="p-sub-col">
+                  <p>Phase 01</p>
+                  <p>Calibration</p>
+                </div>
+                <div className="p-sub-col">
+                  <p>Neural Scan</p>
+                  <p>12 Layers</p>
+                </div>
+              </div>
+              <div className="p-col">
+                <p>MX-24</p>
+              </div>
+            </div>
 
-          <div className="pbc-svg-strokes">
-            <svg
-              viewBox="0 0 320 320"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <circle
-                className="stroke-track"
-                cx="160"
-                cy="160"
-                r="155"
-                stroke="#2b2b2b"
-                strokeWidth="2"
-                strokeDasharray="974"
-                strokeDashoffset="974"
+            <div className="preloader-btn-container">
+              <Image
+                id="pbc-logo"
+                src="/preloader.webp"
+                alt=""
+                width={64}
+                height={64}
+                priority
               />
-              <circle
-                className="stroke-progress"
-                cx="160"
-                cy="160"
-                r="155"
-                stroke="#fff"
-                strokeWidth="2"
-                strokeDasharray="974"
-                strokeDashoffset="974"
-              />
-            </svg>
-          </div>
-        </div>
-      </div>
+              <p id="pbc-label">Engage</p>
+              <p id="pbc-outro-label">Atlas Ready</p>
 
-      <section className="hero">
+              <div className="pbc-svg-strokes">
+                <svg
+                  viewBox="0 0 320 320"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <circle
+                    className="stroke-track"
+                    cx="160"
+                    cy="160"
+                    r="155"
+                    stroke="#2b2b2b"
+                    strokeWidth="2"
+                    strokeDasharray="974"
+                    strokeDashoffset="974"
+                  />
+                  <circle
+                    className="stroke-progress"
+                    cx="160"
+                    cy="160"
+                    r="155"
+                    stroke="#fff"
+                    strokeWidth="2"
+                    strokeDasharray="974"
+                    strokeDashoffset="974"
+                  />
+                </svg>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      <section className={heroClassName}>
         {shouldRenderStage ? (
           <div className="absolute inset-0 z-0">
             <AnatomyStage
@@ -847,7 +849,7 @@ export default function Page() {
                           }
                           onClick={() => handleSelectZone(zone.id)}
                         >
-                          <TableCell className="font-medium text-left">
+                          <TableCell className="font-medium text-left ">
                             {zone.name}
                           </TableCell>
                         </TableRow>
@@ -859,7 +861,9 @@ export default function Page() {
             </Frame>
           </div>
         ) : null}
-        <div className="preloader-revealer z-10" />
+        {shouldRunInitialPreloader ? (
+          <div className="preloader-revealer z-10" />
+        ) : null}
       </section>
     </div>
   );

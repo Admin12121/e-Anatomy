@@ -100,6 +100,7 @@ export function AppSidebar({
                     alt="Anatomy"
                     height={35}
                     width={35}
+                    className="rounded-md dark:rounded-none"
                   />
                 </div>
                 <span className="text-base font-semibold">E-Anatomy</span>

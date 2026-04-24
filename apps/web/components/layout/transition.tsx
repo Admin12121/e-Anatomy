@@ -117,7 +117,7 @@ function TransitionBackdrop() {
                     width={40}
                     height={40}
                     sizes="40px"
-                    className="h-full w-full object-contain"
+                    className="h-full w-full object-contain rounded-md dark:rounded-none"
                   />
                 </div>
               ) : (
@@ -190,7 +190,7 @@ function TransitionChrome({
           <RouteLine lineRef={labelLineRef}>Engage</RouteLine>
         </p>
         <p className="absolute top-1/2 left-1/2 min-w-48 -translate-x-1/2 -translate-y-1/2 overflow-hidden text-center text-[0.9rem]">
-          <RouteLine lineRef={outroLineRef}>Atlas Ready</RouteLine>
+          <RouteLine lineRef={outroLineRef}>Admin12121</RouteLine>
         </p>
 
         <div className="absolute inset-0">
@@ -368,11 +368,18 @@ export default function TransitionProvider({ children }: TransitionProviderProps
       timelineRef.current?.kill()
       isTransitionActiveRef.current = true
       lockScroll()
-      setPageShell(refs.page)
-
       gsap.set(refs.backdrop, {
         autoAlpha: 1,
         display: "flex",
+      })
+      gsap.set(refs.page, {
+        isolation: "isolate",
+        overflow: "hidden",
+        position: "relative",
+        scale: 1,
+        transformOrigin: "50% 50%",
+        willChange: "transform",
+        zIndex: PAGE_Z_INDEX,
       })
       gsap.set(refs.chrome, {
         autoAlpha: 1,
@@ -439,17 +446,12 @@ export default function TransitionProvider({ children }: TransitionProviderProps
           },
           "-=0.75",
         )
-        .to([refs.page, refs.chrome], {
-          clipPath: LEFT_EDGE_CLIP,
-          duration: 1.5,
-          ease: "route-transition-hop",
-        })
 
       return () => {
         timeline.kill()
       }
     },
-    [getRefs, lockScroll, setPageShell],
+    [getRefs, lockScroll],
   )
 
   const handleEnter = useCallback(
@@ -473,8 +475,12 @@ export default function TransitionProvider({ children }: TransitionProviderProps
         display: "flex",
       })
       gsap.set(refs.chrome, {
-        autoAlpha: 0,
-        display: "none",
+        autoAlpha: 1,
+        clipPath: FULL_CLIP,
+        display: "flex",
+        scale: 0.75,
+        transformOrigin: "50% 50%",
+        willChange: "transform, clip-path",
       })
       gsap.set(refs.revealer, {
         autoAlpha: 1,
@@ -491,11 +497,23 @@ export default function TransitionProvider({ children }: TransitionProviderProps
 
       timelineRef.current = timeline
       timeline
-        .to(refs.revealer, {
+        .to(refs.chrome, {
           clipPath: LEFT_EDGE_CLIP,
           duration: 1.5,
           ease: "route-transition-hop",
         })
+        .to(
+          refs.revealer,
+          {
+            clipPath: LEFT_EDGE_CLIP,
+            duration: 1.5,
+            ease: "route-transition-hop",
+            onComplete: () => {
+              gsap.set(refs.chrome, { display: "none" })
+            },
+          },
+          "-=1.45",
+        )
         .to(refs.page, {
           scale: 1,
           duration: 1.25,
@@ -547,7 +565,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
         ref={chromeRef}
         data-route-transition-chrome=""
         aria-hidden="true"
-        className="pointer-events-none fixed inset-0 hidden h-[100svh] w-full flex-col justify-between text-white opacity-0 mix-blend-difference"
+        className="pointer-events-none fixed inset-0 hidden h-[100svh] w-full flex-col justify-between bg-black text-white opacity-0"
         style={{ zIndex: CHROME_Z_INDEX }}
       >
         <div className="font-preloader-mono text-xs leading-none font-medium uppercase">

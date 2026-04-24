@@ -459,7 +459,7 @@ export default function Preloader({
                       width={40}
                       height={40}
                       sizes="40px"
-                      className="object-contain"
+                      className="rounded-md dark:rounded-none object-contain"
                     />
                   </div>
                 ) : (

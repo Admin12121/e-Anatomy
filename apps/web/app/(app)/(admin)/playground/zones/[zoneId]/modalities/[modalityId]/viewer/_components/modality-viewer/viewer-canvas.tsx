@@ -453,12 +453,7 @@ export function ViewerCanvas({
       return;
     }
 
-    previewContext.clearRect(
-      0,
-      0,
-      AREA_MASK_RESOLUTION,
-      AREA_MASK_RESOLUTION,
-    );
+    previewContext.clearRect(0, 0, AREA_MASK_RESOLUTION, AREA_MASK_RESOLUTION);
 
     const areaMaskCanvas = areaMaskCanvasRef.current;
 
@@ -480,12 +475,7 @@ export function ViewerCanvas({
       annotationForm.overlayColorHex.trim() ||
       annotationForm.colorHex.trim() ||
       DEFAULT_ANNOTATION_COLOR;
-    previewContext.fillRect(
-      0,
-      0,
-      AREA_MASK_RESOLUTION,
-      AREA_MASK_RESOLUTION,
-    );
+    previewContext.fillRect(0, 0, AREA_MASK_RESOLUTION, AREA_MASK_RESOLUTION);
     previewContext.restore();
   }, [
     annotationForm.colorHex,
@@ -1188,8 +1178,7 @@ export function ViewerCanvas({
   return (
     <div
       className={cn(
-        "relative overflow-hidden",
-        darkMode ? "bg-black" : "bg-white",
+        "relative overflow-hidden bg-black",
       )}
     >
       <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center px-6 py-4 text-sm">

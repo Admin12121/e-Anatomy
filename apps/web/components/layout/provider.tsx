@@ -11,6 +11,7 @@ import {
   PreloaderStateProvider,
   type PreloaderStartMode,
 } from "./preloader-state"
+import { markNonRootClientRouteVisited } from "./preloader-session"
 import TransitionProvider from "./transition"
 import { cn } from "@/lib/utils"
 
@@ -67,6 +68,14 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
     return () => window.removeEventListener("resize", handleResize)
   }, [])
 
+  useEffect(() => {
+    if (pathname === "/") {
+      return
+    }
+
+    markNonRootClientRouteVisited()
+  }, [pathname])
+
   const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
   const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
   const isPublicViewerRoute = isPublicViewerPath(pathname)
@@ -88,7 +97,7 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
           <div
             className={cn(
               "relative",
-              isPublicViewerRoute && "min-h-dvh overflow-hidden bg-black",
+              isPublicViewerRoute && "min-h-dvh overflow-hidden",
             )}
           >
             {shouldShowMusicToggle ? <MusicToggle /> : null}

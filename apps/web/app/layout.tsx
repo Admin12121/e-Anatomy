@@ -3,7 +3,6 @@ import { Barlow_Condensed, Geist_Mono, Inter, Oxanium } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import HistoryNavigationGuard from "@/components/layout/history-navigation-guard";
 import {
   DEFAULT_OG_IMAGE,
   SITE_DESCRIPTION,
@@ -128,7 +127,6 @@ export default function RootLayout({
           suppressHydrationWarning
           dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }}
         />
-        <HistoryNavigationGuard />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
