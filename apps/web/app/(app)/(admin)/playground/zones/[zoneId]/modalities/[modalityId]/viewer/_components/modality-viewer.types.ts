@@ -18,6 +18,7 @@ export type StructureFormState = {
 };
 
 export type GroupFormState = {
+  thumbnailUrl: string;
   title: string;
 };
 
@@ -36,6 +37,7 @@ export type AnnotationFormState = {
 export const DEFAULT_ANNOTATION_COLOR = "#6468f0";
 
 export const EMPTY_GROUP_FORM: GroupFormState = {
+  thumbnailUrl: "",
   title: "",
 };
 

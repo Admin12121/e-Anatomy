@@ -81,8 +81,39 @@ type ViewerCanvasMainOverlayProps = {
   visibleAnnotations: ViewerAnnotation[];
 };
 
-function pointToSvgPair(point: ViewerAnnotationPoint) {
-  return `${point.x * 1000},${point.y * 1000}`;
+function pointsToSmoothClosedPath(points: ViewerAnnotationPoint[]) {
+  if (points.length < 3) {
+    return "";
+  }
+
+  const scaledPoints = points.map((point) => ({
+    x: point.x * 1000,
+    y: point.y * 1000,
+  }));
+  const firstPoint = scaledPoints[0]!;
+  const secondPoint = scaledPoints[1]!;
+  const start = {
+    x: (firstPoint.x + secondPoint.x) / 2,
+    y: (firstPoint.y + secondPoint.y) / 2,
+  };
+  const commands = [`M ${start.x} ${start.y}`];
+
+  for (let index = 1; index <= scaledPoints.length; index += 1) {
+    const controlPoint = scaledPoints[index % scaledPoints.length]!;
+    const nextPoint = scaledPoints[(index + 1) % scaledPoints.length]!;
+    const endPoint = {
+      x: (controlPoint.x + nextPoint.x) / 2,
+      y: (controlPoint.y + nextPoint.y) / 2,
+    };
+
+    commands.push(
+      `Q ${controlPoint.x} ${controlPoint.y} ${endPoint.x} ${endPoint.y}`,
+    );
+  }
+
+  commands.push("Z");
+
+  return commands.join(" ");
 }
 
 export function ViewerCanvasMainOverlay({
@@ -126,7 +157,7 @@ export function ViewerCanvasMainOverlay({
 }: ViewerCanvasMainOverlayProps) {
   const overlayPreview =
     canvasMode !== "browse" && !areaPaintPreviewActive
-      ? annotationForm.polygonPoints.map(pointToSvgPair).join(" ")
+      ? pointsToSmoothClosedPath(annotationForm.polygonPoints)
       : null;
 
   return (
@@ -264,10 +295,10 @@ export function ViewerCanvasMainOverlay({
           >
             {polygonPoints.length >= 3 &&
             !(areaPaintPreviewActive && isAreaPaintMode && isSelected) ? (
-              <polygon
+              <path
+                d={pointsToSmoothClosedPath(polygonPoints)}
                 fill={overlayColor}
                 fillOpacity={emphasizedOpacity}
-                points={polygonPoints.map(pointToSvgPair).join(" ")}
               />
             ) : null}
             {markerVisible ? (
@@ -439,10 +470,10 @@ export function ViewerCanvasMainOverlay({
         </g>
       ) : null}
       {overlayPreview ? (
-        <polygon
+        <path
+          d={overlayPreview}
           fill={annotationForm.overlayColorHex}
           fillOpacity={annotationForm.overlayOpacity * overlayOpacity}
-          points={overlayPreview}
         />
       ) : null}
       {canvasMode === "draw-region" && !areaPaintPreviewActive
@@ -452,11 +483,11 @@ export function ViewerCanvasMainOverlay({
             }
 
             return (
-              <polygon
+              <path
+                d={pointsToSmoothClosedPath(polygonPoints)}
                 key={`draft-disconnected-${polygonIndex}`}
                 fill={disconnectedOverlayColor}
                 fillOpacity={annotationForm.overlayOpacity * overlayOpacity}
-                points={polygonPoints.map(pointToSvgPair).join(" ")}
               />
             );
           })

@@ -329,6 +329,7 @@ impl PlaygroundRepository {
                 family.id::text AS family_id,
                 family.name AS family_name,
                 family.modality_type AS family_modality_type,
+                family.thumbnail_url AS family_thumbnail_url,
                 family.notes AS family_notes,
                 modality.id::text AS modality_id,
                 modality.family_id::text AS modality_family_id,
@@ -1489,6 +1490,7 @@ impl PlaygroundRepository {
                 groups.title,
                 groups.description,
                 groups.icon_name,
+                groups.thumbnail_url,
                 groups.sort_order,
                 groups.is_default_visible,
                 TO_CHAR(groups.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
@@ -1518,6 +1520,7 @@ impl PlaygroundRepository {
         title: &str,
         description: Option<&str>,
         icon_name: Option<&str>,
+        thumbnail_url: Option<&str>,
         sort_order: i32,
         is_default_visible: bool,
     ) -> Result<ViewerStructureGroup, sqlx::Error> {
@@ -1529,18 +1532,20 @@ impl PlaygroundRepository {
                 title,
                 description,
                 icon_name,
+                thumbnail_url,
                 sort_order,
                 is_default_visible,
                 created_by_user_id,
                 updated_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
             RETURNING
                 id::text AS id,
                 slug,
                 title,
                 description,
                 icon_name,
+                thumbnail_url,
                 sort_order,
                 is_default_visible,
                 TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
@@ -1552,6 +1557,7 @@ impl PlaygroundRepository {
         .bind(title)
         .bind(description)
         .bind(icon_name)
+        .bind(thumbnail_url)
         .bind(sort_order)
         .bind(is_default_visible)
         .bind(user_id)
@@ -1572,6 +1578,7 @@ impl PlaygroundRepository {
         title: &str,
         description: Option<&str>,
         icon_name: Option<&str>,
+        thumbnail_url: Option<&str>,
         sort_order: i32,
         is_default_visible: bool,
     ) -> Result<Option<ViewerStructureGroup>, sqlx::Error> {
@@ -1582,9 +1589,10 @@ impl PlaygroundRepository {
                 title = $5,
                 description = $6,
                 icon_name = $7,
-                sort_order = $8,
-                is_default_visible = $9,
-                updated_by_user_id = $10,
+                thumbnail_url = $8,
+                sort_order = $9,
+                is_default_visible = $10,
+                updated_by_user_id = $11,
                 updated_at = NOW()
             FROM anatomy_zone_modalities AS modality
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
@@ -1600,6 +1608,7 @@ impl PlaygroundRepository {
                 groups.title,
                 groups.description,
                 groups.icon_name,
+                groups.thumbnail_url,
                 groups.sort_order,
                 groups.is_default_visible,
                 TO_CHAR(groups.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
@@ -1613,6 +1622,7 @@ impl PlaygroundRepository {
         .bind(title)
         .bind(description)
         .bind(icon_name)
+        .bind(thumbnail_url)
         .bind(sort_order)
         .bind(is_default_visible)
         .bind(user_id)
@@ -2470,6 +2480,7 @@ struct ZoneModalityFamilyVariantRow {
     family_id: String,
     family_name: String,
     family_modality_type: String,
+    family_thumbnail_url: Option<String>,
     family_notes: Option<String>,
     modality_id: String,
     modality_family_id: String,
@@ -2536,6 +2547,7 @@ fn group_zone_modality_family_rows(
             id: family_id,
             name: row.family_name,
             modality_type: row.family_modality_type,
+            thumbnail_url: row.family_thumbnail_url,
             notes: row.family_notes,
             ready_variant_count: usize::from(is_ready),
             total_variant_count: 1,
@@ -2726,6 +2738,7 @@ struct ViewerStructureGroupRow {
     title: String,
     description: Option<String>,
     icon_name: Option<String>,
+    thumbnail_url: Option<String>,
     sort_order: i32,
     is_default_visible: bool,
     created_at: String,
@@ -2740,6 +2753,7 @@ impl From<ViewerStructureGroupRow> for ViewerStructureGroup {
             title: value.title,
             description: value.description,
             icon_name: value.icon_name,
+            thumbnail_url: value.thumbnail_url,
             sort_order: value.sort_order,
             is_default_visible: value.is_default_visible,
             created_at: value.created_at,

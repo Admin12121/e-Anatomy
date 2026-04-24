@@ -4,5 +4,6 @@
 
 apps/web/.next
 apps/web/node_modules
+apps/web/public/playground-uploads
 services/api/target
 services/api/data

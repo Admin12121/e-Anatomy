@@ -91,6 +91,7 @@ pub struct ZoneModalityFamily {
     pub id: String,
     pub name: String,
     pub modality_type: String,
+    pub thumbnail_url: Option<String>,
     pub notes: Option<String>,
     pub ready_variant_count: usize,
     pub total_variant_count: usize,
@@ -186,6 +187,7 @@ pub struct UpdateZoneModalityFamilyVariantInput {
 pub struct UpdateZoneModalityFamilyInput {
     pub name: String,
     pub modality_type: String,
+    pub thumbnail_url: Option<String>,
     pub notes: Option<String>,
     pub variants: Vec<UpdateZoneModalityFamilyVariantInput>,
 }
@@ -312,6 +314,7 @@ pub struct ViewerStructureGroup {
     pub title: String,
     pub description: Option<String>,
     pub icon_name: Option<String>,
+    pub thumbnail_url: Option<String>,
     pub sort_order: i32,
     pub is_default_visible: bool,
     pub created_at: String,
@@ -324,6 +327,7 @@ pub struct CreateViewerStructureGroupInput {
     pub title: String,
     pub description: Option<String>,
     pub icon_name: Option<String>,
+    pub thumbnail_url: Option<String>,
     pub sort_order: Option<i32>,
     pub is_default_visible: Option<bool>,
 }
@@ -334,6 +338,7 @@ pub struct UpdateViewerStructureGroupInput {
     pub title: String,
     pub description: Option<String>,
     pub icon_name: Option<String>,
+    pub thumbnail_url: Option<String>,
     pub sort_order: Option<i32>,
     pub is_default_visible: Option<bool>,
 }

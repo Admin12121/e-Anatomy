@@ -207,6 +207,7 @@ export const playgroundApi = createApi({
     >({
       invalidatesTags: (_result, _error, { modalityId }) => [
         { type: "ZoneModalityAssets", id: `LIST:${modalityId}` },
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
       ],
       query: ({ zoneId, modalityId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/assets`,
@@ -226,6 +227,7 @@ export const playgroundApi = createApi({
       invalidatesTags: (_result, _error, { modalityId, assetId }) => [
         { type: "ZoneModalityAssets", id: `LIST:${modalityId}` },
         { type: "ZoneModalityAssets", id: assetId },
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
       ],
       query: ({ zoneId, modalityId, assetId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/assets/${assetId}`,

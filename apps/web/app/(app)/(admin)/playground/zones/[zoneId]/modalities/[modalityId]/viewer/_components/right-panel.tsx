@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CameraIcon,
-  CompassIcon,
   CrosshairIcon,
   EyeIcon,
   EyeOffIcon,
   FlipHorizontal2 as FlipHorizontal2Icon,
   FlipVertical2 as FlipVertical2Icon,
-  GripVertical,
+  ImageIcon,
   LoaderCircleIcon,
   MoonIcon,
   Pen,
@@ -21,10 +20,12 @@ import {
   RotateCwIcon,
   Trash2Icon,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Group } from "@/components/ui/group";
+import { ImageUploadDropzone } from "@/components/ui/image-upload-dropzone";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -64,6 +65,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { uploadThumbnail } from "@/lib/playground/thumbnail-upload";
 import { AnatomicalAreaColorPicker } from "./modality-viewer/right-panel/anatomical-area-color-picker";
 import { AnatomicalPartEditorWindow } from "./modality-viewer/right-panel/anatomical-part-editor-window";
 import {
@@ -193,7 +195,6 @@ export function ModalityViewerRightPanel({
   selectedStructureId,
   overlayOpacity,
   showLabels,
-  showOrientation,
   showStudyPanel,
   structureForm,
   structures,
@@ -222,7 +223,6 @@ export function ModalityViewerRightPanel({
   onSelectGroup,
   onSelectStructure,
   onShowLabelsChange,
-  onShowOrientationChange,
   onShowStudyPanelChange,
   onStructureFormChange,
   onTakeScreenshot,
@@ -234,6 +234,8 @@ export function ModalityViewerRightPanel({
     useState(false);
   const [showCreatePartFrame, setShowCreatePartFrame] = useState(false);
   const [showPartEditorWindow, setShowPartEditorWindow] = useState(false);
+  const [isUploadingGroupThumbnail, setIsUploadingGroupThumbnail] =
+    useState(false);
   const [partEditorInitialContent, setPartEditorInitialContent] = useState("");
   const [partInteractionMode, setPartInteractionMode] =
     useState<PartInteractionMode>("pointer");
@@ -408,6 +410,14 @@ export function ModalityViewerRightPanel({
     onCanvasModeChange("browse");
   };
 
+  const handleGroupThumbnailSelection = (file: File) => {
+    setIsUploadingGroupThumbnail(true);
+    uploadThumbnail(file)
+      .then((url) => onGroupFormChange("thumbnailUrl", url))
+      .catch(() => toast.error("Unable to upload thumbnail."))
+      .finally(() => setIsUploadingGroupThumbnail(false));
+  };
+
   return (
     <aside className="min-h-0 overflow-y-auto p-2 space-y-3">
       <Frame>
@@ -540,16 +550,17 @@ export function ModalityViewerRightPanel({
                             setSelectedAnatomicalPartId(nextGroupId);
                           }}
                         >
-                          <GripVertical className="size-4" />
+                          {group.thumbnailUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              alt=""
+                              className="size-6 rounded object-cover"
+                              src={group.thumbnailUrl}
+                            />
+                          ) : (
+                            <ImageIcon className="size-4" />
+                          )}
                         </button>
-                        {group.iconName?.trim() ? (
-                          <span
-                            aria-hidden="true"
-                            className="inline-flex size-5 items-center justify-center text-sm"
-                          >
-                            {group.iconName}
-                          </span>
-                        ) : null}
                         <span className="truncate text-[15px] leading-5">
                           {group.title}
                         </span>
@@ -632,12 +643,19 @@ export function ModalityViewerRightPanel({
           <div className="flex items-center justify-between px-3 py-2">
             Anatomical Area
             <Button
-              disabled={busy || !groupForm.title.trim()}
+              disabled={
+                busy ||
+                isUploadingGroupThumbnail ||
+                !groupForm.title.trim() ||
+                !groupForm.thumbnailUrl.trim()
+              }
               type="button"
               onClick={() => void handleSaveAnatomicalPart()}
             >
               Save
-              {busy && <LoaderCircleIcon className="size-4 animate-spin" />}
+              {(busy || isUploadingGroupThumbnail) && (
+                <LoaderCircleIcon className="size-4 animate-spin" />
+              )}
             </Button>
           </div>
           <FramePanel className="p-3">
@@ -650,6 +668,17 @@ export function ModalityViewerRightPanel({
                   onChange={(event) =>
                     onGroupFormChange("title", event.target.value)
                   }
+                />
+              </div>
+              <div className="space-y-1.5">
+                <div className="text-xs font-medium">Thumbnail Image</div>
+                <ImageUploadDropzone
+                  disabled={isUploadingGroupThumbnail}
+                  emptyTitle="Drop thumbnail image here"
+                  onClear={() => onGroupFormChange("thumbnailUrl", "")}
+                  onFileAccepted={handleGroupThumbnailSelection}
+                  previewAlt="Anatomical area thumbnail"
+                  value={groupForm.thumbnailUrl}
                 />
               </div>
             </div>
@@ -666,11 +695,16 @@ export function ModalityViewerRightPanel({
                 <div className="flex items-center gap-2">
                   <Button
                     type="button"
-                    disabled={busy || !groupForm.title.trim()}
+                    disabled={
+                      busy ||
+                      isUploadingGroupThumbnail ||
+                      !groupForm.title.trim() ||
+                      !groupForm.thumbnailUrl.trim()
+                    }
                     onClick={() => void handleUpdateSelectedAnatomicalArea()}
                   >
                     Save
-                    {busy && (
+                    {(busy || isUploadingGroupThumbnail) && (
                       <LoaderCircleIcon className="size-4 animate-spin" />
                     )}
                   </Button>
@@ -710,6 +744,28 @@ export function ModalityViewerRightPanel({
                       onChange={(event) =>
                         onGroupFormChange("title", event.target.value)
                       }
+                    />
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium">Thumbnail Image</div>
+                  {readOnly ? (
+                    selectedAnatomicalPart.thumbnailUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        alt={selectedAnatomicalPart.title}
+                        className="h-24 w-32 rounded-md object-cover"
+                        src={selectedAnatomicalPart.thumbnailUrl}
+                      />
+                    ) : null
+                  ) : (
+                    <ImageUploadDropzone
+                      disabled={isUploadingGroupThumbnail}
+                      emptyTitle="Drop thumbnail image here"
+                      onClear={() => onGroupFormChange("thumbnailUrl", "")}
+                      onFileAccepted={handleGroupThumbnailSelection}
+                      previewAlt="Anatomical area thumbnail"
+                      value={groupForm.thumbnailUrl}
                     />
                   )}
                 </div>

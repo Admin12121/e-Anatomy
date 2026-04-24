@@ -190,7 +190,7 @@ function TransitionChrome({
           <RouteLine lineRef={labelLineRef}>Engage</RouteLine>
         </p>
         <p className="absolute top-1/2 left-1/2 min-w-48 -translate-x-1/2 -translate-y-1/2 overflow-hidden text-center text-[0.9rem]">
-          <RouteLine lineRef={outroLineRef}>Admin12121</RouteLine>
+          <RouteLine lineRef={outroLineRef}>Voxel Anatomy</RouteLine>
         </p>
 
         <div className="absolute inset-0">

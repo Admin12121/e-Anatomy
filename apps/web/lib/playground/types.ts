@@ -94,6 +94,7 @@ export type ZoneModalityFamily = {
   id: string;
   name: string;
   modalityType: ModalityType;
+  thumbnailUrl: string | null;
   notes: string | null;
   readyVariantCount: number;
   totalVariantCount: number;
@@ -191,6 +192,7 @@ export type UpdateZoneModalityFamilyVariantInput = {
 export type UpdateZoneModalityFamilyInput = {
   name: string;
   modalityType: ModalityType;
+  thumbnailUrl?: string | null;
   notes?: string | null;
   variants: UpdateZoneModalityFamilyVariantInput[];
 };
@@ -312,6 +314,7 @@ export type ViewerStructureGroup = {
   title: string;
   description: string | null;
   iconName: string | null;
+  thumbnailUrl: string | null;
   sortOrder: number;
   isDefaultVisible: boolean;
   createdAt: string;
@@ -384,6 +387,7 @@ export type CreateViewerStructureGroupInput = {
   title: string;
   description?: string | null;
   iconName?: string | null;
+  thumbnailUrl?: string | null;
   sortOrder?: number | null;
   isDefaultVisible?: boolean | null;
 };

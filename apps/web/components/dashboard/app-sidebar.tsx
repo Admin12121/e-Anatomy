@@ -103,7 +103,7 @@ export function AppSidebar({
                     className="rounded-md dark:rounded-none"
                   />
                 </div>
-                <span className="text-base font-semibold">E-Anatomy</span>
+                <span className="text-base font-semibold">Voxel Anatomy</span>
               </Link>
             </SidebarMenuButton>
             <SidebarTrigger className="-ml-1 flex sm:hidden" />

@@ -815,6 +815,7 @@ async fn parse_study_upload_multipart(
     let mut family_id: Option<String> = None;
     let mut modality_type: Option<String> = None;
     let mut weighting_code: Option<String> = None;
+    let mut thumbnail_url: Option<String> = None;
     let mut notes: Option<String> = None;
     let mut source_kind: Option<String> = None;
     let mut source_label: Option<String> = None;
@@ -848,6 +849,11 @@ async fn parse_study_upload_multipart(
             "weightingCode" => {
                 weighting_code = Some(field.text().await.map_err(|error| {
                     AppError::bad_request(format!("Invalid weighting code: {error}"))
+                })?);
+            }
+            "thumbnailUrl" => {
+                thumbnail_url = Some(field.text().await.map_err(|error| {
+                    AppError::bad_request(format!("Invalid thumbnail field: {error}"))
                 })?);
             }
             "notes" => {
@@ -986,6 +992,7 @@ async fn parse_study_upload_multipart(
         name: name.unwrap_or_default(),
         modality_type: modality_type.unwrap_or_default(),
         weighting_code,
+        thumbnail_url,
         notes,
         source_kind: source_kind.unwrap_or_default(),
         source_label,

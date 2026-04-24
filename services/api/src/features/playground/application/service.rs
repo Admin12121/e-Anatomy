@@ -82,6 +82,7 @@ pub struct CreateZoneModalityStudyUploadInput {
     pub name: String,
     pub modality_type: String,
     pub weighting_code: Option<String>,
+    pub thumbnail_url: Option<String>,
     pub notes: Option<String>,
     pub source_kind: String,
     pub source_label: Option<String>,
@@ -123,6 +124,7 @@ struct ZoneModalityFamilyRecord {
     id: Uuid,
     name: String,
     modality_type: String,
+    thumbnail_url: Option<String>,
     notes: Option<String>,
 }
 
@@ -353,6 +355,7 @@ impl PlaygroundService {
                 family_id,
                 &requested_name,
                 &requested_modality_type,
+                cover_image_url.as_deref(),
                 requested_notes.as_deref(),
             )
             .await?;
@@ -415,6 +418,7 @@ impl PlaygroundService {
 
         let source_label = normalize_optional_text(input.source_label);
         let requested_notes = normalize_optional_text(input.notes);
+        let requested_thumbnail_url = normalize_optional_text(input.thumbnail_url);
         let source_file_count = normalize_source_file_count(
             input.source_file_count.or(Some(input.files.len() as i32)),
         )?;
@@ -428,6 +432,7 @@ impl PlaygroundService {
                 family_id,
                 &requested_name,
                 &requested_modality_type,
+                requested_thumbnail_url.as_deref(),
                 requested_notes.as_deref(),
             )
             .await?;
@@ -444,7 +449,7 @@ impl PlaygroundService {
                 &family.name,
                 &family.modality_type,
                 weighting_code.as_deref(),
-                None,
+                family.thumbnail_url.as_deref(),
                 &source_kind,
                 source_label.as_deref(),
                 source_file_count,
@@ -785,6 +790,7 @@ impl PlaygroundService {
             user_id,
             &name,
             &modality_type,
+            current_modality.cover_image_url.as_deref(),
             notes.as_deref(),
         )
         .await?;
@@ -890,6 +896,7 @@ impl PlaygroundService {
 
         let name = normalize_required_name(&input.name, "Modality name is required")?;
         let modality_type = normalize_modality_type(&input.modality_type)?;
+        let thumbnail_url = normalize_optional_text(input.thumbnail_url);
         let notes = normalize_optional_text(input.notes);
         let mut variant_weightings = BTreeMap::new();
 
@@ -917,13 +924,18 @@ impl PlaygroundService {
             }
         }
 
-        if family.name != name || family.modality_type != modality_type || family.notes != notes {
+        if family.name != name
+            || family.modality_type != modality_type
+            || family.thumbnail_url != thumbnail_url
+            || family.notes != notes
+        {
             self.update_modality_family_shared_fields(
                 &mut tx,
                 family_id,
                 user_id,
                 &name,
                 &modality_type,
+                thumbnail_url.as_deref(),
                 notes.as_deref(),
             )
             .await?;
@@ -1420,6 +1432,12 @@ impl PlaygroundService {
         let title = normalize_required_name(&input.title, "Structure group title is required")?;
         let description = normalize_optional_text(input.description);
         let icon_name = normalize_optional_text(input.icon_name);
+        let thumbnail_url = normalize_optional_text(input.thumbnail_url);
+        if thumbnail_url.is_none() {
+            return Err(AppError::bad_request(
+                "Anatomical area thumbnail is required",
+            ));
+        }
         let sort_order = normalize_sort_order(input.sort_order)?;
         let is_default_visible = input.is_default_visible.unwrap_or(true);
         let slug = self
@@ -1435,6 +1453,7 @@ impl PlaygroundService {
                 &title,
                 description.as_deref(),
                 icon_name.as_deref(),
+                thumbnail_url.as_deref(),
                 sort_order,
                 is_default_visible,
             )
@@ -1457,6 +1476,12 @@ impl PlaygroundService {
         let title = normalize_required_name(&input.title, "Structure group title is required")?;
         let description = normalize_optional_text(input.description);
         let icon_name = normalize_optional_text(input.icon_name);
+        let thumbnail_url = normalize_optional_text(input.thumbnail_url);
+        if thumbnail_url.is_none() {
+            return Err(AppError::bad_request(
+                "Anatomical area thumbnail is required",
+            ));
+        }
         let sort_order = normalize_sort_order(input.sort_order)?;
         let is_default_visible = input.is_default_visible.unwrap_or(true);
 
@@ -1471,6 +1496,7 @@ impl PlaygroundService {
                 &title,
                 description.as_deref(),
                 icon_name.as_deref(),
+                thumbnail_url.as_deref(),
                 sort_order,
                 is_default_visible,
             )
@@ -2159,6 +2185,7 @@ impl PlaygroundService {
                 family.id,
                 family.name,
                 family.modality_type,
+                family.thumbnail_url,
                 family.notes
             FROM anatomy_zone_modality_families AS family
             INNER JOIN anatomy_zones AS zone ON zone.id = family.zone_id
@@ -2219,6 +2246,7 @@ impl PlaygroundService {
                 id,
                 name,
                 modality_type,
+                thumbnail_url,
                 notes
             FROM anatomy_zone_modality_families
             WHERE
@@ -2244,6 +2272,7 @@ impl PlaygroundService {
         user_id: &str,
         name: &str,
         modality_type: &str,
+        thumbnail_url: Option<&str>,
         notes: Option<&str>,
     ) -> Result<ZoneModalityFamilyRecord, AppError> {
         let family = sqlx::query_as::<_, ZoneModalityFamilyRecord>(
@@ -2252,21 +2281,24 @@ impl PlaygroundService {
                 zone_id,
                 name,
                 modality_type,
+                thumbnail_url,
                 notes,
                 created_by_user_id,
                 updated_by_user_id
             )
-            VALUES ($1, $2, $3, $4, $5, $5)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
             RETURNING
                 id,
                 name,
                 modality_type,
+                thumbnail_url,
                 notes
             "#,
         )
         .bind(zone_id)
         .bind(name)
         .bind(modality_type)
+        .bind(thumbnail_url)
         .bind(notes)
         .bind(user_id)
         .fetch_one(tx.as_mut())
@@ -2284,6 +2316,7 @@ impl PlaygroundService {
         family_id: Option<Uuid>,
         name: &str,
         modality_type: &str,
+        thumbnail_url: Option<&str>,
         notes: Option<&str>,
     ) -> Result<ZoneModalityFamilyRecord, AppError> {
         if let Some(family_id) = family_id {
@@ -2300,7 +2333,7 @@ impl PlaygroundService {
             return Ok(existing_family);
         }
 
-        self.create_modality_family(tx, zone_id, user_id, name, modality_type, notes)
+        self.create_modality_family(tx, zone_id, user_id, name, modality_type, thumbnail_url, notes)
             .await
     }
 
@@ -2311,6 +2344,7 @@ impl PlaygroundService {
         user_id: &str,
         name: &str,
         modality_type: &str,
+        thumbnail_url: Option<&str>,
         notes: Option<&str>,
     ) -> Result<(), AppError> {
         sqlx::query(
@@ -2319,8 +2353,9 @@ impl PlaygroundService {
             SET
                 name = $2,
                 modality_type = $3,
-                notes = $4,
-                updated_by_user_id = $5,
+                thumbnail_url = $4,
+                notes = $5,
+                updated_by_user_id = $6,
                 updated_at = NOW()
             WHERE id = $1
             "#,
@@ -2328,6 +2363,7 @@ impl PlaygroundService {
         .bind(family_id)
         .bind(name)
         .bind(modality_type)
+        .bind(thumbnail_url)
         .bind(notes)
         .bind(user_id)
         .execute(tx.as_mut())
@@ -2339,8 +2375,9 @@ impl PlaygroundService {
             SET
                 name = $2,
                 modality_type = $3,
-                notes = $4,
-                updated_by_user_id = $5,
+                cover_image_url = $4,
+                notes = $5,
+                updated_by_user_id = $6,
                 updated_at = NOW()
             WHERE family_id = $1
             "#,
@@ -2348,6 +2385,7 @@ impl PlaygroundService {
         .bind(family_id)
         .bind(name)
         .bind(modality_type)
+        .bind(thumbnail_url)
         .bind(notes)
         .bind(user_id)
         .execute(tx.as_mut())

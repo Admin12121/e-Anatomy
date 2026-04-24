@@ -36,6 +36,8 @@ import {
   useCreateViewerAnnotationMutation,
   useCreateViewerStructureGroupMutation,
   useCreateViewerStructureMutation,
+  useCreateZoneModalityAssetMutation,
+  useDeleteZoneModalityAssetMutation,
   useDeleteZoneModalityAssetsBulkMutation,
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
@@ -44,6 +46,7 @@ import {
   useUpdateViewerAnnotationMutation,
   useUpdateViewerStructureGroupMutation,
   useUpdateViewerStructureMutation,
+  useUpdateZoneModalityAssetMutation,
 } from "@/lib/store/services/playground-api";
 import { cn } from "@/lib/utils";
 import Loader from "@/components/ui/loader";
@@ -330,6 +333,12 @@ function ModalityViewerShell({
   const [reorderModalityAssets] = useReorderZoneModalityAssetsMutation();
   const [deleteModalityAssetsBulk] = useDeleteZoneModalityAssetsBulkMutation();
   const [rebuildZoneModalityAtlases] = useRebuildZoneModalityAtlasesMutation();
+  const [createModalityAsset, { isLoading: isCreatingModalityAsset }] =
+    useCreateZoneModalityAssetMutation();
+  const [updateModalityAsset, { isLoading: isUpdatingModalityAsset }] =
+    useUpdateZoneModalityAssetMutation();
+  const [deleteModalityAsset, { isLoading: isDeletingModalityAsset }] =
+    useDeleteZoneModalityAssetMutation();
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
   const [pendingWeighting, setPendingWeighting] = useState<string | null>(null);
@@ -590,10 +599,6 @@ function ModalityViewerShell({
   const referenceAssets = useMemo(() => {
     return assets.filter((asset) => !isSliceAsset(asset));
   }, [assets]);
-  const triViewAssets = useMemo(
-    () => referenceAssets.slice(0, 3),
-    [referenceAssets],
-  );
 
   const currentAsset = useMemo(() => {
     if (!currentAssetId) {
@@ -628,6 +633,13 @@ function ModalityViewerShell({
     return activeSliceAssetIndexById.get(asset.id) ?? -1;
   }, [activeSliceAssetIndexById, currentAsset, pendingAsset]);
   const activeViewerAssetId = pendingAsset?.id ?? currentAsset?.id ?? null;
+  const referenceProgress = useMemo(() => {
+    if (activeAssets.length <= 1 || navigationAssetIndex < 0) {
+      return 0;
+    }
+
+    return clamp(navigationAssetIndex / (activeAssets.length - 1), 0, 1);
+  }, [activeAssets.length, navigationAssetIndex]);
   const filmstripAssetOrderSignature = useMemo(
     () => viewerSliceItems.map((item) => item.assetId).join("|"),
     [viewerSliceItems],
@@ -1444,6 +1456,7 @@ function ModalityViewerShell({
     }
 
     setGroupForm({
+      thumbnailUrl: selectedGroup.thumbnailUrl ?? "",
       title: selectedGroup.title,
     });
   }, [selectedGroup]);
@@ -1731,12 +1744,15 @@ function ModalityViewerShell({
   const busy =
     isCreatingAnnotation ||
     isCreatingGroup ||
+    isCreatingModalityAsset ||
     isCreatingStructure ||
+    isDeletingModalityAsset ||
     isDeletingGroup ||
     isDeletingStructure ||
     isApplyingSliceChanges ||
     isUpdatingAnnotation ||
     isUpdatingGroup ||
+    isUpdatingModalityAsset ||
     isUpdatingStructure;
   const lockedPreviewStructure =
     selectedStructure?.accessLevel === "subscription"
@@ -2011,32 +2027,22 @@ function ModalityViewerShell({
     void requestAssetNavigation(nextAsset, source);
   }
 
-  function navigateToAssetId(
-    assetId: string,
-    source: NavigationSource = "click",
-  ) {
-    if (
-      sliceInteractionLocked &&
-      assetId !== currentAsset?.id &&
-      assetId !== pendingAsset?.id
-    ) {
+  function handleReferenceProgressChange(progress: number) {
+    if (sliceInteractionLocked || activeAssets.length === 0) {
       return;
     }
 
-    const nextIndex = activeAssets.findIndex((asset) => asset.id === assetId);
+    const nextIndex = clamp(
+      Math.round(clamp(progress, 0, 1) * (activeAssets.length - 1)),
+      0,
+      activeAssets.length - 1,
+    );
 
-    if (nextIndex >= 0) {
-      navigateToAsset(nextIndex, source);
+    if (nextIndex === navigationAssetIndex) {
       return;
     }
 
-    const nextAsset = assetById.get(assetId);
-
-    if (!nextAsset) {
-      return;
-    }
-
-    void requestAssetNavigation(nextAsset, source);
+    navigateToAsset(nextIndex, "scrub");
   }
 
   const updateAnnotationForm = useCallback(function updateAnnotationForm<
@@ -2357,11 +2363,17 @@ function ModalityViewerShell({
       return null;
     }
 
+    if (!groupForm.thumbnailUrl.trim()) {
+      toast.error("Anatomical area thumbnail is required.");
+      return null;
+    }
+
     const input:
       | CreateViewerStructureGroupInput
       | UpdateViewerStructureGroupInput = {
       description: selectedGroup?.description ?? null,
       iconName: selectedGroup?.iconName ?? null,
+      thumbnailUrl: groupForm.thumbnailUrl.trim(),
       isDefaultVisible: selectedGroup?.isDefaultVisible ?? true,
       sortOrder: selectedGroup?.sortOrder ?? 0,
       title: groupForm.title.trim(),
@@ -2418,6 +2430,138 @@ function ModalityViewerShell({
         readMutationError(mutationError, "Unable to delete the group."),
       );
       throw mutationError;
+    }
+  }
+
+  async function handleCreateReferenceAsset(input: {
+    imageUrl: string;
+    notes: string;
+    title: string;
+  }) {
+    if (readOnly) {
+      return false;
+    }
+
+    const title = input.title.trim();
+    const imageUrl = input.imageUrl.trim();
+
+    if (!title) {
+      toast.error("Cross reference title is required.");
+      return false;
+    }
+
+    if (!imageUrl) {
+      toast.error("Cross reference image is required.");
+      return false;
+    }
+
+    try {
+      await createModalityAsset({
+        zoneId,
+        modalityId,
+        input: {
+          assetKind: "reference",
+          imageUrl,
+          label: title,
+          notes: input.notes,
+          sortOrder: referenceAssets.length,
+          thumbnailUrl: imageUrl,
+        },
+      }).unwrap();
+      toast.success("Cross reference added.");
+      await refetchViewerManifest();
+      return true;
+    } catch (mutationError) {
+      toast.error(
+        readMutationError(mutationError, "Unable to add cross reference."),
+      );
+      return false;
+    }
+  }
+
+  async function handleUpdateReferenceAsset(
+    assetId: string,
+    input: {
+      imageUrl: string;
+      notes: string;
+      title: string;
+    },
+  ) {
+    if (readOnly) {
+      return false;
+    }
+
+    const asset = referenceAssets.find((reference) => reference.id === assetId);
+    const title = input.title.trim();
+    const imageUrl = input.imageUrl.trim();
+
+    if (!asset) {
+      toast.error("Cross reference was not found.");
+      return false;
+    }
+
+    if (!title) {
+      toast.error("Cross reference title is required.");
+      return false;
+    }
+
+    if (!imageUrl) {
+      toast.error("Cross reference image is required.");
+      return false;
+    }
+
+    try {
+      await updateModalityAsset({
+        zoneId,
+        modalityId,
+        assetId,
+        input: {
+          assetKind: "reference",
+          imageUrl,
+          label: title,
+          notes: input.notes,
+          sortOrder: asset.sortOrder,
+          thumbnailUrl: imageUrl,
+          weightingCode: asset.weightingCode,
+        },
+      }).unwrap();
+      toast.success("Cross reference updated.");
+      await refetchViewerManifest();
+      return true;
+    } catch (mutationError) {
+      toast.error(
+        readMutationError(mutationError, "Unable to update cross reference."),
+      );
+      return false;
+    }
+  }
+
+  async function handleDeleteReferenceAsset(assetId: string) {
+    if (readOnly) {
+      return false;
+    }
+
+    const asset = referenceAssets.find((reference) => reference.id === assetId);
+
+    if (!asset) {
+      toast.error("Cross reference was not found.");
+      return false;
+    }
+
+    try {
+      await deleteModalityAsset({
+        zoneId,
+        modalityId,
+        assetId,
+      }).unwrap();
+      toast.success("Cross reference deleted.");
+      await refetchViewerManifest();
+      return true;
+    } catch (mutationError) {
+      toast.error(
+        readMutationError(mutationError, "Unable to delete cross reference."),
+      );
+      return false;
     }
   }
 
@@ -3028,17 +3172,29 @@ function ModalityViewerShell({
     <div className={shellGridClass}>
       {showStudyPanel ? (
         <StudyPanel
-          activeAssetId={activeViewerAssetId}
           darkMode={darkMode}
           readOnly={readOnly}
           referenceAssets={referenceAssets}
+          referenceBusy={
+            isCreatingModalityAsset ||
+            isUpdatingModalityAsset ||
+            isDeletingModalityAsset
+          }
+          referenceDisabled={sliceInteractionLocked}
+          referenceProgress={referenceProgress}
           searchHits={searchHits}
           searchQuery={searchQuery}
           selectedAnnotation={selectedAnnotation}
           selectedStructure={selectedStructure}
-          triViewAssets={triViewAssets}
-          onJumpToAsset={(assetId) => navigateToAssetId(assetId, "click")}
+          onCreateReferenceAsset={handleCreateReferenceAsset}
+          onDeleteReferenceAsset={handleDeleteReferenceAsset}
+          onReferenceProgressChange={handleReferenceProgressChange}
+          onUpdateReferenceAsset={handleUpdateReferenceAsset}
           onJumpToStructure={jumpToStructure}
+          onCloseStructure={() => {
+            setSelectedAnnotationId(null);
+            setSelectedStructureId(null);
+          }}
           onSearchQueryChange={setSearchQuery}
         />
       ) : null}

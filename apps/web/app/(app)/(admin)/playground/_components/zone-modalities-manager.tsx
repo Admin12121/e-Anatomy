@@ -19,8 +19,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { ImageUploadDropzone } from "@/components/ui/image-upload-dropzone";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   analyzeModalityUploadFiles,
   isLikelyDicomFilename,
@@ -40,6 +40,7 @@ import {
   MODALITY_WEIGHTING_OPTIONS,
   type ModalityWeightingSelectValue,
 } from "@/lib/playground/modality-options";
+import { uploadThumbnail } from "@/lib/playground/thumbnail-upload";
 import { useAppDispatch } from "@/lib/store/hooks";
 import {
   playgroundApi,
@@ -77,13 +78,13 @@ type CreateContext =
       familyId: string;
       modalityType: ModalityType;
       name: string;
-      notes: string;
+      thumbnailUrl: string;
     };
 
 type ModalityFamilySaveInput = {
   modalityType: ModalityType;
   name: string;
-  notes: string;
+  thumbnailUrl: string;
   weightingByVariantId: Record<string, ModalityWeightingSelectValue>;
 };
 
@@ -482,7 +483,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   });
   const [activeModalityId, setActiveModalityId] = useState<string | null>(null);
   const [createName, setCreateName] = useState("");
-  const [createNotes, setCreateNotes] = useState("");
+  const [createThumbnailUrl, setCreateThumbnailUrl] = useState("");
+  const [createThumbnailUploading, setCreateThumbnailUploading] = useState(false);
   const [createDetectedUpload, setCreateDetectedUpload] =
     useState<DetectedModalityUpload | null>(null);
   const [createModalityTypeOverride, setCreateModalityTypeOverride] =
@@ -639,7 +641,9 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   function resetCreateState(nextContext: CreateContext = { kind: "new" }) {
     setCreateContext(nextContext);
     setCreateName(nextContext.kind === "variant" ? nextContext.name : "");
-    setCreateNotes(nextContext.kind === "variant" ? nextContext.notes : "");
+    setCreateThumbnailUrl(
+      nextContext.kind === "variant" ? nextContext.thumbnailUrl : "",
+    );
     setCreateModalityTypeOverride(
       nextContext.kind === "variant" ? nextContext.modalityType : "other",
     );
@@ -661,7 +665,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       familyId: family.id,
       modalityType: family.modalityType,
       name: family.name,
-      notes: family.notes ?? "",
+      thumbnailUrl: family.thumbnailUrl ?? "",
     });
   }
 
@@ -795,7 +799,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       if (createWeightingCode) {
         formData.append("weightingCode", createWeightingCode);
       }
-      formData.append("notes", createNotes.trim());
+      formData.append("thumbnailUrl", createThumbnailUrl.trim());
       formData.append("sourceKind", createDetectedUpload.sourceKind);
       formData.append(
         "sourceLabel",
@@ -865,6 +869,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
               modalityType: createdModality.modalityType,
               name: createdModality.name,
               notes: createdModality.notes,
+              thumbnailUrl: createdModality.coverImageUrl,
               readyVariantCount:
                 createdModality.processingStatus === "ready" ? 1 : 0,
               totalVariantCount: 1,
@@ -897,11 +902,11 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     input: ModalityFamilySaveInput,
   ) {
     const nextName = input.name.trim();
-    const nextNotes = input.notes.trim() || null;
+    const nextThumbnailUrl = input.thumbnailUrl.trim() || null;
     const hasChanges =
       nextName !== family.name ||
       input.modalityType !== family.modalityType ||
-      nextNotes !== (family.notes ?? null) ||
+      nextThumbnailUrl !== (family.thumbnailUrl ?? null) ||
       family.variants.some(
         (variant) =>
           (input.weightingByVariantId[variant.id] || "") !==
@@ -915,7 +920,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     const nextInput: UpdateZoneModalityFamilyInput = {
       name: nextName,
       modalityType: input.modalityType,
-      notes: nextNotes,
+      notes: family.notes,
+      thumbnailUrl: nextThumbnailUrl,
       variants: family.variants.map((variant) => ({
         modalityId: variant.id,
         weightingCode: input.weightingByVariantId[variant.id] || null,
@@ -1233,15 +1239,20 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
               </div>
 
               <Field>
-                <FieldLabel htmlFor={`modality-notes-${zoneId}`}>
-                  Internal notes
-                </FieldLabel>
-                <Textarea
-                  id={`modality-notes-${zoneId}`}
-                  disabled={createContext.kind === "variant"}
-                  value={createNotes}
-                  onChange={(event) => setCreateNotes(event.target.value)}
-                  placeholder="Internal guidance about this uploaded study or series."
+                <FieldLabel>Thumbnail image</FieldLabel>
+                <ImageUploadDropzone
+                  disabled={createThumbnailUploading}
+                  emptyTitle="Drop thumbnail image here"
+                  onClear={() => setCreateThumbnailUrl("")}
+                  onFileAccepted={(file) => {
+                    setCreateThumbnailUploading(true);
+                    uploadThumbnail(file)
+                      .then(setCreateThumbnailUrl)
+                      .catch(() => toast.error("Unable to upload thumbnail."))
+                      .finally(() => setCreateThumbnailUploading(false));
+                  }}
+                  previewAlt="Modality thumbnail"
+                  value={createThumbnailUrl}
                 />
               </Field>
             </FieldGroup>
@@ -1249,10 +1260,12 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
             <div className="flex flex-wrap gap-2 mt-4">
               <Button
                 type="button"
-                disabled={!createDetectedUpload || isPending}
+                disabled={
+                  !createDetectedUpload || isPending || createThumbnailUploading
+                }
                 onClick={handleCreateModality}
               >
-                {isPending ? (
+                {isPending || createThumbnailUploading ? (
                   <LoaderCircleIcon className="animate-spin" />
                 ) : (
                   <FileArchiveIcon />
@@ -1329,7 +1342,8 @@ function ZoneModalityEditorCard({
   const [modalityType, setModalityType] = useState<ModalityType>(
     family.modalityType,
   );
-  const [notes, setNotes] = useState(family.notes ?? "");
+  const [thumbnailUrl, setThumbnailUrl] = useState(family.thumbnailUrl ?? "");
+  const [isUploadingThumbnail, setIsUploadingThumbnail] = useState(false);
   const [weightingByVariantId, setWeightingByVariantId] = useState<
     Record<string, ModalityWeightingSelectValue>
   >(() => buildFamilyWeightingState(family));
@@ -1347,7 +1361,7 @@ function ZoneModalityEditorCard({
   const hasChanges =
     name.trim() !== family.name ||
     modalityType !== family.modalityType ||
-    notes.trim() !== (family.notes ?? "") ||
+    thumbnailUrl.trim() !== (family.thumbnailUrl ?? "") ||
     family.variants.some(
       (variant) =>
         (weightingByVariantId[variant.id] ?? "") !==
@@ -1365,7 +1379,7 @@ function ZoneModalityEditorCard({
     await onSave(family, {
       name: nextName,
       modalityType,
-      notes,
+      thumbnailUrl,
       weightingByVariantId,
     });
   }
@@ -1414,14 +1428,20 @@ function ZoneModalityEditorCard({
             </div>
 
             <Field>
-              <FieldLabel htmlFor={`edit-modality-notes-${family.id}`}>
-                Internal notes
-              </FieldLabel>
-              <Textarea
-                id={`edit-modality-notes-${family.id}`}
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="Internal guidance about this study, series, or presentation."
+              <FieldLabel>Thumbnail image</FieldLabel>
+              <ImageUploadDropzone
+                disabled={isUploadingThumbnail || pending}
+                emptyTitle="Drop thumbnail image here"
+                onClear={() => setThumbnailUrl("")}
+                onFileAccepted={(file) => {
+                  setIsUploadingThumbnail(true);
+                  uploadThumbnail(file)
+                    .then(setThumbnailUrl)
+                    .catch(() => toast.error("Unable to upload thumbnail."))
+                    .finally(() => setIsUploadingThumbnail(false));
+                }}
+                previewAlt="Modality thumbnail"
+                value={thumbnailUrl}
               />
             </Field>
           </FieldGroup>
@@ -1429,10 +1449,10 @@ function ZoneModalityEditorCard({
           <div className="mt-4 flex flex-wrap gap-2">
             <Button
               type="button"
-              disabled={!hasChanges || pending}
+              disabled={!hasChanges || pending || isUploadingThumbnail}
               onClick={handleSave}
             >
-              {pending ? (
+              {pending || isUploadingThumbnail ? (
                 <LoaderCircleIcon className="animate-spin" />
               ) : (
                 <SaveIcon />

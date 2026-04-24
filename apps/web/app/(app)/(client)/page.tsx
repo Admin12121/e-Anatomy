@@ -678,7 +678,7 @@ export default function Page() {
 
           <div className="preloader">
             <div className="p-row">
-              <p>Booting Atlas</p>
+              <p>Booting Voxel Anatomy</p>
             </div>
             <div className="p-row">
               <div className="p-col">
