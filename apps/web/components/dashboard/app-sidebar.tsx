@@ -96,7 +96,7 @@ export function AppSidebar({
               <Link href={"#"}>
                 <div className="flex size-14 items-center justify-center rounded-md">
                   <Image
-                    src="/logo.png"
+                    src="/logo.webp"
                     alt="Anatomy"
                     height={35}
                     width={35}

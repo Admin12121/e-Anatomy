@@ -454,7 +454,7 @@ export default function Preloader({
                   <div className="relative">
                     <Image
                       id="pb-logo"
-                      src="/logo.png"
+                      src="/logo.webp"
                       alt=""
                       width={40}
                       height={40}
@@ -518,7 +518,7 @@ export default function Preloader({
         >
           <div ref={buttonLogoRef} id="pbc-logo">
             <Image
-              src="/preloader.png"
+              src="/preloader.webp"
               alt=""
               width={64}
               height={64}

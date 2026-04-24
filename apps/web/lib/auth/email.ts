@@ -126,7 +126,7 @@ export async function formatOtpEmail({
   const template = createElement(AuthOtpEmail, {
     actionLabel: actionByType[type],
     email,
-    logoUrl: `${AUTH_BASE_URL}/logo.png`,
+    logoUrl: `${AUTH_BASE_URL}/logo.webp`,
     otp,
   })
   const html = await renderEmailTemplate(template)

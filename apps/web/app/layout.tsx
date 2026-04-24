@@ -1,10 +1,5 @@
 import type { Metadata } from "next";
-import {
-  Barlow_Condensed,
-  Geist_Mono,
-  Inter,
-  Oxanium,
-} from "next/font/google";
+import { Barlow_Condensed, Geist_Mono, Inter, Oxanium } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -35,7 +30,7 @@ const bodyFont = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Anatomy Platform",
+  title: "Voxel Anatomy",
   description: "Backend-first anatomy learning platform bootstrap",
 };
 

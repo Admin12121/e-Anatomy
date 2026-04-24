@@ -640,7 +640,7 @@ export default function Page() {
           <div className="pb-col">
             <Image
               id="pb-logo"
-              src="/logo.png"
+              src="/logo.webp"
               alt=""
               width={40}
               height={40}
@@ -699,7 +699,7 @@ export default function Page() {
         <div className="preloader-btn-container">
           <Image
             id="pbc-logo"
-            src="/preloader.png"
+            src="/preloader.webp"
             alt=""
             width={64}
             height={64}

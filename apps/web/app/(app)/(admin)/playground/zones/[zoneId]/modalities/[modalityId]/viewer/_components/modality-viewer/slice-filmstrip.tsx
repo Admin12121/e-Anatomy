@@ -544,7 +544,7 @@ export function SliceFilmstrip({
             disabled={!allowEditing || navigationDisabled}
             onClick={onToggleSliceEditorPanel}
           >
-            <NextImage src="/logo.png" alt="Anatomy" height={24} width={24} />
+            <NextImage src="/logo.webp" alt="Anatomy" height={24} width={24} />
           </button>
 
           <div className="relative ml-23.75 min-w-0">

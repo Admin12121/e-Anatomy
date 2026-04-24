@@ -542,9 +542,9 @@ export function LoginForm({
             className="flex flex-col items-center gap-2 self-center font-otis-display text-3xl font-medium"
           >
             <div className="flex size-14 items-center justify-center rounded-md">
-              <Image src="/logo.png" alt="Anatomy" height={500} width={500} />
+              <Image src="/logo.webp" alt="Anatomy" height={500} width={500} />
             </div>
-            E-Anatomy.
+            Voxel-Anatomy.
           </Link>
         </div>
         <CardContent>
