@@ -6,9 +6,9 @@ import {
 } from "@/lib/playground/public-server"
 import { absoluteSiteUrl } from "@/lib/seo"
 
-const SITEMAP_REVALIDATE_SECONDS = 60 * 60
+export const revalidate = 3600
 
-export const revalidate = SITEMAP_REVALIDATE_SECONDS
+const SITEMAP_REVALIDATE_SECONDS = revalidate
 
 function sitemapEntry(
   path: string,

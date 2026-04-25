@@ -1,71 +1,49 @@
 import "server-only"
 
 import { render, toPlainText } from "@react-email/render"
-import nodemailer from "nodemailer"
-import { createElement } from "react"
+import { Resend } from "resend"
+import { createElement, type ReactElement } from "react"
 
-import { AuthOtpEmail } from "@/components/emails/auth-otp-email"
+import { AuthOtpEmail } from "@/emails/auth-otp-email"
 import {
   AUTH_BASE_URL,
   AUTH_EMAIL_FROM,
-  AUTH_SMTP_HOST,
-  AUTH_SMTP_PASSWORD,
-  AUTH_SMTP_PORT,
-  AUTH_SMTP_SECURE,
-  AUTH_SMTP_URL,
-  AUTH_SMTP_USER,
+  RESEND_API_KEY,
 } from "@/lib/auth/config"
 
 type AuthEmailPayload = {
-  html: string
+  react: ReactElement
   subject: string
   text: string
   to: string
 }
 
-const globalForMailer = globalThis as typeof globalThis & {
-  __anatomy_auth_mailer__?: nodemailer.Transporter
+const globalForResend = globalThis as typeof globalThis & {
+  __anatomy_resend__?: Resend
 }
 
-function getTransporter() {
-  if (globalForMailer.__anatomy_auth_mailer__) {
-    return globalForMailer.__anatomy_auth_mailer__
-  }
-
-  let transporter: nodemailer.Transporter | null = null
-
-  if (AUTH_SMTP_URL) {
-    transporter = nodemailer.createTransport(AUTH_SMTP_URL)
-  } else if (AUTH_SMTP_HOST && AUTH_SMTP_PORT) {
-    transporter = nodemailer.createTransport({
-      auth:
-        AUTH_SMTP_USER && AUTH_SMTP_PASSWORD
-          ? {
-              pass: AUTH_SMTP_PASSWORD,
-              user: AUTH_SMTP_USER,
-            }
-          : undefined,
-      host: AUTH_SMTP_HOST,
-      port: AUTH_SMTP_PORT,
-      secure: AUTH_SMTP_SECURE,
-    })
-  }
-
-  if (!transporter) {
+function getResendClient() {
+  if (!RESEND_API_KEY) {
     return null
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    globalForMailer.__anatomy_auth_mailer__ = transporter
+  if (globalForResend.__anatomy_resend__) {
+    return globalForResend.__anatomy_resend__
   }
 
-  return transporter
+  const client = new Resend(RESEND_API_KEY)
+
+  if (process.env.NODE_ENV !== "production") {
+    globalForResend.__anatomy_resend__ = client
+  }
+
+  return client
 }
 
 export async function sendAuthEmail(payload: AuthEmailPayload) {
-  const transporter = getTransporter()
+  const resend = getResendClient()
 
-  if (!transporter) {
+  if (!resend) {
     const preview = [
       "[auth-email]",
       `to=${payload.to}`,
@@ -75,7 +53,7 @@ export async function sendAuthEmail(payload: AuthEmailPayload) {
 
     if (process.env.NODE_ENV === "production") {
       throw new Error(
-        "Auth email delivery is not configured. Set SMTP_URL or SMTP_HOST/SMTP_PORT.",
+        "Auth email delivery is not configured. Set RESEND_API_KEY and RESEND_FROM.",
       )
     }
 
@@ -83,13 +61,19 @@ export async function sendAuthEmail(payload: AuthEmailPayload) {
     return
   }
 
-  await transporter.sendMail({
+  const { error } = await resend.emails.send({
     from: AUTH_EMAIL_FROM,
-    html: payload.html,
+    react: payload.react,
     subject: payload.subject,
     text: payload.text,
     to: payload.to,
   })
+
+  if (error) {
+    throw new Error(
+      `Resend email delivery failed: ${error.message ?? JSON.stringify(error)}`,
+    )
+  }
 }
 
 export async function formatOtpEmail({
@@ -132,7 +116,7 @@ export async function formatOtpEmail({
   const html = await renderEmailTemplate(template)
 
   return {
-    html,
+    react: template,
     subject,
     text: toPlainText(html, {
       selectors: [
@@ -157,6 +141,6 @@ export async function formatOtpEmail({
   }
 }
 
-async function renderEmailTemplate(template: ReturnType<typeof createElement>) {
+async function renderEmailTemplate(template: ReactElement) {
   return render(template)
 }

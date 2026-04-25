@@ -148,7 +148,7 @@ export function LoginForm({
       return null;
     }
 
-    return "Email codes fall back to the server console until SMTP is configured.";
+    return "Email codes fall back to the server console until Resend is configured.";
   }, [discovery?.mailDeliveryConfigured]);
 
   function goToMethodChooser() {

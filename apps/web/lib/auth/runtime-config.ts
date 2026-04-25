@@ -29,22 +29,14 @@ export const AUTH_PASSKEY_ORIGINS = Array.from(
 )
 
 export const AUTH_EMAIL_FROM =
-  process.env.AUTH_EMAIL_FROM ?? "Anatomy Platform <no-reply@localhost>"
+  process.env.RESEND_FROM ??
+  process.env.AUTH_EMAIL_FROM ??
+  "Anatomy Platform <no-reply@localhost>"
 
-export const AUTH_SMTP_URL = process.env.SMTP_URL ?? null
-
-export const AUTH_SMTP_HOST = process.env.SMTP_HOST ?? null
-export const AUTH_SMTP_PORT = process.env.SMTP_PORT
-  ? Number(process.env.SMTP_PORT)
-  : null
-export const AUTH_SMTP_USER = process.env.SMTP_USER ?? null
-export const AUTH_SMTP_PASSWORD = process.env.SMTP_PASSWORD ?? null
-export const AUTH_SMTP_SECURE =
-  process.env.SMTP_SECURE === "true" || process.env.SMTP_PORT === "465"
+export const RESEND_API_KEY = process.env.RESEND_API_KEY ?? null
 
 export function getAuthFeatureFlags() {
-  const mailDeliveryConfigured =
-    Boolean(AUTH_SMTP_URL) || Boolean(AUTH_SMTP_HOST && AUTH_SMTP_PORT)
+  const mailDeliveryConfigured = Boolean(RESEND_API_KEY)
 
   return {
     emailOtpEnabled: true,
