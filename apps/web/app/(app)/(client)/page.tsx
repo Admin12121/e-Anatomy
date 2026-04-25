@@ -33,6 +33,7 @@ import {
   useGetPublicZoneModalitiesQuery,
   useGetPublicZonesQuery,
 } from "@/lib/store/services/public-playground-api";
+import ShinyText from "@/components/shiny-text";
 
 const loadAnatomyStage = () => import("@/components/anatomy/anatomy-stage");
 
@@ -752,8 +753,34 @@ export default function Page() {
               showBackdrop={false}
               zones={stageZones}
             />
+            <span className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-5 md:left-5 md:bottom-auto md:w-70 h-14 flex items-center">
+              <div className="flex size-14 items-center justify-center rounded-md">
+                <Image
+                  src="/logo.webp"
+                  alt="Anatomy"
+                  height={35}
+                  width={35}
+                  className="rounded-md dark:rounded-none"
+                />
+              </div>
+              <ShinyText
+                text="Voxel Anatomy"
+                duration={2}
+                delay={1}
+                className="text-3xl"
+              />
+            </span>
+            <span className="absolute inset-x-4 bottom-2 left-1/2 transform -translate-x-1/2 z-10 text-xs flex justify-center gap-1">
+              <p className="font-light opacity-50">Built by</p>
+              <ShinyText
+                text="Admin12121"
+                duration={2}
+                delay={1}
+                className="text-xs"
+              />
+            </span>
             {selectedZone ? (
-              <Frame className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-5 md:left-5 md:bottom-auto md:w-80">
+              <Frame className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-20 md:left-5 md:bottom-auto md:w-80">
                 <FramePanel className="overflow-hidden p-0">
                   <Table>
                     <TableHeader>

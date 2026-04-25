@@ -86,6 +86,8 @@ export function StudyPanel({
   const [referenceCalibration, setReferenceCalibration] = useState(() =>
     parseCrossReferenceCalibration(null),
   );
+  const [showCrossReferencesPanel, setShowCrossReferencesPanel] =
+    useState(true);
   const [isUploadingReferenceImage, setIsUploadingReferenceImage] =
     useState(false);
   const showStructureDrawer = Boolean(selectedStructure);
@@ -147,8 +149,18 @@ export function StudyPanel({
     return deleted;
   };
 
+  const handleToggleCrossReferences = () => {
+    if (showStructureDrawer) {
+      onCloseStructure();
+      setShowCrossReferencesPanel(true);
+      return;
+    }
+
+    setShowCrossReferencesPanel((current) => !current);
+  };
+
   return (
-    <aside className="space-y-4 overflow-y-auto p-2">
+    <aside className="h-full min-h-0 space-y-4 overflow-y-auto p-2">
       <div className="space-y-2">
         <span className={cn(readOnly ? "flex items-center flex-row gap-2" : "flex items-center gap-2")}>
           {readOnly && (
@@ -172,10 +184,14 @@ export function StudyPanel({
           </div>
           {!readOnly && (
             <Button
-              aria-label="Open cross references"
+              aria-label={
+                showStructureDrawer || !showCrossReferencesPanel
+                  ? "Open cross references"
+                  : "Hide cross references"
+              }
               variant="secondary"
               size="icon"
-              onClick={onCloseStructure}
+              onClick={handleToggleCrossReferences}
             >
               <Plus className="size-5" />
             </Button>
@@ -200,7 +216,7 @@ export function StudyPanel({
         ) : null}
       </div>
 
-      {!showStructureDrawer && !readOnly ? (
+      {!showStructureDrawer && !readOnly && showCrossReferencesPanel ? (
         <Frame>
           <FrameHeader className="px-3 py-2 flex flex-row items-center justify-between">
             <div className="text-sm font-semibold">{referenceFormTitle}</div>
@@ -262,7 +278,7 @@ export function StudyPanel({
         </Frame>
       ) : null}
 
-      {!showStructureDrawer && referenceAssets.length > 0 ? (
+      {!showStructureDrawer && showCrossReferencesPanel && referenceAssets.length > 0 ? (
         <div className="space-y-3">
           {referenceAssets.map((asset, index) => (
             <ReferenceCard

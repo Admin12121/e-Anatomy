@@ -1761,7 +1761,7 @@ function ModalityViewerShell({
   const shellGridClass = cn(
     "grid min-h-0 flex-1 gap-2",
     readOnly
-      ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-hidden bg-background"
+      ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-y-auto bg-background"
       : showSliceEditorPanel
         ? "max-h-[calc(100vh-310px)]"
         : "max-h-[calc(100vh-101px)]",

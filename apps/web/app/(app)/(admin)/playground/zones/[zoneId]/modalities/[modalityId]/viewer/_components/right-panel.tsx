@@ -3,17 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CameraIcon,
-  CrosshairIcon,
   EyeIcon,
   EyeOffIcon,
   FlipHorizontal2 as FlipHorizontal2Icon,
   FlipVertical2 as FlipVertical2Icon,
   ImageIcon,
   LoaderCircleIcon,
+  MousePointer2,
   MoonIcon,
   Pen,
   PenOff,
-  PinIcon,
   PlusIcon,
   RotateCcw,
   RotateCcwIcon,
@@ -55,6 +54,7 @@ import {
   FrameTitle,
 } from "@/components/ui/frame";
 import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { AnimatedThemeToggler } from "@/components/animated-theme-toggle";
 import {
   Table,
@@ -260,7 +260,11 @@ export function ModalityViewerRightPanel({
     annotationForm.colorHex,
     structureForm.colorHex || DEFAULT_ANNOTATION_COLOR,
   );
-  const placementEditingActive = canvasMode !== "browse";
+  const areaEditingActive = canvasMode === "draw-region";
+  const pointerPlacementEditingActive =
+    canvasMode === "create-label" ||
+    canvasMode === "set-anchor" ||
+    canvasMode === "set-label";
   const placementTypeLocked = Boolean(selectedStructureId);
   const hasPointerDraft = hasPointerPlacementDraft(annotationForm);
 
@@ -352,15 +356,24 @@ export function ModalityViewerRightPanel({
     onCancelAnnotationEdit();
   };
 
-  const handleEnablePlacementEditing = () => {
-    if (partInteractionMode === "area") {
+  const handleEnablePointerPlacementEditing = () => {
+    onCanvasModeChange("set-anchor");
+  };
+
+  const handlePlacementToolToggle = (nextValues: string[]) => {
+    const nextTool = nextValues[0];
+
+    if (!nextTool) {
+      onCancelAnnotationEdit();
+      return;
+    }
+
+    if (nextTool === "area-edit") {
       onCanvasModeChange("draw-region");
       return;
     }
 
-    onCanvasModeChange(
-      selectedAnnotationId || hasPointerDraft ? "set-anchor" : "create-label",
-    );
+    handleEnablePointerPlacementEditing();
   };
 
   const handleDeleteSelectedPart = async () => {
@@ -530,8 +543,13 @@ export function ModalityViewerRightPanel({
                         <button
                           type="button"
                           className="inline-flex size-6 items-center justify-center rounded-md transition"
+                          disabled={readOnly}
                           aria-label={`Open ${group.title} details`}
                           onClick={() => {
+                            if (readOnly) {
+                              return;
+                            }
+
                             const nextGroupId =
                               selectedAnatomicalPartId === group.id
                                 ? null
@@ -950,64 +968,65 @@ export function ModalityViewerRightPanel({
                     <div className="text-xs font-medium text-white/70">
                       Placement Type
                     </div>
-                    <Group className="rounded-md bg-white/6 p-0.5">
-                      <Button
-                        disabled={placementTypeLocked}
-                        type="button"
-                        variant={
-                          partInteractionMode === "pointer"
-                            ? "default"
-                            : "secondary"
+                    <Select
+                      disabled={placementTypeLocked}
+                      value={partInteractionMode}
+                      onValueChange={(value) => {
+                        if (value === "pointer" || value === "area") {
+                          handlePartInteractionModeChange(value);
                         }
-                        onClick={() =>
-                          handlePartInteractionModeChange("pointer")
+                      }}
+                    >
+                      <SelectTrigger className="w-full rounded-xl text-sm">
+                        <SelectValue placeholder="Select placement type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pointer">Pointer</SelectItem>
+                        <SelectItem value="area">Area</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <div className="flex items-center gap-2">
+                      <ToggleGroup
+                        value={
+                          areaEditingActive
+                            ? ["area-edit"]
+                            : pointerPlacementEditingActive
+                              ? ["pointer-edit"]
+                              : []
                         }
+                        onValueChange={handlePlacementToolToggle}
                       >
-                        <PinIcon className="size-4" />
-                        Pointer
-                      </Button>
-                      <Button
-                        disabled={placementTypeLocked}
-                        type="button"
-                        variant={
-                          partInteractionMode === "area"
-                            ? "default"
-                            : "secondary"
-                        }
-                        onClick={() => handlePartInteractionModeChange("area")}
-                      >
-                        <CrosshairIcon className="size-4" />
-                        Area
-                      </Button>
-                    </Group>
-                    <div className="flex items-center justify-between gap-2">
-                      <Button
-                        type="button"
-                        variant={
-                          placementEditingActive ? "secondary" : "default"
-                        }
-                        onClick={
-                          placementEditingActive
-                            ? onCancelAnnotationEdit
-                            : handleEnablePlacementEditing
-                        }
-                      >
-                        {placementEditingActive ? (
-                          <>
+                        {partInteractionMode === "area" ? (
+                          <ToggleGroupItem
+                            aria-label="Toggle area editing"
+                            className="gap-2"
+                            value="area-edit"
+                          >
+                            {areaEditingActive ? (
+                              <PenOff className="size-4" />
+                            ) : (
+                              <Pen className="size-4" />
+                            )}
+                            {areaEditingActive ? "Cancel area" : "Edit area"}
+                          </ToggleGroupItem>
+                        ) : null}
+                        <ToggleGroupItem
+                          aria-label="Toggle pointer placement editing"
+                          className="gap-2"
+                          value="pointer-edit"
+                        >
+                          {pointerPlacementEditingActive ? (
                             <PenOff className="size-4" />
-                            Cancel edit
-                          </>
-                        ) : (
-                          <>
-                            <Pen className="size-4" />
-                            {partInteractionMode === "area"
-                              ? "Edit area"
-                              : hasPointerDraft || selectedAnnotationId
-                                ? "Edit placement"
-                                : "Place pointer"}
-                          </>
-                        )}
-                      </Button>
+                          ) : (
+                            <MousePointer2 className="size-4" />
+                          )}
+                          {pointerPlacementEditingActive
+                            ? "Cancel pointer"
+                            : hasPointerDraft || selectedAnnotationId
+                              ? "Fix pointer"
+                              : "Place pointer"}
+                        </ToggleGroupItem>
+                      </ToggleGroup>
                     </div>
                   </div>
 
@@ -1046,6 +1065,7 @@ export function ModalityViewerRightPanel({
           ) : null}
         </>
       ) : null}
+      
       {readOnly ? (
         <Frame>
           <FrameHeader className="px-3 py-2 text-sm font-semibold">

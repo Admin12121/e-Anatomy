@@ -371,7 +371,9 @@ export function ViewerCanvas({
     annotationEditingEnabled &&
     !selectedAnnotationId &&
     !isAreaPaintMode &&
-    draftPointerMovedFromDefault;
+    (draftPointerMovedFromDefault ||
+      canvasMode === "set-anchor" ||
+      canvasMode === "set-label");
   const draftPointerColor =
     annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
   const draftPointerLabel = draftStructureTitle.trim() || "Draft";
@@ -1392,7 +1394,11 @@ export function ViewerCanvas({
                 commitAreaMaskToPolygon();
               }
             }}
-            onPointerLeave={() => {
+            onPointerLeave={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                return;
+              }
+
               const wasBrushing = brushingRef.current;
 
               draggingLabelRef.current = null;

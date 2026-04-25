@@ -89,29 +89,36 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
     }),
     [openPreloader],
   )
+  const content = (
+    <div
+      className={cn(
+        "relative",
+        isPublicViewerRoute && "min-h-dvh overflow-x-hidden overflow-y-auto",
+      )}
+    >
+      {shouldShowMusicToggle ? <MusicToggle /> : null}
+      <div
+        className={cn(
+          "opacity-100",
+          isPublicViewerRoute &&
+            "h-dvh min-h-0 overflow-x-hidden overflow-y-auto dark:bg-[#171717]",
+        )}
+      >
+        {children}
+      </div>
+    </div>
+  )
 
   return (
     <TransitionProvider>
       <PreloaderStateProvider value={preloaderStateValue}>
-        <ReactLenis root options={lenisOptions}>
-          <div
-            className={cn(
-              "relative",
-              isPublicViewerRoute && "min-h-dvh overflow-hidden",
-            )}
-          >
-            {shouldShowMusicToggle ? <MusicToggle /> : null}
-            <div
-              className={cn(
-                "opacity-100",
-                isPublicViewerRoute &&
-                  "h-dvh min-h-0 overflow-hidden dark:bg-[#171717]",
-              )}
-            >
-              {children}
-            </div>
-          </div>
-        </ReactLenis>
+        {isPublicViewerRoute ? (
+          content
+        ) : (
+          <ReactLenis root options={lenisOptions}>
+            {content}
+          </ReactLenis>
+        )}
       </PreloaderStateProvider>
     </TransitionProvider>
   )
