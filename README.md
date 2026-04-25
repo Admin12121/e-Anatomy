@@ -22,7 +22,7 @@ This repository now matches the early monorepo shape from the architecture brief
 2. Start the stack:
 
 ```bash
-docker compose up --build
+./scripts/setup.sh
 ```
 
 3. Open:
@@ -36,9 +36,42 @@ You can also use:
 - `http://localhost:3000` for direct Next.js access
 - `http://localhost:8080/api/v1/health/live` for direct API access
 
+Useful development commands:
+
+```bash
+./scripts/setup.sh -dev logs
+./scripts/setup.sh -dev down
+./scripts/setup.sh -dev config
+```
+
 ## Default admin
 
 - email: `admin@gmail.com`
 - password: `admin@#12`
 
 The API owns database migrations, including the Better Auth tables. The web app only bootstraps the matching Better Auth admin user on startup after the API migrations have completed.
+
+## Production Deployment With Host PostgreSQL
+
+Use the production deploy script on a fresh Debian/Ubuntu host after Docker and PostgreSQL are installed:
+
+```bash
+cp .env.production.example .env
+# Edit .env: domain, database password, auth secrets, deploy SSH policy, and email settings.
+./scripts/setup.sh -prod
+```
+
+Production uses the same `docker-compose.yml` file as development. The production containers are selected by the `prod` Compose profile and run with host networking so the API can reach host PostgreSQL through `127.0.0.1`. Do not use `host.docker.internal` in production `DATABASE_URL`.
+
+The setup flow creates the deploy user from `DEPLOY_USER` (`altharld` by default), disables SSH root login, allows SSH only for that deploy user, enables UFW, fail2ban, persistent journald logs, unattended security updates, prepares the PostgreSQL role/database, prepares media directories, syncs the app to `DEPLOY_APP_DIR` (`/srv/anatomy/app` by default), and runs Docker Compose as the deploy user.
+
+Run a specific production step when you do not want the full flow:
+
+```bash
+./scripts/setup.sh -prod --only db
+./scripts/setup.sh -prod --skip hardening
+./scripts/setup.sh -prod compose
+./scripts/setup.sh -prod check
+```
+
+`scripts/deploy-host-db.sh` is kept as a compatibility wrapper for `./scripts/setup.sh -prod`.

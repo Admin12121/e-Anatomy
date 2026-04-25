@@ -1,3 +1,29 @@
+name: ${COMPOSE_PROJECT_NAME:-anatomy}
+
+x-redis-healthcheck: &redis-healthcheck
+  test: ["CMD", "redis-cli", "ping"]
+  interval: 10s
+  timeout: 5s
+  retries: 10
+
+x-api-healthcheck: &api-healthcheck
+  test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/v1/health/ready || exit 1"]
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 60s
+
+x-web-healthcheck: &web-healthcheck
+  test:
+    [
+      "CMD-SHELL",
+      "bun -e \"fetch('http://127.0.0.1:3000/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+    ]
+  interval: 10s
+  timeout: 5s
+  retries: 20
+  start_period: 30s
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -11,7 +37,7 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -20,13 +46,9 @@ services:
   redis:
     image: redis:7-alpine
     command: redis-server --save 60 1 --loglevel warning
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    healthcheck: *redis-healthcheck
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -58,13 +80,10 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/v1/health/live || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
+      <<: *api-healthcheck
       start_period: 5m
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${API_PORT:-8080}:8080"
     volumes:
       - ./services/api:/workspace/services/api
       - cargo_registry:/usr/local/cargo/registry
@@ -81,7 +100,7 @@ services:
     command: sh -lc "bun install --frozen-lockfile && bun run auth:bootstrap && bun run dev"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://anatomy:anatomy@postgres:5432/anatomy}
-      AUTH_DATABASE_URL: ${DATABASE_URL:-postgres://anatomy:anatomy@postgres:5432/anatomy}
+      AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:-${DATABASE_URL:-postgres://anatomy:anatomy@postgres:5432/anatomy}}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-anatomy_better_auth_dev_secret_that_is_long_enough}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost}
       BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-http://localhost,http://localhost:3000}
@@ -105,17 +124,10 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "bun -e \"fetch('http://127.0.0.1:3000/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))\"",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      <<: *web-healthcheck
       start_period: 20s
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
     volumes:
       - ./apps/web:/workspace/apps/web
       - web_node_modules:/workspace/apps/web/node_modules
@@ -137,9 +149,99 @@ services:
     networks:
       - anatomy
 
+  redis-prod:
+    profiles: ["prod"]
+    image: redis:7-alpine
+    command: redis-server --bind 127.0.0.1 --save 60 1 --loglevel warning
+    healthcheck: *redis-healthcheck
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - redis_prod_data:/data
+
+  api-prod:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: infra/docker/api.prod.Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
+      REDIS_URL: ${REDIS_URL:-redis://127.0.0.1:6379}
+      SERVER_HOST: ${SERVER_HOST:-127.0.0.1}
+      SERVER_PORT: ${SERVER_PORT:-8080}
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn,dicom_object::meta=error}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-anatomy_session}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-168}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Platform Admin}
+      INTERNAL_WEB_API_KEY: ${INTERNAL_WEB_API_KEY:-}
+      STORAGE_ROOT_DIR: /app/data
+    depends_on:
+      redis-prod:
+        condition: service_healthy
+    healthcheck: *api-healthcheck
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ${HOST_API_DATA_DIR:-/srv/anatomy/api-data}:/app/data
+
+  web-prod:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: infra/docker/web.prod.Dockerfile
+    command: sh -lc "bun run auth:bootstrap && bun run start -- -H ${WEB_HOST:-127.0.0.1} -p ${WEB_PORT:-3000}"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:-${DATABASE_URL:-}}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-}
+      BETTER_AUTH_PASSKEY_RP_ID: ${BETTER_AUTH_PASSKEY_RP_ID:-}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Platform Admin}
+      BOOTSTRAP_ADMIN_ACCOUNT_SLUG: ${BOOTSTRAP_ADMIN_ACCOUNT_SLUG:-platform-admin}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      AUTH_EMAIL_FROM: ${AUTH_EMAIL_FROM:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-}
+      INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://127.0.0.1:8080/api/v1}
+      INTERNAL_WEB_API_KEY: ${INTERNAL_WEB_API_KEY:-}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+      NEXT_SERVER_API_PROXY_TARGET: ${NEXT_SERVER_API_PROXY_TARGET:-http://127.0.0.1:8080}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
+      NODE_ENV: production
+    depends_on:
+      api-prod:
+        condition: service_healthy
+    healthcheck: *web-healthcheck
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ${HOST_UPLOADS_DIR:-/srv/anatomy/uploads}:/workspace/apps/web/public/playground-uploads
+
+  nginx-prod:
+    profiles: ["prod"]
+    image: nginx:1.29-alpine
+    depends_on:
+      api-prod:
+        condition: service_healthy
+      web-prod:
+        condition: service_healthy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./infra/nginx/prod.conf:/etc/nginx/conf.d/default.conf:ro
+
 volumes:
   postgres_data:
   redis_data:
+  redis_prod_data:
   cargo_registry:
   cargo_git:
   api_target:
