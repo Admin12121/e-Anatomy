@@ -16,7 +16,7 @@ SKIP_STEPS=""
 LOG_LINES="150"
 COMPOSE_EXTRA_ARGS=()
 
-PROD_STEPS=(hardening db storage sync compose)
+PROD_STEPS=(hardening db storage sync nginx compose tls)
 PROD_SERVICES=(redis-prod api-prod web-prod nginx-prod)
 
 usage() {
@@ -47,6 +47,8 @@ Actions:
   db                            Prod only: PostgreSQL role/database setup.
   storage                       Prod only: host upload/data directories.
   sync                          Prod only: sync project to DEPLOY_APP_DIR.
+  nginx                         Prod only: render domain-aware nginx config.
+  tls                           Prod only: issue/renew Let's Encrypt cert.
   check                         Validate local prerequisites and env.
 
 Options:
@@ -57,7 +59,9 @@ Options:
   --no-db                       Same as --skip db.
   --no-storage                  Same as --skip storage.
   --no-sync                     Same as --skip sync.
+  --no-nginx                    Same as --skip nginx.
   --no-compose                  Same as --skip compose.
+  --no-tls                      Same as --skip tls.
   -y, --yes                     Answer yes to script prompts.
   --dry-run                     Print privileged commands without running them.
   --log-lines N                 Tail N lines for logs action.
@@ -68,6 +72,7 @@ Examples:
   scripts/setup.sh
   scripts/setup.sh -dev logs
   scripts/setup.sh -prod
+  scripts/setup.sh -prod --only tls
   scripts/setup.sh -prod --only db
   scripts/setup.sh -prod --skip hardening
   scripts/setup.sh -prod compose
@@ -316,6 +321,15 @@ set_deploy_defaults() {
 
   HOST_UPLOADS_DIR="${HOST_UPLOADS_DIR:-/srv/anatomy/uploads}"
   HOST_API_DATA_DIR="${HOST_API_DATA_DIR:-/srv/anatomy/api-data}"
+  HOST_CERTBOT_WEBROOT="${HOST_CERTBOT_WEBROOT:-/srv/anatomy/certbot/www}"
+  TLS_ENABLE="${TLS_ENABLE:-true}"
+  TLS_CERTBOT_INSTALL_METHOD="${TLS_CERTBOT_INSTALL_METHOD:-snap}"
+  TLS_RENEWAL_DRY_RUN="${TLS_RENEWAL_DRY_RUN:-false}"
+  TLS_STAGING="${TLS_STAGING:-false}"
+  TLS_FORCE_RENEWAL="${TLS_FORCE_RENEWAL:-false}"
+  APP_DOMAIN="${APP_DOMAIN:-}"
+  APP_DOMAIN_ALIASES="${APP_DOMAIN_ALIASES:-}"
+  CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
   SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
   WEB_HOST="${WEB_HOST:-127.0.0.1}"
   WEB_PORT="${WEB_PORT:-3000}"
@@ -380,8 +394,16 @@ parse_args() {
         SKIP_STEPS="$(csv_add "$SKIP_STEPS" sync)"
         shift
         ;;
+      --no-nginx)
+        SKIP_STEPS="$(csv_add "$SKIP_STEPS" nginx)"
+        shift
+        ;;
       --no-compose)
         SKIP_STEPS="$(csv_add "$SKIP_STEPS" compose)"
+        shift
+        ;;
+      --no-tls)
+        SKIP_STEPS="$(csv_add "$SKIP_STEPS" tls)"
         shift
         ;;
       -y | --yes)
@@ -410,7 +432,7 @@ parse_args() {
         COMPOSE_EXTRA_ARGS+=("$@")
         break
         ;;
-      up | deploy | compose | down | restart | build | pull | ps | logs | config | hardening | db | storage | sync | check)
+      up | deploy | compose | down | restart | build | pull | ps | logs | config | hardening | db | storage | sync | nginx | tls | check)
         ACTION="$arg"
         ACTION_SET="true"
         shift
@@ -438,7 +460,7 @@ validate_mode_action() {
   if [[ "$MODE" == "dev" ]]; then
     case "$ACTION" in
       up | compose | down | restart | build | pull | ps | logs | config | check) ;;
-      deploy | hardening | db | storage | sync)
+      deploy | hardening | db | storage | sync | nginx | tls)
         die "Action '$ACTION' is production-only. Use -prod."
         ;;
       *) die "Unknown action: $ACTION" ;;
@@ -466,11 +488,28 @@ validate_prod_env() {
   require_var BOOTSTRAP_ADMIN_EMAIL
   require_var BOOTSTRAP_ADMIN_PASSWORD
 
-  if [[ "$ACTION" == "compose" ]] || {
-    [[ "$ACTION" == "deploy" ]] && { should_run_step storage || should_run_step compose; }
+  if [[ "$ACTION" == "compose" || "$ACTION" == "nginx" || "$ACTION" == "tls" ]] || {
+    [[ "$ACTION" == "deploy" ]] && { should_run_step storage || should_run_step nginx || should_run_step compose || should_run_step tls; }
   }; then
     require_var HOST_UPLOADS_DIR
     require_var HOST_API_DATA_DIR
+    require_var HOST_CERTBOT_WEBROOT
+  fi
+
+  if [[ "$ACTION" == "nginx" || "$ACTION" == "tls" ]] || {
+    [[ "$ACTION" == "deploy" ]] && { should_run_step nginx || should_run_step tls; }
+  }; then
+    require_var APP_DOMAIN
+
+    if [[ "$APP_DOMAIN" == http://* || "$APP_DOMAIN" == https://* || "$APP_DOMAIN" == */* ]]; then
+      die "APP_DOMAIN must be a hostname only, for example thevoxelanatomy.com"
+    fi
+  fi
+
+  if env_bool "$TLS_ENABLE" && {
+    [[ "$ACTION" == "tls" ]] || { [[ "$ACTION" == "deploy" ]] && should_run_step tls; }
+  }; then
+    require_var CERTBOT_EMAIL
   fi
 
   if [[ "$DATABASE_URL" == *"@postgres:"* ]]; then
@@ -965,13 +1004,14 @@ create_database_and_role() {
 prepare_host_storage() {
   require_var HOST_UPLOADS_DIR
   require_var HOST_API_DATA_DIR
+  require_var HOST_CERTBOT_WEBROOT
 
   log "Ensuring host media directories exist"
-  run_as_root mkdir -p "$HOST_UPLOADS_DIR" "$HOST_API_DATA_DIR"
-  run_as_root chmod 775 "$HOST_UPLOADS_DIR" "$HOST_API_DATA_DIR"
+  run_as_root mkdir -p "$HOST_UPLOADS_DIR" "$HOST_API_DATA_DIR" "$HOST_CERTBOT_WEBROOT"
+  run_as_root chmod 775 "$HOST_UPLOADS_DIR" "$HOST_API_DATA_DIR" "$HOST_CERTBOT_WEBROOT"
 
   if id "$DEPLOY_USER" >/dev/null 2>&1; then
-    run_as_root chown -R "$DEPLOY_USER:$DEPLOY_USER" "$HOST_UPLOADS_DIR" "$HOST_API_DATA_DIR"
+    run_as_root chown -R "$DEPLOY_USER:$DEPLOY_USER" "$HOST_UPLOADS_DIR" "$HOST_API_DATA_DIR" "$(dirname "$HOST_CERTBOT_WEBROOT")"
   fi
 }
 
@@ -1025,13 +1065,195 @@ sync_project_to_deploy_user() {
   COMPOSE_FILE="$DEPLOY_APP_DIR/docker-compose.yml"
 }
 
+production_cert_exists() {
+  [[ -n "${APP_DOMAIN:-}" \
+    && -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" \
+    && -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem" ]]
+}
+
+nginx_server_names() {
+  local aliases="${APP_DOMAIN_ALIASES:-}"
+  aliases="${aliases//,/ }"
+
+  if [[ -n "$aliases" ]]; then
+    printf '%s %s' "$APP_DOMAIN" "$aliases"
+  else
+    printf '%s' "$APP_DOMAIN"
+  fi
+}
+
+render_nginx_config() {
+  require_var APP_DOMAIN
+
+  local template="$APP_DIR/infra/nginx/prod.http.conf.template"
+  local output="$APP_DIR/infra/nginx/prod.generated.conf"
+  local server_names
+
+  if env_bool "$TLS_ENABLE" && production_cert_exists; then
+    template="$APP_DIR/infra/nginx/prod.https.conf.template"
+  fi
+
+  [[ -f "$template" ]] || die "Missing nginx template: $template"
+  server_names="$(nginx_server_names)"
+
+  log "Rendering production nginx config from $(basename "$template")"
+  if env_bool "$DRY_RUN"; then
+    log "dry-run would write $output for server names: $server_names"
+    return
+  fi
+
+  sed \
+    -e "s/__PRIMARY_DOMAIN__/$APP_DOMAIN/g" \
+    -e "s/__SERVER_NAMES__/$server_names/g" \
+    "$template" | run_as_root tee "$output" >/dev/null
+
+  if id "$DEPLOY_USER" >/dev/null 2>&1; then
+    run_as_root chown "$DEPLOY_USER:$DEPLOY_USER" "$output"
+  fi
+}
+
+install_certbot() {
+  if command -v certbot >/dev/null 2>&1; then
+    return
+  fi
+
+  if env_bool "$DRY_RUN"; then
+    log "dry-run would install Certbot with TLS_CERTBOT_INSTALL_METHOD=$TLS_CERTBOT_INSTALL_METHOD"
+    return
+  fi
+
+  case "${TLS_CERTBOT_INSTALL_METHOD,,}" in
+    snap)
+      command -v apt-get >/dev/null 2>&1 || die "apt-get is required to install snapd for Certbot"
+      log "Installing Certbot through snap"
+      run_as_root apt-get update
+      run_as_root apt-get install -y --no-install-recommends snapd
+      run_as_root systemctl enable --now snapd.socket >/dev/null 2>&1 || true
+      run_as_root apt-get remove -y certbot python3-certbot-nginx python3-certbot-apache >/dev/null 2>&1 || true
+      run_as_root snap install core >/dev/null 2>&1 || true
+      run_as_root snap refresh core >/dev/null 2>&1 || true
+      run_as_root snap install --classic certbot
+      run_as_root ln -sf /snap/bin/certbot /usr/local/bin/certbot
+      ;;
+    apt)
+      command -v apt-get >/dev/null 2>&1 || die "apt-get is required to install Certbot"
+      log "Installing Certbot through apt"
+      run_as_root apt-get update
+      run_as_root apt-get install -y --no-install-recommends certbot
+      ;;
+    manual | none | skip)
+      die "Certbot is not installed and TLS_CERTBOT_INSTALL_METHOD=$TLS_CERTBOT_INSTALL_METHOD"
+      ;;
+    *)
+      die "Unknown TLS_CERTBOT_INSTALL_METHOD=$TLS_CERTBOT_INSTALL_METHOD"
+      ;;
+  esac
+
+  command -v certbot >/dev/null 2>&1 || die "Certbot install completed but certbot is not on PATH"
+}
+
+certbot_domain_args() {
+  local domains="${TLS_DOMAINS:-$APP_DOMAIN ${APP_DOMAIN_ALIASES:-}}"
+  local domain seen=" "
+
+  domains="${domains//,/ }"
+  for domain in $domains; do
+    [[ -z "$domain" ]] && continue
+    if [[ "$domain" == http://* || "$domain" == https://* || "$domain" == */* ]]; then
+      die "TLS domain must be a hostname only: $domain"
+    fi
+    case "$seen" in
+      *" $domain "*) continue ;;
+    esac
+    seen="$seen$domain "
+    printf '%s\n' "$domain"
+  done
+}
+
+install_certbot_renew_hook() {
+  local hook_path="/etc/letsencrypt/renewal-hooks/deploy/anatomy-nginx-reload.sh"
+  local q_app_dir q_env_file q_compose_file q_deploy_user
+
+  q_app_dir="$(shell_quote "$APP_DIR")"
+  q_env_file="$(shell_quote "$ENV_FILE")"
+  q_compose_file="$(shell_quote "$COMPOSE_FILE")"
+  q_deploy_user="$(shell_quote "$DEPLOY_USER")"
+
+  if env_bool "$DRY_RUN"; then
+    log "dry-run would install Certbot deploy hook at $hook_path"
+    return
+  fi
+
+  run_as_root install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
+  cat <<EOF_HOOK | run_as_root tee "$hook_path" >/dev/null
+#!/bin/sh
+set -eu
+cd $q_app_dir
+if command -v runuser >/dev/null 2>&1 && id $q_deploy_user >/dev/null 2>&1; then
+  exec runuser -u $q_deploy_user -- docker compose --env-file $q_env_file -f $q_compose_file --profile prod restart nginx-prod
+fi
+exec docker compose --env-file $q_env_file -f $q_compose_file --profile prod restart nginx-prod
+EOF_HOOK
+  run_as_root chmod 755 "$hook_path"
+}
+
+issue_or_renew_tls_certificate() {
+  if ! env_bool "$TLS_ENABLE"; then
+    log "Skipping TLS because TLS_ENABLE=false"
+    return
+  fi
+
+  require_var APP_DOMAIN
+  require_var CERTBOT_EMAIL
+  require_var HOST_CERTBOT_WEBROOT
+
+  install_certbot
+  install_certbot_renew_hook
+
+  local -a certbot_args
+  local domain
+  certbot_args=(certonly --webroot -w "$HOST_CERTBOT_WEBROOT" --email "$CERTBOT_EMAIL" --agree-tos --non-interactive --keep-until-expiring)
+
+  if env_bool "$TLS_STAGING"; then
+    certbot_args+=(--staging)
+  fi
+
+  if env_bool "$TLS_FORCE_RENEWAL"; then
+    certbot_args+=(--force-renewal)
+  fi
+
+  while IFS= read -r domain; do
+    certbot_args+=("-d" "$domain")
+  done < <(certbot_domain_args)
+
+  if production_cert_exists && ! env_bool "$TLS_FORCE_RENEWAL"; then
+    log "Certificate already exists for $APP_DOMAIN; asking Certbot to renew if needed"
+    run_as_root certbot renew --quiet || warn "Certbot renew returned a non-zero status"
+  else
+    log "Requesting Let's Encrypt certificate for $(nginx_server_names)"
+    run_as_root certbot "${certbot_args[@]}"
+  fi
+
+  if env_bool "$TLS_RENEWAL_DRY_RUN"; then
+    log "Testing Certbot renewal"
+    run_as_root certbot renew --dry-run
+  fi
+
+  render_nginx_config
+  run_compose_up
+}
+
 compose_base_string() {
   local q_env_file q_compose_file
   q_compose_file="$(shell_quote "$COMPOSE_FILE")"
 
   if [[ -f "$ENV_FILE" ]]; then
     q_env_file="$(shell_quote "$ENV_FILE")"
-    printf 'DEPLOY_ENV_FILE=%s docker compose --env-file %s -f %s' "$q_env_file" "$q_env_file" "$q_compose_file"
+    if [[ "$MODE" == "prod" ]]; then
+      printf 'DEPLOY_ENV_FILE=%s NGINX_PROD_CONF=./infra/nginx/prod.generated.conf docker compose --env-file %s -f %s' "$q_env_file" "$q_env_file" "$q_compose_file"
+    else
+      printf 'DEPLOY_ENV_FILE=%s docker compose --env-file %s -f %s' "$q_env_file" "$q_env_file" "$q_compose_file"
+    fi
   else
     printf 'docker compose -f %s' "$q_compose_file"
   fi
@@ -1073,6 +1295,11 @@ extra_args_string() {
 
 run_compose_up() {
   local base services profile extra
+
+  if [[ "$MODE" == "prod" ]]; then
+    render_nginx_config
+  fi
+
   base="$(compose_base_string)"
   services="$(compose_services_string)"
   profile="$(compose_profile_string)"
@@ -1148,7 +1375,9 @@ run_prod_step() {
     db) create_database_and_role ;;
     storage) prepare_host_storage ;;
     sync) sync_project_to_deploy_user ;;
+    nginx) render_nginx_config ;;
     compose) run_compose_up ;;
+    tls) issue_or_renew_tls_certificate ;;
     *) die "Unknown production step: $step" ;;
   esac
 }
@@ -1200,7 +1429,7 @@ main() {
       deploy)
         run_prod_deploy
         ;;
-      hardening | db | storage | sync)
+      hardening | db | storage | sync | nginx | tls)
         run_single_prod_step
         ;;
       check)

@@ -63,12 +63,23 @@ cp .env.production.example .env
 
 Production uses the same `docker-compose.yml` file as development. The production containers are selected by the `prod` Compose profile and run with host networking so the API can reach host PostgreSQL through `127.0.0.1`. Do not use `host.docker.internal` in production `DATABASE_URL`.
 
-The setup flow creates the deploy user from `DEPLOY_USER` (`altharld` by default), disables SSH root login, allows SSH only for that deploy user, enables UFW, fail2ban, persistent journald logs, unattended security updates, prepares the PostgreSQL role/database, prepares media directories, syncs the app to `DEPLOY_APP_DIR` (`/srv/anatomy/app` by default), and runs Docker Compose as the deploy user.
+The setup flow creates the deploy user from `DEPLOY_USER` (`altharld` by default), disables SSH root login, allows SSH only for that deploy user, enables UFW, fail2ban, persistent journald logs, unattended security updates, prepares the PostgreSQL role/database, prepares media directories, syncs the app to `DEPLOY_APP_DIR` (`/srv/anatomy/app` by default), renders a domain-aware nginx config, runs Docker Compose as the deploy user, and issues a Let's Encrypt certificate when `TLS_ENABLE=true`.
+
+Before enabling TLS, make sure:
+
+- `APP_DOMAIN` resolves to the server IP.
+- `APP_DOMAIN_ALIASES`, such as `www.thevoxelanatomy.com`, also resolve to the server IP or are empty.
+- ports `80/tcp` and `443/tcp` are open in the host firewall and provider firewall.
+- `BETTER_AUTH_URL`, `BETTER_AUTH_TRUSTED_ORIGINS`, and `NEXT_PUBLIC_SITE_URL` use the final `https://` domain.
+
+The generated production nginx config blocks raw-IP and unknown-host HTTP requests, serves ACME HTTP-01 challenges from `HOST_CERTBOT_WEBROOT`, redirects the configured domain from HTTP to HTTPS after the certificate exists, and terminates HTTPS on port 443.
 
 Run a specific production step when you do not want the full flow:
 
 ```bash
 ./scripts/setup.sh -prod --only db
+./scripts/setup.sh -prod --only nginx
+./scripts/setup.sh -prod --only tls
 ./scripts/setup.sh -prod --skip hardening
 ./scripts/setup.sh -prod compose
 ./scripts/setup.sh -prod check
