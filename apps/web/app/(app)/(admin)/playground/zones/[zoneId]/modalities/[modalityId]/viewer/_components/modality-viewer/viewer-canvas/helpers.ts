@@ -17,12 +17,12 @@ export const LABEL_SAFE_MAX_Y = 0.9;
 export const MAIN_LABEL_BASE_OFFSET_PX = 112;
 export const MAIN_LABEL_OFFSET_MIN_PX = 76;
 export const MAIN_LABEL_OFFSET_MAX_PX = 172;
-export const MAIN_LABEL_BAND_WIDTH_PX = 330;
+export const MAIN_LABEL_BAND_WIDTH_PX = 230;
 export const MAIN_LABEL_BAND_MIN_GAP_PX = 24;
 export const LABEL_ROW_GAP_PX = 28;
 export const LABEL_ROW_GAP_LARGE_PX = 36;
 export const LABEL_BOX_MIN_WIDTH = 46;
-export const LABEL_BOX_MAX_WIDTH = 330;
+export const LABEL_BOX_MAX_WIDTH = 230;
 export const LABEL_BOX_PADDING_X = 10;
 export const LABEL_BOX_HEIGHT_PADDING = 10;
 

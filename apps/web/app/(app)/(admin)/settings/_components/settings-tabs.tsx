@@ -35,10 +35,6 @@ export function SettingsTabs({
           <h1 className="font-heading text-3xl font-semibold tracking-tight">
             Settings
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Manage your profile, security controls, and connected sign-in
-            methods.
-          </p>
         </div>
         <TabsList className="w-full rounded-2xl bg-muted/30 p-1.5">
           <TabsTrigger value="profile" className="rounded-xl">

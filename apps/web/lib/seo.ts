@@ -5,7 +5,7 @@ export const SITE_DESCRIPTION =
 
 export const DEFAULT_OG_IMAGE = "/og.webp"
 
-const FALLBACK_SITE_ORIGIN = "http://localhost"
+const FALLBACK_SITE_ORIGIN = "https://thevoxelanatomy.com"
 
 function getConfiguredSiteOrigin() {
   const configuredOrigin =

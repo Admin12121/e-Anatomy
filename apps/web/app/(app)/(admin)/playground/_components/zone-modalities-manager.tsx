@@ -1036,7 +1036,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                     data-state={isActive ? "selected" : undefined}
                     onClick={() => selectModality(family)}
                   >
-                    <TableCell className="font-medium text-foreground">
+                    <TableCell className="font-medium text-foreground truncate w-[10ch]">
                       {family.name}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
@@ -1499,7 +1499,7 @@ function ZoneModalityEditorCard({
                   <TableCell className="font-medium text-foreground">
                     {index + 1}
                   </TableCell>
-                  <TableCell className="font-medium text-foreground">
+                  <TableCell className="font-medium text-foreground truncate w-[10ch]">
                     {name}
                   </TableCell>
                   <TableCell className="min-w-44 text-muted-foreground">

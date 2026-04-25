@@ -508,7 +508,7 @@ export function ViewerCanvasMainOverlay({
       {showCrossReferences ? (
         <>
           <line
-            stroke="rgba(56,189,248,0.88)"
+            stroke="rgb(17 107 207)"
             strokeWidth={2}
             x1={500}
             x2={500}
@@ -516,7 +516,7 @@ export function ViewerCanvasMainOverlay({
             y2={1000}
           />
           <line
-            stroke="rgba(56,189,248,0.88)"
+            stroke="rgb(17 107 207)"
             strokeWidth={2}
             x1={0}
             x2={1000}

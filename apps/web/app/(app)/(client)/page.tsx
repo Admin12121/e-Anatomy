@@ -753,7 +753,7 @@ export default function Page() {
               showBackdrop={false}
               zones={stageZones}
             />
-            <span className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-5 md:left-5 md:bottom-auto md:w-70 h-14 flex items-center">
+            <span className="absolute md:w-67.5 w-50 inset-x-4 z-10 md:inset-x-auto top-1 md:top-5 left-1/2 transform -translate-x-1/2 md:translate-x-0 md:left-5 md:bottom-auto h-14 flex items-center">
               <div className="flex size-14 items-center justify-center rounded-md">
                 <Image
                   src="/logo.webp"
@@ -767,7 +767,7 @@ export default function Page() {
                 text="Voxel Anatomy"
                 duration={2}
                 delay={1}
-                className="text-3xl"
+                className="text-xl md:text-3xl"
               />
             </span>
             <span className="absolute inset-x-4 bottom-2 left-1/2 transform -translate-x-1/2 z-10 text-xs flex justify-center gap-1">
@@ -783,110 +783,106 @@ export default function Page() {
             </span>
             {selectedZone ? (
               <Frame className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-20 md:left-5 md:bottom-auto md:w-80">
-                <FramePanel className="overflow-hidden p-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="text-left">
-                        <TableHead>Modalities</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {isModalitiesLoading ? (
-                        <TableRow>
-                          <TableCell className="text-left text-muted-foreground">
-                            Loading modalities...
-                          </TableCell>
-                        </TableRow>
-                      ) : isModalitiesError ? (
-                        <TableRow>
-                          <TableCell className="text-left text-destructive">
-                            {getApiErrorMessage(
-                              modalitiesQueryError,
-                              "Unable to load modalities.",
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ) : selectedZoneModalities.length === 0 ? (
-                        <TableRow>
-                          <TableCell className="text-left text-muted-foreground">
-                            No modalities are attached to this zone yet.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        selectedZoneModalities.map((modality) => (
-                          <TableRow key={modality.id}>
-                            <TableCell className="font-medium text-left">
-                              {selectedZone ? (
-                                <Link
-                                  className="inline-flex items-center underline-offset-4 hover:underline"
-                                  href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
-                                >
-                                  {modality.name}
-                                </Link>
-                              ) : (
-                                modality.name
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </FramePanel>
-              </Frame>
-            ) : null}
-
-            <Frame className="absolute inset-x-4 top-4 z-10 md:inset-x-auto md:top-5 md:right-5 md:w-80">
-              <FramePanel className="overflow-hidden p-0">
                 <Table>
                   <TableHeader>
                     <TableRow className="text-left">
-                      <TableHead>Regions / Zone</TableHead>
+                      <TableHead>Modalities</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {isZonesLoading ? (
+                    {isModalitiesLoading ? (
                       <TableRow>
                         <TableCell className="text-left text-muted-foreground">
-                          Loading zones...
+                          Loading modalities...
                         </TableCell>
                       </TableRow>
-                    ) : isZonesError ? (
+                    ) : isModalitiesError ? (
                       <TableRow>
                         <TableCell className="text-left text-destructive">
                           {getApiErrorMessage(
-                            zonesQueryError,
-                            "Unable to load zones.",
+                            modalitiesQueryError,
+                            "Unable to load modalities.",
                           )}
                         </TableCell>
                       </TableRow>
-                    ) : zones.length === 0 ? (
+                    ) : selectedZoneModalities.length === 0 ? (
                       <TableRow>
                         <TableCell className="text-left text-muted-foreground">
-                          No zones are available yet.
+                          No modalities are attached to this zone yet.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      zones.map((zone) => (
-                        <TableRow
-                          key={zone.id}
-                          className="cursor-pointer"
-                          data-state={
-                            activeSelectedZoneId === zone.id
-                              ? "selected"
-                              : undefined
-                          }
-                          onClick={() => handleSelectZone(zone.id)}
-                        >
-                          <TableCell className="font-medium text-left ">
-                            {zone.name}
+                      selectedZoneModalities.map((modality) => (
+                        <TableRow key={modality.id}>
+                          <TableCell className="font-medium text-left">
+                            {selectedZone ? (
+                              <Link
+                                className="inline-flex items-center underline-offset-4 hover:underline"
+                                href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
+                              >
+                                {modality.name}
+                              </Link>
+                            ) : (
+                              modality.name
+                            )}
                           </TableCell>
                         </TableRow>
                       ))
                     )}
                   </TableBody>
                 </Table>
-              </FramePanel>
+              </Frame>
+            ) : null}
+
+            <Frame className="absolute hidden md:flex inset-x-4 z-10 md:inset-x-auto  md:top-5 md:right-5 md:w-80">
+              <Table>
+                <TableHeader>
+                  <TableRow className="text-left">
+                    <TableHead>Regions / Zone</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isZonesLoading ? (
+                    <TableRow>
+                      <TableCell className="text-left text-muted-foreground">
+                        Loading zones...
+                      </TableCell>
+                    </TableRow>
+                  ) : isZonesError ? (
+                    <TableRow>
+                      <TableCell className="text-left text-destructive">
+                        {getApiErrorMessage(
+                          zonesQueryError,
+                          "Unable to load zones.",
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ) : zones.length === 0 ? (
+                    <TableRow>
+                      <TableCell className="text-left text-muted-foreground">
+                        No zones are available yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    zones.map((zone) => (
+                      <TableRow
+                        key={zone.id}
+                        className="cursor-pointer"
+                        data-state={
+                          activeSelectedZoneId === zone.id
+                            ? "selected"
+                            : undefined
+                        }
+                        onClick={() => handleSelectZone(zone.id)}
+                      >
+                        <TableCell className="font-medium text-left ">
+                          {zone.name}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
             </Frame>
           </div>
         ) : null}
