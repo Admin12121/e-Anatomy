@@ -80,7 +80,6 @@ type ViewerCanvasProps = {
   currentAssetIndex: number;
   currentAtlasFrame: ZoneModalityAtlasFrame | null;
   currentImageElement: HTMLImageElement | null;
-  darkMode: boolean;
   draftStructureTitle: string;
   fontScaleMode: FontScaleMode;
   hoveredAnnotationId: string | null;
@@ -135,7 +134,6 @@ export function ViewerCanvas({
   currentAssetIndex,
   currentAtlasFrame,
   currentImageElement,
-  darkMode,
   draftStructureTitle,
   fontScaleMode,
   hoveredAnnotationId,

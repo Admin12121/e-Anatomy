@@ -15,7 +15,7 @@ import { SplitText } from "gsap/SplitText";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { shouldRunHomePreloader } from "@/components/layout/preloader-session";
-import { Frame, FramePanel } from "@/components/ui/frame";
+import { Frame } from "@/components/ui/frame";
 
 import {
   Table,

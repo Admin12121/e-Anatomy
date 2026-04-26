@@ -236,7 +236,7 @@ export function ReferenceCard({
         <div
           ref={imageFrameRef}
           className={cn(
-            "relative overflow-hidden border-y border-sky-400/80 bg-black",
+            "relative overflow-hidden",
             disabled ? "cursor-not-allowed opacity-70" : "cursor-ns-resize",
           )}
           onPointerDown={(event) => {
@@ -261,11 +261,7 @@ export function ReferenceCard({
             height={400}
           />
           <div
-            className="pointer-events-none absolute inset-x-0 z-10 h-0.5 -translate-y-1/2 bg-sky-400 shadow-[0_0_0_1px_rgba(0,0,0,0.45),0_0_10px_rgba(56,189,248,0.55)]"
-            style={{ top: `${lineY * 100}%` }}
-          />
-          <div
-            className="pointer-events-none absolute left-2 z-10 size-3 -translate-y-1/2 rounded-full border border-black/60 bg-sky-300 shadow"
+            className="pointer-events-none absolute inset-x-0 z-10 h-0.5 -translate-y-1/2 bg-indigo-500 shadow-[0_0_0_1px_rgba(0,0,0,0.45),0_0_10px_rgba(56,189,248,0.55)]"
             style={{ top: `${lineY * 100}%` }}
           />
         </div>
@@ -394,19 +390,16 @@ export function ReferenceCalibrationEditor({
 }
 
 export function StructureDrawer({
-  darkMode,
   readOnly,
   selectedAnnotation,
   selectedStructure,
   onClose,
 }: {
-  darkMode: boolean;
   onClose: () => void;
   readOnly: boolean;
   selectedAnnotation: ViewerAnnotation | null;
   selectedStructure: ViewerStructure;
 }) {
-  void darkMode;
   const isLocked = selectedStructure.accessLevel === "subscription";
   const visibleLearningPoints = selectedStructure.learningPoints.filter(
     (point) => !point.startsWith("interaction:"),

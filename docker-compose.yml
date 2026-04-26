@@ -232,6 +232,7 @@ services:
     network_mode: host
     volumes:
       - ${NGINX_PROD_CONF:-./infra/nginx/prod.conf}:/etc/nginx/conf.d/default.conf:ro
+      - ${HOST_UPLOADS_DIR:-/srv/anatomy/uploads}:/srv/anatomy/uploads:ro
       - ${HOST_CERTBOT_WEBROOT:-/srv/anatomy/certbot/www}:/var/www/certbot:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
 

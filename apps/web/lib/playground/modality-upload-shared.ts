@@ -23,6 +23,34 @@ const PHOTOGRAPHY_HINTS = ["photo", "photography", "clinical", "surgical"]
 const ENDOSCOPY_HINTS = ["endo", "endoscopy", "fibroscopy"]
 
 const DICOM_EXTENSIONS = [".dcm", ".dicom", ".ima"] as const
+const BLOCKED_DICOM_ARCHIVE_EXTENSIONS = [
+  ".css",
+  ".evx",
+  ".gif",
+  ".htm",
+  ".html",
+  ".js",
+  ".lnk",
+  ".mp4",
+  ".mpeg",
+  ".pdf",
+  ".png",
+  ".txt",
+  ".xml",
+] as const
+const BLOCKED_DICOM_ARCHIVE_SEGMENTS = new Set([
+  "css",
+  "css_en",
+  "evlite",
+  "help_di",
+  "image",
+  "image_en",
+  "javascript",
+  "mpeg",
+  "other",
+  "pdf",
+  "viewer",
+])
 
 export const MAX_DICOM_FILES = 512
 export const MAX_TOTAL_UPLOAD_BYTES = 512 * 1024 * 1024
@@ -193,12 +221,47 @@ async function inspectZipUpload(file: File, fileName: string) {
     throw new ModalityUploadValidationError("ZIP package is empty.")
   }
 
+  const invalidEntry = entries.find((entry) => !isAllowedDicomArchiveEntry(entry))
+
+  if (invalidEntry) {
+    throw new ModalityUploadValidationError(
+      `ZIP package contains non-DICOM viewer or document files (${invalidEntry}). Upload a clean DICOM-only package.`,
+    )
+  }
+
   return buildModalityUploadSummary({
     names: [normalizedName, ...entries],
     sourceFileCount: entries.length,
     sourceKind: "zip",
     sourceLabel: normalizedName,
   })
+}
+
+function isAllowedDicomArchiveEntry(name: string) {
+  const normalized = name.replace(/\\/g, "/").trim().toLowerCase()
+  const segments = normalized.split("/").filter(Boolean)
+  const fileName = segments.at(-1) ?? ""
+
+  if (!fileName) {
+    return false
+  }
+
+  if (segments.some((segment) => BLOCKED_DICOM_ARCHIVE_SEGMENTS.has(segment))) {
+    return false
+  }
+
+  const dotIndex = fileName.lastIndexOf(".")
+  const extension = dotIndex >= 0 ? fileName.slice(dotIndex) : ""
+
+  if (extension && !DICOM_EXTENSIONS.includes(extension as (typeof DICOM_EXTENSIONS)[number])) {
+    return false
+  }
+
+  if (BLOCKED_DICOM_ARCHIVE_EXTENSIONS.includes(extension as (typeof BLOCKED_DICOM_ARCHIVE_EXTENSIONS)[number])) {
+    return false
+  }
+
+  return true
 }
 
 function inferModalityTypeFromNames(names: string[]): ModalityType {

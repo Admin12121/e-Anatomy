@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { LockKeyhole, UserRound } from "lucide-react"
 
 import {
@@ -24,11 +25,23 @@ export function SettingsTabs({
   googleConfigured,
   user,
 }: SettingsTabsProps) {
+  const [isDesktopTabs, setIsDesktopTabs] = useState(false)
+
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 80rem)")
+    const update = () => setIsDesktopTabs(query.matches)
+
+    update()
+    query.addEventListener("change", update)
+
+    return () => query.removeEventListener("change", update)
+  }, [])
+
   return (
     <Tabs
       defaultValue="profile"
-      orientation="vertical"
-      className="items-start gap-6 xl:gap-8"
+      orientation={isDesktopTabs ? "vertical" : "horizontal"}
+      className="items-stretch gap-6 xl:items-start xl:gap-8"
     >
       <div className="w-full max-w-full shrink-0 xl:max-w-64">
         <div className="mb-4 space-y-1">
@@ -48,15 +61,15 @@ export function SettingsTabs({
         </TabsList>
       </div>
 
-      <div className="min-w-0 flex-1">
-        <TabsContent value="profile">
+      <div className="min-w-0 w-full flex-1">
+        <TabsContent value="profile" className="min-w-0">
           <ProfileSettingsPanel
             connectedAccounts={connectedAccounts}
             googleConfigured={googleConfigured}
             user={user}
           />
         </TabsContent>
-        <TabsContent value="security">
+        <TabsContent value="security" className="min-w-0">
           <div className="space-y-1 pb-6">
             <h2 className="font-heading text-2xl font-semibold tracking-tight">
               Security

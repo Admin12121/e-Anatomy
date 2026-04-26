@@ -3172,7 +3172,6 @@ function ModalityViewerShell({
     <div className={shellGridClass}>
       {showStudyPanel ? (
         <StudyPanel
-          darkMode={darkMode}
           readOnly={readOnly}
           referenceAssets={referenceAssets}
           referenceBusy={
@@ -3213,7 +3212,6 @@ function ModalityViewerShell({
           currentAsset={currentAsset}
           currentAtlasFrame={currentAtlasFrame}
           currentImageElement={currentImageElement}
-          darkMode={darkMode}
           fontScaleMode={fontScaleMode}
           hoveredAnnotationId={hoveredAnnotationId}
           ingestFailureMessage={ingestFailureMessage}

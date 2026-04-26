@@ -6,7 +6,6 @@ import type { LenisOptions } from "lenis"
 import { ReactLenis } from "lenis/react"
 import { usePathname } from "next/navigation"
 
-import MusicToggle from "./music-toggle"
 import {
   PreloaderStateProvider,
   type PreloaderStartMode,
@@ -96,7 +95,6 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
         isPublicViewerRoute && "min-h-dvh overflow-x-hidden overflow-y-auto",
       )}
     >
-      {shouldShowMusicToggle ? <MusicToggle /> : null}
       <div
         className={cn(
           "opacity-100",

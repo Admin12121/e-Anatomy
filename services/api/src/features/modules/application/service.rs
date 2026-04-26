@@ -15,7 +15,7 @@ impl ModuleService {
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
-            repo: ModuleRepository::default(),
+            repo: ModuleRepository,
         }
     }
 

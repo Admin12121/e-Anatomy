@@ -6,13 +6,15 @@ import { Fingerprint, KeyRound, Mail, ShieldCheck, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { CardDescription } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Field,
   FieldDescription,
@@ -100,6 +102,7 @@ export function SecuritySettingsPanel() {
   const [resetPasswordValue, setResetPasswordValue] = useState("");
   const [resetCode, setResetCode] = useState("");
   const [resetRequested, setResetRequested] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [setupPayload, setSetupPayload] = useState<SetupPayload | null>(null);
   const [setupMethod, setSetupMethod] = useState<"email" | "totp">("totp");
   const [setupCode, setSetupCode] = useState("");
@@ -239,6 +242,7 @@ export function SecuritySettingsPanel() {
       setResetPasswordValue("");
       setResetCode("");
       setResetRequested(false);
+      setResetDialogOpen(false);
       toast.success("Password reset completed.");
       await refreshSecurityState();
     } catch (error) {
@@ -485,9 +489,10 @@ export function SecuritySettingsPanel() {
             </Field>
           </FieldGroup>
         </FramePanel>
-        <FrameFooter className="flex items-center justify-end">
+        <FrameFooter className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
           <Button
             type="button"
+            className="w-full sm:w-auto"
             disabled={
               pending ||
               currentPassword.length === 0 ||
@@ -498,99 +503,125 @@ export function SecuritySettingsPanel() {
           >
             Update password
           </Button>
+          <Dialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto min-h-10 w-full justify-center whitespace-normal px-0 text-center sm:w-auto sm:text-left"
+                disabled={pending || !sessionEmail}
+              >
+                Forgot your password?
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-0 ring-0 sm:max-w-lg">
+              <Frame className="bg-popover">
+                <FrameHeader className="pr-12">
+                  <DialogTitle asChild>
+                    <FrameTitle className="flex items-center gap-2">
+                      <KeyRound className="size-4" />
+                      Forgot Password
+                    </FrameTitle>
+                  </DialogTitle>
+                  <DialogDescription>
+                    Send a reset code to {sessionEmail || "your email"} and set
+                    a new password.
+                  </DialogDescription>
+                </FrameHeader>
+                <FramePanel>
+                  <FieldGroup>
+                    <div className="rounded-xl border border-border bg-muted/40 p-4 text-sm">
+                      <p className="font-medium">Reset with email code</p>
+                      <p className="mt-1 text-muted-foreground">
+                        We will send a one-time code to{" "}
+                        <strong>{sessionEmail || "your email"}</strong>.
+                      </p>
+                    </div>
+
+                    {resetRequested ? (
+                      <>
+                        <Field>
+                          <FieldLabel>Reset code</FieldLabel>
+                          <InputOTP
+                            maxLength={6}
+                            value={resetCode}
+                            onChange={setResetCode}
+                          >
+                            <InputOTPGroup>
+                              {Array.from({ length: 6 }).map((_, index) => (
+                                <InputOTPSlot key={index} index={index} />
+                              ))}
+                            </InputOTPGroup>
+                          </InputOTP>
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="reset-password-value">
+                            New password
+                          </FieldLabel>
+                          <Input
+                            id="reset-password-value"
+                            type="password"
+                            value={resetPasswordValue}
+                            onChange={(event) =>
+                              setResetPasswordValue(event.target.value)
+                            }
+                            placeholder="Set a new password"
+                          />
+                        </Field>
+                      </>
+                    ) : null}
+                  </FieldGroup>
+                </FramePanel>
+                <FrameFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <DialogClose asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={pending}
+                      onClick={() => {
+                        setResetRequested(false);
+                        setResetCode("");
+                        setResetPasswordValue("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </DialogClose>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    {resetRequested ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={pending || !sessionEmail}
+                        onClick={requestPasswordResetCode}
+                      >
+                        <Mail />
+                        Resend code
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      disabled={
+                        pending ||
+                        !sessionEmail ||
+                        (resetRequested &&
+                          (resetCode.length < 6 ||
+                            resetPasswordValue.length < 8))
+                      }
+                      onClick={
+                        resetRequested
+                          ? handleResetPasswordWithCode
+                          : requestPasswordResetCode
+                      }
+                    >
+                      {resetRequested ? "Reset password" : "Send reset code"}
+                    </Button>
+                  </div>
+                </FrameFooter>
+              </Frame>
+            </DialogContent>
+          </Dialog>
         </FrameFooter>
-      </Frame>
-
-      <Frame>
-        <FrameHeader>
-          <FrameTitle className="flex items-center gap-2">
-            <KeyRound className="size-4" />
-            Forgot Password
-          </FrameTitle>
-          <CardDescription>
-            Change your current password, or reset it with an email code if you
-            no longer remember it.
-          </CardDescription>
-        </FrameHeader>
-        <FramePanel>
-          <div className="space-y-1">
-            <p className="text-sm font-medium">Reset with email code</p>
-            <p className="text-xs text-muted-foreground">
-              Send a one-time reset code to{" "}
-              <strong>{sessionEmail || "your email"}</strong> and use it to set
-              a new password.
-            </p>
-          </div>
-          <FieldGroup>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !sessionEmail}
-              onClick={requestPasswordResetCode}
-            >
-              <Mail />
-              Send reset code
-            </Button>
-
-            {resetRequested ? (
-              <>
-                <Field>
-                  <FieldLabel>Reset code</FieldLabel>
-                  <InputOTP
-                    maxLength={6}
-                    value={resetCode}
-                    onChange={setResetCode}
-                  >
-                    <InputOTPGroup>
-                      {Array.from({ length: 6 }).map((_, index) => (
-                        <InputOTPSlot key={index} index={index} />
-                      ))}
-                    </InputOTPGroup>
-                  </InputOTP>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="reset-password-value">
-                    New password
-                  </FieldLabel>
-                  <Input
-                    id="reset-password-value"
-                    type="password"
-                    value={resetPasswordValue}
-                    onChange={(event) =>
-                      setResetPasswordValue(event.target.value)
-                    }
-                    placeholder="Set a new password"
-                  />
-                </Field>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    disabled={
-                      pending ||
-                      resetCode.length < 6 ||
-                      resetPasswordValue.length < 8
-                    }
-                    onClick={handleResetPasswordWithCode}
-                  >
-                    Reset password
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    disabled={pending}
-                    onClick={() => {
-                      setResetRequested(false);
-                      setResetCode("");
-                      setResetPasswordValue("");
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </>
-            ) : null}
-          </FieldGroup>
-        </FramePanel>
       </Frame>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">

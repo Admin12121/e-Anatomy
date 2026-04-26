@@ -169,7 +169,7 @@ impl PlaygroundService {
     pub fn new(pool: PgPool, storage_root: impl Into<String>) -> Self {
         Self {
             pool,
-            repo: PlaygroundRepository::default(),
+            repo: PlaygroundRepository,
             storage_root: PathBuf::from(storage_root.into()),
             events: Arc::new(PlaygroundEventHub::new()),
         }
@@ -1999,9 +1999,7 @@ impl PlaygroundService {
             fs::create_dir_all(&extracted_root).await.map_err(|error| {
                 AppError::internal(format!("Unable to create extraction directory: {error}"))
             })?;
-            let study_files = extract_zip_study(&final_path, &extracted_root)
-                .await
-                .map_err(AppError::from)?;
+            let study_files = extract_zip_study(&final_path, &extracted_root).await?;
 
             return Ok((vec![source_asset], study_files));
         }
@@ -2333,8 +2331,16 @@ impl PlaygroundService {
             return Ok(existing_family);
         }
 
-        self.create_modality_family(tx, zone_id, user_id, name, modality_type, thumbnail_url, notes)
-            .await
+        self.create_modality_family(
+            tx,
+            zone_id,
+            user_id,
+            name,
+            modality_type,
+            thumbnail_url,
+            notes,
+        )
+        .await
     }
 
     async fn update_modality_family_shared_fields(
@@ -2842,6 +2848,49 @@ fn is_zip_filename(value: &str) -> bool {
     value.trim().to_ascii_lowercase().ends_with(".zip")
 }
 
+fn is_allowed_dicom_archive_entry(value: &str) -> bool {
+    let normalized = value.trim().replace('\\', "/").to_ascii_lowercase();
+    let segments: Vec<&str> = normalized
+        .split('/')
+        .filter(|segment| !segment.trim().is_empty())
+        .collect();
+    let Some(file_name) = segments.last().copied() else {
+        return false;
+    };
+
+    if segments.iter().any(|segment| {
+        matches!(
+            *segment,
+            "css"
+                | "css_en"
+                | "evlite"
+                | "help_di"
+                | "image"
+                | "image_en"
+                | "javascript"
+                | "mpeg"
+                | "other"
+                | "pdf"
+                | "viewer"
+        )
+    }) {
+        return false;
+    }
+
+    let extension = file_name
+        .rsplit_once('.')
+        .map(|(_, extension)| format!(".{extension}"));
+
+    match extension.as_deref() {
+        None | Some(".dcm" | ".dicom" | ".ima") => true,
+        Some(
+            ".css" | ".evx" | ".gif" | ".htm" | ".html" | ".js" | ".lnk" | ".mp4" | ".mpeg"
+            | ".pdf" | ".png" | ".txt" | ".xml",
+        ) => false,
+        Some(_) => false,
+    }
+}
+
 fn storage_key_from_absolute(storage_root: &Path, path: &Path) -> Result<String, AppError> {
     let relative = path
         .strip_prefix(storage_root)
@@ -2863,35 +2912,53 @@ fn infer_derived_mime_type(storage_key: &str) -> &'static str {
 async fn extract_zip_study(
     zip_path: &Path,
     extracted_root: &Path,
-) -> anyhow::Result<Vec<PreparedStudyFile>> {
+) -> Result<Vec<PreparedStudyFile>, AppError> {
     let zip_path = zip_path.to_path_buf();
     let extracted_root = extracted_root.to_path_buf();
 
-    tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<PreparedStudyFile>> {
-        let file = std::fs::File::open(&zip_path)
-            .with_context(|| format!("Unable to open ZIP package at {}", zip_path.display()))?;
-        let mut archive = zip::ZipArchive::new(file).context("Unable to read ZIP package")?;
+    tokio::task::spawn_blocking(move || -> Result<Vec<PreparedStudyFile>, AppError> {
+        let file = std::fs::File::open(&zip_path).map_err(|error| {
+            AppError::internal(format!(
+                "Unable to open ZIP package at {}: {error}",
+                zip_path.display()
+            ))
+        })?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|_| AppError::bad_request("Unable to read ZIP package."))?;
         let mut prepared = Vec::new();
 
         for index in 0..archive.len() {
             let mut entry = archive
                 .by_index(index)
-                .with_context(|| format!("Unable to read ZIP entry #{index}"))?;
+                .map_err(|_| AppError::bad_request("Unable to read ZIP package entry."))?;
 
             if entry.is_dir() {
                 continue;
             }
 
             let original_name = entry.name().to_string();
+
+            if !is_allowed_dicom_archive_entry(&original_name) {
+                return Err(AppError::bad_request(format!(
+                    "ZIP package contains non-DICOM viewer or document files ({original_name}). Upload a clean DICOM-only package."
+                )));
+            }
+
             let safe_relative_path = sanitize_relative_path(&original_name);
             let output_path = extracted_root.join(&safe_relative_path);
 
             if let Some(parent) = output_path.parent() {
-                std::fs::create_dir_all(parent)?;
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    AppError::internal(format!("Unable to create extraction directory: {error}"))
+                })?;
             }
 
-            let mut output = std::fs::File::create(&output_path)?;
-            std::io::copy(&mut entry, &mut output)?;
+            let mut output = std::fs::File::create(&output_path).map_err(|error| {
+                AppError::internal(format!("Unable to create extracted study file: {error}"))
+            })?;
+            std::io::copy(&mut entry, &mut output).map_err(|error| {
+                AppError::internal(format!("Unable to extract ZIP package entry: {error}"))
+            })?;
 
             prepared.push(PreparedStudyFile {
                 source_relative_path: Some(safe_relative_path),
@@ -2907,7 +2974,7 @@ async fn extract_zip_study(
         Ok(prepared)
     })
     .await
-    .map_err(|error| anyhow::anyhow!("ZIP extraction task failed: {error}"))?
+    .map_err(|error| AppError::internal(format!("ZIP extraction task failed: {error}")))?
 }
 
 async fn derive_slice_candidate(
@@ -3326,11 +3393,9 @@ fn write_atlas_pages(
     } else {
         (MAX_ATLAS_PAGE_EDGE / global_cell_height).max(1) as usize
     };
-    let columns_per_page = columns_by_width.min(MAX_ATLAS_PAGE_COLUMNS).max(1);
+    let columns_per_page = columns_by_width.clamp(1, MAX_ATLAS_PAGE_COLUMNS);
     let rows_per_page = rows_by_height.max(1);
-    let slices_per_page = (columns_per_page * rows_per_page)
-        .min(MAX_ATLAS_SLICES_PER_PAGE)
-        .max(1);
+    let slices_per_page = (columns_per_page * rows_per_page).clamp(1, MAX_ATLAS_SLICES_PER_PAGE);
 
     let mut atlas_pages = Vec::new();
 

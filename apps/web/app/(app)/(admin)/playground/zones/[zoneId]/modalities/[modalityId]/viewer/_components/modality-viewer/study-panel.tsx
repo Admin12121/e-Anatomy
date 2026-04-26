@@ -29,7 +29,6 @@ type StudySearchHit = {
 };
 
 type StudyPanelProps = {
-  darkMode: boolean;
   readOnly: boolean;
   referenceAssets: ZoneModalityAsset[];
   referenceBusy: boolean;
@@ -60,7 +59,6 @@ type StudyPanelProps = {
 };
 
 export function StudyPanel({
-  darkMode,
   readOnly,
   referenceAssets,
   referenceBusy,
@@ -278,7 +276,7 @@ export function StudyPanel({
         </Frame>
       ) : null}
 
-      {!showStructureDrawer && showCrossReferencesPanel && referenceAssets.length > 0 ? (
+      {!showStructureDrawer && referenceAssets.length > 0 ? (
         <div className="space-y-3">
           {referenceAssets.map((asset, index) => (
             <ReferenceCard
@@ -299,7 +297,6 @@ export function StudyPanel({
 
       {selectedStructure ? (
         <StructureDrawer
-          darkMode={darkMode}
           readOnly={readOnly}
           selectedAnnotation={selectedAnnotation}
           selectedStructure={selectedStructure}

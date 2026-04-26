@@ -1487,6 +1487,11 @@ function ZoneModalityEditorCard({
           <TableBody>
             {family.variants.map((variant, index) => {
               const variantViewerReady = variant.processingStatus === "ready";
+              const variantViewerPreparing =
+                variant.processingStatus === "uploaded" ||
+                variant.processingStatus === "processing";
+              const variantDeleteDisabled = pending || variantViewerPreparing;
+
               return (
                 <TableRow
                   key={variant.id}
@@ -1526,13 +1531,17 @@ function ZoneModalityEditorCard({
                             <SquareArrowOutUpRight />
                           </Link>
                         </Button>
-                      ) : (
+                      ) : variantViewerPreparing ? (
                         <Button
                           size={"icon-sm"}
                           variant="secondary"
                           disabled
                         >
                           <Spinner />
+                        </Button>
+                      ) : (
+                        <Button size={"icon-sm"} variant="secondary" disabled>
+                          <AlertCircleIcon />
                         </Button>
                       )}
                       <DeleteConfirmationDialog
@@ -1547,7 +1556,7 @@ function ZoneModalityEditorCard({
                               `Source ${index + 1}`
                             : family.name
                         }
-                        disabled={pending}
+                        disabled={variantDeleteDisabled}
                         pending={pending}
                         placeholder={
                           family.variants.length > 1
@@ -1569,7 +1578,7 @@ function ZoneModalityEditorCard({
                           <Button
                             size={"icon-sm"}
                             variant="destructive"
-                            disabled={!variantViewerReady}
+                            disabled={variantDeleteDisabled}
                           >
                             <Trash />
                           </Button>

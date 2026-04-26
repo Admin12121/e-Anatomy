@@ -1,10 +1,12 @@
-import { RouteLoadingState } from "@/components/layout/route-loading-state";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export default function SettingsLoading() {
   return (
-    <RouteLoadingState
-      title="Loading Settings"
-      description="Fetching account preferences and connected authentication methods."
-    />
+    <section className="flex h-full min-h-0 flex-col overflow-hidden p-2">
+      <div className="grid h-full min-h-0 overflow-hidden gap-2 xl:grid-cols-[30rem_minmax(0,1fr)]">
+        <Skeleton className="relative min-h-0 overflow-hidden rounded-xl" />
+        <Skeleton className="xl:sticky xl:top-0 flex h-full min-h-0 flex-col gap-3 self-start overflow-y-auto overscroll-contain pr-1" />
+      </div>
+    </section>
   );
 }

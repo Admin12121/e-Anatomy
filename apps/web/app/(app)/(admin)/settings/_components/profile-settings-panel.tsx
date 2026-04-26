@@ -9,13 +9,6 @@ import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Field,
   FieldDescription,
   FieldGroup,
@@ -555,10 +548,11 @@ export function ProfileSettingsPanel({
           </div>
         </div>
       </FramePanel>
-      <FrameFooter className="flex items-center justify-end">
+      <FrameFooter className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
         <Button
           type="button"
           size="lg"
+          className="w-full sm:w-auto"
           disabled={
             pending ||
             displayName.trim().length === 0 ||

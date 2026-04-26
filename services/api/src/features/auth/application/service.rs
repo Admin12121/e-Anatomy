@@ -29,7 +29,7 @@ impl AuthService {
     pub fn new(pool: PgPool, config: AuthConfig) -> Self {
         Self {
             pool,
-            repo: AuthRepository::default(),
+            repo: AuthRepository,
             config,
         }
     }
