@@ -555,7 +555,7 @@ export function SliceFilmstrip({
             <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-primary" />
             <div
               ref={filmstripScrollerRef}
-              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-[#f4f4f5] p-1 dark:bg-[#121212]"
+              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-[#f4f4f5] p-1 dark:bg-[#121212] h-11"
               onWheel={onWheel}
             >
               <div

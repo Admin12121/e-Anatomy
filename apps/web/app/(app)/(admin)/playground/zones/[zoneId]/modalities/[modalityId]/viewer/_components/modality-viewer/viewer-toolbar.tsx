@@ -5,6 +5,7 @@ import {
   CrosshairIcon,
   Eraser,
   Layers2Icon,
+  MenuIcon,
   Move,
   RotateCcwIcon,
   SearchIcon,
@@ -129,7 +130,7 @@ export function ViewerToolbar({
           <SearchIcon className="size-4" />
         </Button>
         <Button
-          aria-label={showControlPanel ? "Hide menu" : "Show menu"}
+          aria-label={showControlPanel ? "Hide navigator" : "Show navigator"}
           type="button"
           size="icon-lg"
           variant={!showControlPanel ? "secondary" : "default"}
@@ -138,7 +139,10 @@ export function ViewerToolbar({
           {showControlPanel ? (
             <ArrowRight className="size-4" />
           ) : (
-            <ArrowLeft className="size-4" />
+            <>
+              <MenuIcon className="size-4 xl:hidden" />
+              <ArrowLeft className="hidden size-4 xl:block" />
+            </>
           )}
         </Button>
       </Group>
@@ -174,7 +178,7 @@ export function ViewerToolbar({
             </ViewerSidebarSection>
             <ViewerSidebarSection title="Tool selection" border={false} className="p-0 mb-5">
               <Group
-                aria-label="Transformations"
+                aria-label="Spatial Adjustments"
                 className="rounded-md bg-white/6 p-0.5"
               >
                 <Button

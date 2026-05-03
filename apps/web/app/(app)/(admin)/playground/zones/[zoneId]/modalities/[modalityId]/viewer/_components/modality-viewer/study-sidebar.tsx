@@ -185,7 +185,7 @@ export function ReferenceCard({
 
   return (
     <div>
-      <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_4.5rem] items-center gap-2 px-4">
+      <div className="grid grid-cols-1 items-center gap-2 px-1 xl:grid-cols-[4.5rem_minmax(0,1fr)_4.5rem] xl:px-4">
         <span aria-hidden="true" />
         <div className="text-center text-xs font-semibold uppercase tracking-[0.22em] text-indigo-300">
           {labels[index] ?? `Ref ${index + 1}`}
@@ -232,7 +232,7 @@ export function ReferenceCard({
           </div>
         ) : null}
       </div>
-      <div className="p-4 pt-2">
+      <div className="p-1 pt-2 xl:p-4 xl:pt-2">
         <div
           ref={imageFrameRef}
           className={cn(
@@ -251,7 +251,7 @@ export function ReferenceCard({
         >
           <Image
             alt={asset.label}
-            className="h-96 w-full select-none object-cover"
+            className="h-28 w-full select-none object-cover xl:h-96"
             decoding="async"
             draggable={false}
             fetchPriority="low"

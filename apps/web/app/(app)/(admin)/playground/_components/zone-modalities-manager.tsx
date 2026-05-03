@@ -1227,8 +1227,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                 <Field>
                   <FieldLabel htmlFor={`modality-weighting-${zoneId}`}>
-                    Weighting
-                  </FieldLabel>
+                      Signal Mode
+                    </FieldLabel>
                   <PlaygroundSelect
                     id={`modality-weighting-${zoneId}`}
                     options={MODALITY_WEIGHTING_OPTIONS}
@@ -1480,7 +1480,7 @@ function ZoneModalityEditorCard({
             <TableRow>
               <TableHead>SN</TableHead>
               <TableHead>Modality Name</TableHead>
-              <TableHead>Weighting</TableHead>
+                  <TableHead>Signal Mode</TableHead>
               <TableHead>Action</TableHead>
             </TableRow>
           </TableHeader>

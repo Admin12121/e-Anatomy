@@ -389,7 +389,7 @@ function ModalityViewerShell({
     useState<MainInteractionTool>("layers");
   const effectiveShowCrossReferences = showCrossReferences;
   const [showStudyPanel, setShowStudyPanel] = useState(true);
-  const [showControlPanel, setShowControlPanel] = useState(true);
+  const [showControlPanel, setShowControlPanel] = useState(false);
   const [canvasRotationQuarterTurns, setCanvasRotationQuarterTurns] =
     useState(0);
   const [canvasFlipHorizontal, setCanvasFlipHorizontal] = useState(false);
@@ -408,6 +408,16 @@ function ModalityViewerShell({
     string[][]
   >([]);
   const [isApplyingSliceChanges, setIsApplyingSliceChanges] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (window.matchMedia("(min-width: 1280px)").matches) {
+      setShowControlPanel(true);
+    }
+  }, []);
 
   const filmstripScrollerRef = useRef<HTMLDivElement | null>(null);
   const sliceEditorScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -1759,18 +1769,25 @@ function ModalityViewerShell({
       ? selectedStructure
       : null;
   const shellGridClass = cn(
-    "grid min-h-0 flex-1 gap-2",
+    "grid min-h-0 flex-1",
     readOnly
       ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-y-auto bg-background"
       : showSliceEditorPanel
         ? "max-h-[calc(100vh-310px)]"
         : "max-h-[calc(100vh-101px)]",
+    showStudyPanel
+      ? "max-xl:grid-cols-[8.5rem_minmax(0,1fr)]"
+      : "max-xl:grid-cols-[minmax(0,1fr)]",
     showStudyPanel &&
       showControlPanel &&
       "xl:grid-cols-[22rem_minmax(0,1fr)_22rem]",
     showStudyPanel && !showControlPanel && "xl:grid-cols-[22rem_minmax(0,1fr)]",
     !showStudyPanel && showControlPanel && "xl:grid-cols-[minmax(0,1fr)_22rem]",
     !showStudyPanel && !showControlPanel && "xl:grid-cols-[minmax(0,1fr)]",
+  );
+  const mainClassName = cn(
+    "relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto]",
+    showStudyPanel ? "max-xl:col-start-2" : "max-xl:col-span-full",
   );
   const viewerTitle = useMemo(() => {
     if (!showOrientation) {
@@ -2364,7 +2381,7 @@ function ModalityViewerShell({
     }
 
     if (!groupForm.thumbnailUrl.trim()) {
-      toast.error("Anatomical area thumbnail is required.");
+      toast.error("Anatomic zone thumbnail is required.");
       return null;
     }
 
@@ -3198,7 +3215,7 @@ function ModalityViewerShell({
         />
       ) : null}
 
-      <main className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+      <main className={mainClassName}>
         <ViewerCanvas
           annotationEditingEnabled={!readOnly}
           areaBrushSize={areaBrushSize}
@@ -3387,6 +3404,15 @@ function ModalityViewerShell({
       />
 
       {showControlPanel ? (
+        <button
+          aria-label="Close menu drawer"
+          className="fixed inset-0 z-40 hidden bg-black/45 max-xl:block"
+          type="button"
+          onClick={() => setShowControlPanel(false)}
+        />
+      ) : null}
+
+      {showControlPanel ? (
         <ModalityViewerRightPanel
           activeWeighting={activeViewerWeightingValue}
           annotationForm={annotationForm}
@@ -3439,6 +3465,7 @@ function ModalityViewerShell({
           onTakeScreenshot={handleTakeScreenshot}
           onVisibleGroupIdsChange={setVisibleGroupIds}
           onWeightingChange={handleViewerWeightingChange}
+          onClose={() => setShowControlPanel(false)}
         />
       ) : null}
     </div>

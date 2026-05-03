@@ -158,8 +158,15 @@ export function StudyPanel({
   };
 
   return (
-    <aside className="h-full min-h-0 space-y-4 overflow-y-auto p-2">
-      <div className="space-y-2">
+    <aside
+      className={cn(
+        "h-full min-h-0 space-y-4 overflow-y-auto p-2",
+        showStructureDrawer
+          ? "max-xl:fixed max-xl:inset-x-0 max-xl:bottom-14 max-xl:top-0 max-xl:z-50 max-xl:bg-background max-xl:p-4"
+          : "max-xl:border-r max-xl:border-border/70 max-xl:bg-background/95 max-xl:p-1",
+      )}
+    >
+      <div className={cn("space-y-2", showStructureDrawer && "max-xl:hidden")}>
         <span className={cn(readOnly ? "flex items-center flex-row gap-2" : "flex items-center gap-2")}>
           {readOnly && (
             <Link

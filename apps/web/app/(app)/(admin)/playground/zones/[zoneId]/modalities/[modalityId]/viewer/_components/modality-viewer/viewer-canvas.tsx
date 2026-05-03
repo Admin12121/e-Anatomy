@@ -991,7 +991,7 @@ export function ViewerCanvas({
   if (!currentAsset) {
     if (isPreparingInitialAsset || isIngesting) {
       return (
-        <div className="flex min-h-160 flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 px-6 text-center text-white/70">
+        <div className="flex min-h-160 flex-col items-center justify-center bg-black/20 px-6 text-center text-white/70">
           <Loader />
         </div>
       );
@@ -999,14 +999,14 @@ export function ViewerCanvas({
 
     if (ingestFailureMessage) {
       return (
-        <div className="flex min-h-160 items-center justify-center rounded-[1.75rem] border border-dashed border-red-500/30 bg-red-500/5 px-6 text-center text-red-100">
+        <div className="flex min-h-160 items-center justify-center bg-red-500/5 px-6 text-center text-red-100">
           <p className="max-w-lg text-sm leading-6">{ingestFailureMessage}</p>
         </div>
       );
     }
 
     return (
-      <div className="flex min-h-160 items-center justify-center rounded-[1.75rem] border border-dashed border-white/10 bg-black/20 text-white/60">
+      <div className="flex min-h-160 items-center justify-center bg-black/20 text-white/60">
         This modality does not have any derived slices yet.
       </div>
     );

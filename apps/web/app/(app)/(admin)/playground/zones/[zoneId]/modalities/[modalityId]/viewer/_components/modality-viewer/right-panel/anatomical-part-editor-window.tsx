@@ -117,8 +117,8 @@ export function AnatomicalPartEditorWindow({
           >
             Restore Editor
           </Button>
-          <div className="max-w-52 truncate text-xs text-white/70">
-            {partTitle.trim() || "New Anatomical Part"}
+            <div className="max-w-52 truncate text-xs text-white/70">
+            {partTitle.trim() || "New Anatomic Structure"}
           </div>
           <Button
             type="button"
@@ -229,7 +229,7 @@ export function AnatomicalPartEditorWindow({
             <div className="min-w-0 flex-1">
               <div className="mx-auto max-w-lg rounded-md border border-white/10 bg-black/30 px-3 py-1 text-center">
                 <span className="block truncate text-[11px] text-white/65">
-                  {partTitle.trim() || "New Anatomical Part"}
+                  {partTitle.trim() || "New Anatomic Structure"}
                 </span>
               </div>
             </div>
@@ -241,7 +241,7 @@ export function AnatomicalPartEditorWindow({
             <ProjectRichTextEditor
               className="h-full"
               variant="workspace"
-              title={partTitle.trim() || "New Anatomical Part"}
+              title={partTitle.trim() || "New Anatomic Structure"}
               value={editorDraft}
               onChange={(value: string) => {
                 setEditorDraft(value);

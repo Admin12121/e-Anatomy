@@ -18,6 +18,7 @@ import {
   RotateCcwIcon,
   RotateCwIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -152,6 +153,7 @@ type RightPanelProps = {
   onTakeScreenshot: () => void | Promise<void>;
   onVisibleGroupIdsChange: (groupIds: string[]) => void;
   onWeightingChange: (weighting: string) => void;
+  onClose?: () => void;
   handleReset: () => void;
 };
 
@@ -228,6 +230,7 @@ export function ModalityViewerRightPanel({
   onTakeScreenshot,
   onVisibleGroupIdsChange,
   onWeightingChange,
+  onClose,
   handleReset,
 }: RightPanelProps) {
   const [showAnatomicalPartsPanel, setShowAnatomicalPartsPanel] =
@@ -432,12 +435,26 @@ export function ModalityViewerRightPanel({
   };
 
   return (
-    <aside className="min-h-0 overflow-y-auto p-2 space-y-3">
+    <aside className="min-h-0 space-y-3 overflow-y-auto p-2 max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-50 max-xl:w-[min(22rem,calc(100vw-2rem))] max-xl:border-l max-xl:border-border/70 max-xl:bg-background max-xl:shadow-2xl">
       <Frame>
-        <div className="flex items-center justify-between px-3 py-2">Menu</div>
+        <div className="flex items-center justify-between px-3 py-2">
+          <span>Navigator</span>
+          {onClose ? (
+            <Button
+              aria-label="Close navigator"
+              className="xl:hidden"
+              type="button"
+              size="icon"
+              variant="secondary"
+              onClick={onClose}
+            >
+              <XIcon className="size-4" />
+            </Button>
+          ) : null}
+        </div>
         <FramePanel className="p-3">
           {weightingOptions.length > 0 ? (
-            <ViewerSidebarSection title="Weightings">
+                <ViewerSidebarSection title="Signal Mode">
               <Select
                 disabled={weightingDisabled}
                 value={activeWeighting}
@@ -467,9 +484,9 @@ export function ModalityViewerRightPanel({
           ) : null}
 
           <ViewerSidebarSection
-            title="Anatomical Areas"
+            title="Anatomic Zones"
             actions={
-              <Group className="rounded-md bg-white/6 p-0.5">
+                  <Group className="rounded-md bg-white/6 p-0.5">
                 <Button
                   aria-label={showLabels ? "Hide labels" : "Show labels"}
                   type="button"
@@ -484,8 +501,8 @@ export function ModalityViewerRightPanel({
                   )}
                 </Button>
                 {!readOnly ? (
-                  <Button
-                    aria-label="Show anatomical areas editor"
+                    <Button
+                      aria-label="Show anatomic zones editor"
                     type="button"
                     size="icon"
                     variant={showAnatomicalPartsPanel ? "default" : "secondary"}
@@ -518,7 +535,7 @@ export function ModalityViewerRightPanel({
                   onVisibleGroupIdsChange(allGroupsVisible ? [] : allGroupIds)
                 }
               >
-                <span>Select all</span>
+                <span>Mark all</span>
                 <Switch
                   checked={allGroupsVisible}
                   onCheckedChange={(checked) =>
@@ -596,10 +613,10 @@ export function ModalityViewerRightPanel({
             </div>
           </ViewerSidebarSection>
 
-          <ViewerSidebarSection title="Transformations" className="pb-0">
+          <ViewerSidebarSection title="Spatial Adjustments" className="pb-0">
             <div className="space-y-2">
               <Group
-                aria-label="Transformations"
+                aria-label="Spatial adjustments"
                 className="rounded-md bg-white/6 p-0.5"
               >
                 <Button
@@ -643,7 +660,7 @@ export function ModalityViewerRightPanel({
                   <FlipVertical2Icon className="size-4" />
                 </Button>
                 <Button
-                  aria-label="Reset transformations"
+                  aria-label="Reset spatial adjustments"
                   type="button"
                   size="icon-lg"
                   variant={"secondary"}
@@ -659,7 +676,7 @@ export function ModalityViewerRightPanel({
       {!readOnly && showAnatomicalPartsPanel ? (
         <Frame>
           <div className="flex items-center justify-between px-3 py-2">
-            Anatomical Area
+            Anatomic Zone
             <Button
               disabled={
                 busy ||
@@ -679,7 +696,7 @@ export function ModalityViewerRightPanel({
           <FramePanel className="p-3">
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <div className="text-xs font-medium">Area Name</div>
+                <div className="text-xs font-medium">Zone Name</div>
                 <Input
                   placeholder="Ex: Frontal Lobe"
                   value={groupForm.title}
@@ -690,12 +707,12 @@ export function ModalityViewerRightPanel({
               </div>
               <div className="space-y-1.5">
                 <div className="text-xs font-medium">Thumbnail Image</div>
-                <ImageUploadDropzone
+                  <ImageUploadDropzone
                   disabled={isUploadingGroupThumbnail}
                   emptyTitle="Drop thumbnail image here"
                   onClear={() => onGroupFormChange("thumbnailUrl", "")}
                   onFileAccepted={handleGroupThumbnailSelection}
-                  previewAlt="Anatomical area thumbnail"
+                  previewAlt="Anatomic zone thumbnail"
                   value={groupForm.thumbnailUrl}
                 />
               </div>
@@ -727,13 +744,13 @@ export function ModalityViewerRightPanel({
                     )}
                   </Button>
                   <DeleteConfirmationDialog
-                    confirmationLabel="Area name"
+                    confirmationLabel="Zone name"
                     confirmationValue={selectedAnatomicalPart.title}
-                    descriptionPrefix="Delete this anatomical area and ungroup its linked topics. To confirm, enter the"
+                    descriptionPrefix="Delete this anatomic zone and ungroup its linked topics. To confirm, enter the"
                     disabled={busy}
                     onConfirm={handleDeleteSelectedAnatomicalArea}
                     placeholder={selectedAnatomicalPart.title}
-                    title="Delete anatomical area"
+                    title="Delete anatomic zone"
                     trigger={
                       <Button
                         type="button"
@@ -750,7 +767,7 @@ export function ModalityViewerRightPanel({
             <FramePanel className="p-3">
               <div className="space-y-3">
                 <div className="space-y-1.5">
-                  <div className="text-xs font-medium">Area Name</div>
+                  <div className="text-xs font-medium">Zone Name</div>
                   {readOnly ? (
                     <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm">
                       {selectedAnatomicalPart.title}
@@ -782,7 +799,7 @@ export function ModalityViewerRightPanel({
                       emptyTitle="Drop thumbnail image here"
                       onClear={() => onGroupFormChange("thumbnailUrl", "")}
                       onFileAccepted={handleGroupThumbnailSelection}
-                      previewAlt="Anatomical area thumbnail"
+                      previewAlt="Anatomic zone thumbnail"
                       value={groupForm.thumbnailUrl}
                     />
                   )}
@@ -795,7 +812,7 @@ export function ModalityViewerRightPanel({
             <div className="p-1">
               <Frame className="shrink-0 outline-offset-2 outline outline-border/50 rounded-lg p-0">
                 <FrameHeader className="py-1 px-2 flex items-center justify-between flex-row">
-                  <FrameTitle className="text-lg">Anatomical Part</FrameTitle>
+                  <FrameTitle className="text-lg">Anatomic Structure</FrameTitle>
                   <Button
                     type="button"
                     size="icon"
@@ -892,7 +909,7 @@ export function ModalityViewerRightPanel({
                 ) : (
                   <TableRow>
                     <TableCell colSpan={3} className="text-white/60">
-                      No anatomical parts yet.
+                      No anatomic structures yet.
                     </TableCell>
                   </TableRow>
                 )}
@@ -904,8 +921,8 @@ export function ModalityViewerRightPanel({
             <Frame>
               <div className="flex items-center justify-between px-3 py-2">
                 {selectedStructureId
-                  ? "Edit Anatomical Part"
-                  : "New Anatomical Part"}
+                  ? "Edit Anatomic Structure"
+                  : "New Anatomic Structure"}
                 <div className="flex items-center gap-2">
                   <Button
                     disabled={busy || !structureForm.title.trim()}
@@ -919,13 +936,13 @@ export function ModalityViewerRightPanel({
                   </Button>
                   {selectedStructureId ? (
                     <DeleteConfirmationDialog
-                      confirmationLabel="Part name"
+                      confirmationLabel="Structure name"
                       confirmationValue={structureForm.title.trim()}
-                      descriptionPrefix="Delete this anatomical part and all linked pins and areas. To confirm, enter the"
+                      descriptionPrefix="Delete this anatomic structure and all linked pins and zones. To confirm, enter the"
                       disabled={busy || !structureForm.title.trim()}
                       onConfirm={handleDeleteSelectedPart}
                       placeholder={structureForm.title.trim()}
-                      title="Delete anatomical part"
+                      title="Delete anatomic structure"
                       trigger={
                         <Button
                           disabled={busy}
@@ -943,7 +960,7 @@ export function ModalityViewerRightPanel({
                 <div className="space-y-3">
                   <div className="space-y-1.5">
                     <div className="text-xs font-medium text-white/70">
-                      Part Name
+                      Structure Name
                     </div>
                     <Input
                       placeholder="Ex: Superior Frontal Gyrus"
@@ -1069,7 +1086,7 @@ export function ModalityViewerRightPanel({
       {readOnly ? (
         <Frame>
           <FrameHeader className="px-3 py-2 text-sm font-semibold">
-            Display Mode
+            Viewing Mode
           </FrameHeader>
           <FramePanel className="space-y-3 p-3">
             <div className="space-y-1">
