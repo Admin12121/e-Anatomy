@@ -54,10 +54,18 @@ export function formatModalityTypeLabel(value: string | null | undefined) {
       return "MRI";
     case "ct":
       return "CT";
+    case "pet":
+      return "PET";
+    case "ultrasound":
+      return "Ultrasound";
+    case "xray":
+      return "X-ray";
     case "mra":
       return "MRA";
     case "mrv":
       return "MRV";
+    case "angiography":
+      return "Angiography";
     case "cbct":
       return "CBCT";
     default:

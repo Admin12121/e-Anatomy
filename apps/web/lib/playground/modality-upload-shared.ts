@@ -12,8 +12,11 @@ type NamedUpload = {
   name: string
 }
 
-const MRI_HINTS = ["mri", "mr", "t1", "t2", "flair", "adc", "dwi"]
+const MRI_HINTS = ["mri", "mr", "t1", "t2", "pd", "flair", "adc", "dwi"]
 const CT_HINTS = ["ct", "cta"]
+const PET_HINTS = ["pet"]
+const ULTRASOUND_HINTS = ["ultrasound", "ultrasonography", "usg"]
+const XRAY_HINTS = ["xray", "x-ray", "radiograph"]
 const MRA_HINTS = ["mra"]
 const MRV_HINTS = ["mrv"]
 const ANGIOGRAPHY_HINTS = ["angiography", "angio", "angiogram"]
@@ -269,6 +272,9 @@ function inferModalityTypeFromNames(names: string[]): ModalityType {
 
   if (includesAny(haystack, CBCT_HINTS)) return "cbct"
   if (includesAny(haystack, ANGIOGRAPHY_HINTS)) return "angiography"
+  if (includesAny(haystack, ULTRASOUND_HINTS)) return "ultrasound"
+  if (includesAny(haystack, XRAY_HINTS)) return "xray"
+  if (includesAny(haystack, PET_HINTS)) return "pet"
   if (includesAny(haystack, MRV_HINTS)) return "mrv"
   if (includesAny(haystack, MRA_HINTS)) return "mra"
   if (includesAny(haystack, CT_HINTS)) return "ct"

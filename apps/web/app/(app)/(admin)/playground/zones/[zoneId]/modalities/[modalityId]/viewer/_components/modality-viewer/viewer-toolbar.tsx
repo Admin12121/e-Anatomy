@@ -69,7 +69,7 @@ export function ViewerToolbar({
     <>
       <Group
         aria-label="Viewer controls"
-        className="absolute right-3 top-3 z-30 rounded-sm p-0.5"
+        className="absolute right-3 top-3 z-30 rounded-sm p-0.5 max-[719px]:top-10"
       >
         <Button
           aria-label={showStudyPanel ? "Hide study panel" : "Show study panel"}

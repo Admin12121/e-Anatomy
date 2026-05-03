@@ -9,6 +9,9 @@ export const MODALITY_TYPE_OPTIONS: Array<{
 }> = [
   { label: "MRI", value: "mri" },
   { label: "CT", value: "ct" },
+  { label: "PET", value: "pet" },
+  { label: "Ultrasound", value: "ultrasound" },
+  { label: "X-ray", value: "xray" },
   { label: "MRA", value: "mra" },
   { label: "MRV", value: "mrv" },
   { label: "Angiography", value: "angiography" },
@@ -30,6 +33,7 @@ export const MODALITY_WEIGHTING_OPTIONS: Array<{
   { label: "T1 Gado", value: "t1_gado" },
   { label: "T2", value: "t2" },
   { label: "T2*", value: "t2_star" },
+  { label: "PD", value: "pd" },
   { label: "FLAIR", value: "flair" },
   { label: "ADC", value: "adc" },
   { label: "DWI", value: "dwi" },
@@ -48,4 +52,10 @@ export function formatModalityWeightingLabel(
   }
 
   return WEIGHTING_LABEL_BY_VALUE.get(value ?? "") ?? String(value).toUpperCase();
+}
+
+export function isMriModalityType(
+  value: ModalityType | string | null | undefined,
+) {
+  return value === "mri";
 }

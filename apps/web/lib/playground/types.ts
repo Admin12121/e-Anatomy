@@ -55,6 +55,9 @@ export type UpdateZoneInput = {
 export type ModalityType =
   | "mri"
   | "ct"
+  | "pet"
+  | "ultrasound"
+  | "xray"
   | "mra"
   | "mrv"
   | "angiography"
@@ -209,6 +212,7 @@ export type ModalityWeightingCode =
   | "t1_gado"
   | "t2"
   | "t2_star"
+  | "pd"
   | "flair"
   | "adc"
   | "dwi"

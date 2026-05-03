@@ -17,7 +17,10 @@ type ImageUploadDropzoneProps = {
   accept?: string;
   className?: string;
   disabled?: boolean;
+  dropzoneClassName?: string;
+  emptyDescriptionClassName?: string;
   emptyDescription?: string;
+  emptyTitleClassName?: string;
   emptyTitle?: string;
   maxSizeMB?: number;
   onClear?: () => void;
@@ -30,8 +33,11 @@ export function ImageUploadDropzone({
   accept = "image/svg+xml,image/png,image/jpeg,image/jpg,image/gif,image/webp,image/avif",
   className,
   disabled = false,
+  dropzoneClassName,
   emptyDescription,
+  emptyDescriptionClassName,
   emptyTitle = "Drop your image here",
+  emptyTitleClassName,
   maxSizeMB = 8,
   onClear,
   onFileAccepted,
@@ -97,6 +103,7 @@ export function ImageUploadDropzone({
             "relative flex min-h-52 flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-input p-4 transition-colors",
             "has-[input:focus]:border-ring has-[input:focus]:ring-[3px] has-[input:focus]:ring-ring/50 data-[dragging=true]:bg-accent/50",
             disabled ? "pointer-events-none opacity-65" : null,
+            dropzoneClassName,
           )}
           data-dragging={isDragging || undefined}
           onDragEnter={handleDragEnter}
@@ -127,8 +134,10 @@ export function ImageUploadDropzone({
               >
                 <ImageIcon className="size-4 opacity-60" />
               </div>
-              <p className="mb-1.5 text-sm font-medium">{emptyTitle}</p>
-              <p className="text-xs text-muted-foreground">
+              <p className={cn("mb-1.5 text-sm font-medium", emptyTitleClassName)}>
+                {emptyTitle}
+              </p>
+              <p className={cn("text-xs text-muted-foreground", emptyDescriptionClassName)}>
                 {emptyDescription ??
                   `SVG, PNG, JPG, GIF, WebP or AVIF (max. ${maxSizeMB}MB)`}
               </p>

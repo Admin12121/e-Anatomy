@@ -1,6 +1,4 @@
 "use client";
-
-import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   useCallback,
@@ -49,6 +47,7 @@ import {
   useUpdateZoneModalityAssetMutation,
 } from "@/lib/store/services/playground-api";
 import { cn } from "@/lib/utils";
+import { isMriModalityType } from "@/lib/playground/modality-options";
 import Loader from "@/components/ui/loader";
 import { ModalityViewerRightPanel } from "./right-panel";
 import {
@@ -88,7 +87,6 @@ import {
 } from "./modality-viewer/utils";
 import {
   createAssetWeightingOptions,
-  createVariantWeightingOptions,
   filterAssetsByWeighting,
   findNearestWeightingAsset,
   getAssetWeightings,
@@ -296,7 +294,6 @@ function ModalityViewerShell({
   zoneId,
   zoneSlug,
 }: ModalityViewerShellProps) {
-  const router = useRouter();
   const { resolvedTheme } = useTheme();
   const readOnly = mode === "public";
   const {
@@ -342,7 +339,6 @@ function ModalityViewerShell({
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
   const [pendingWeighting, setPendingWeighting] = useState<string | null>(null);
-  const [pendingVariantId, setPendingVariantId] = useState<string | null>(null);
   const [isWeightingTransitionPending, startWeightingTransition] =
     useTransition();
   const [currentAssetId, setCurrentAssetId] = useState<string | null>(null);
@@ -407,6 +403,10 @@ function ModalityViewerShell({
   const [sliceTimelineRedoStack, setSliceTimelineRedoStack] = useState<
     string[][]
   >([]);
+  const [multiSelectEnabled, setMultiSelectEnabled] = useState(false);
+  const [multiSelectedSliceIds, setMultiSelectedSliceIds] = useState<string[]>(
+    [],
+  );
   const [isApplyingSliceChanges, setIsApplyingSliceChanges] = useState(false);
 
   useEffect(() => {
@@ -453,18 +453,7 @@ function ModalityViewerShell({
   const lastNavigationSourceRef = useRef<NavigationSource>("button");
 
   const assets = useMemo(() => data?.assets ?? [], [data?.assets]);
-  const modalityVariants = useMemo(
-    () => data?.modalityVariants ?? [],
-    [data?.modalityVariants],
-  );
-  const variantWeightingOptions = useMemo(
-    () => createVariantWeightingOptions(modalityVariants),
-    [modalityVariants],
-  );
-  const variantWeightingById = useMemo(
-    () => new Map(modalityVariants.map((variant) => [variant.id, variant])),
-    [modalityVariants],
-  );
+  const supportsWeighting = isMriModalityType(data?.modality.modalityType);
   const groups = useMemo(
     () => data?.structureGroups ?? [],
     [data?.structureGroups],
@@ -558,9 +547,33 @@ function ModalityViewerShell({
     () => getAssetWeightings(orderedSliceAssets),
     [orderedSliceAssets],
   );
+  const effectiveActiveWeighting = supportsWeighting ? activeWeighting : "all";
   const activeAssets = useMemo(() => {
-    return filterAssetsByWeighting(orderedSliceAssets, activeWeighting);
-  }, [activeWeighting, orderedSliceAssets]);
+    return filterAssetsByWeighting(orderedSliceAssets, effectiveActiveWeighting);
+  }, [effectiveActiveWeighting, orderedSliceAssets]);
+  const activeAssetIdSet = useMemo(
+    () => new Set(activeAssets.map((asset) => asset.id)),
+    [activeAssets],
+  );
+  const oddSliceIds = useMemo(
+    () =>
+      activeAssets
+        .filter((_, index) => index % 2 === 0)
+        .map((asset) => asset.id),
+    [activeAssets],
+  );
+  const evenSliceIds = useMemo(
+    () =>
+      activeAssets
+        .filter((_, index) => index % 2 === 1)
+        .map((asset) => asset.id),
+    [activeAssets],
+  );
+  const activeMultiSelectedSliceIds = useMemo(
+    () =>
+      multiSelectedSliceIds.filter((assetId) => activeAssetIdSet.has(assetId)),
+    [activeAssetIdSet, multiSelectedSliceIds],
+  );
   const viewerSliceItems = useMemo<ViewerSliceItem[]>(
     () =>
       activeAssets.map((asset, assetIndex) => {
@@ -606,6 +619,13 @@ function ModalityViewerShell({
       return areAssetIdOrdersEqual(current, next) ? current : next;
     });
   }, [baseSliceAssetIdSet, baseSliceAssetIds]);
+  useEffect(() => {
+    setMultiSelectedSliceIds((current) => {
+      const next = current.filter((assetId) => activeAssetIdSet.has(assetId));
+
+      return next.length === current.length ? current : next;
+    });
+  }, [activeAssetIdSet]);
   const referenceAssets = useMemo(() => {
     return assets.filter((asset) => !isSliceAsset(asset));
   }, [assets]);
@@ -1379,39 +1399,6 @@ function ModalityViewerShell({
   }, [pendingWeighting, weightings]);
 
   useEffect(() => {
-    if (!pendingVariantId || data?.modality.id !== pendingVariantId) {
-      return;
-    }
-
-    setPendingVariantId(null);
-  }, [data?.modality.id, pendingVariantId]);
-
-  useEffect(() => {
-    if (!data || modalityVariants.length <= 1) {
-      return;
-    }
-
-    for (const variant of modalityVariants) {
-      if (variant.id === data.modality.id) {
-        continue;
-      }
-
-      router.prefetch(
-        readOnly
-          ? `/${zoneSlug}/${variant.slug}`
-          : `/playground/zones/${zoneId}/modalities/${variant.id}/viewer`,
-      );
-    }
-  }, [
-    data,
-    modalityVariants,
-    readOnly,
-    router,
-    zoneId,
-    zoneSlug,
-  ]);
-
-  useEffect(() => {
     if (activeAssets.length === 0) {
       return;
     }
@@ -1587,6 +1574,7 @@ function ModalityViewerShell({
   useEffect(() => {
     if (
       typeof window === "undefined" ||
+      !supportsWeighting ||
       weightings.length <= 2 ||
       orderedSliceAssets.length === 0
     ) {
@@ -1637,6 +1625,7 @@ function ModalityViewerShell({
     currentAsset,
     orderedSliceAssets,
     preloadAsset,
+    supportsWeighting,
     weightings,
   ]);
 
@@ -1771,7 +1760,7 @@ function ModalityViewerShell({
   const shellGridClass = cn(
     "grid min-h-0 flex-1",
     readOnly
-      ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-y-auto bg-background"
+      ? "h-[calc(100dvh-55px)] max-h-[calc(100dvh-55px)] overflow-hidden bg-background"
       : showSliceEditorPanel
         ? "max-h-[calc(100vh-310px)]"
         : "max-h-[calc(100vh-101px)]",
@@ -1841,22 +1830,16 @@ function ModalityViewerShell({
   const isAssetLoading = pendingAsset
     ? !readyAssetIds.has(pendingImageSource?.cacheKey ?? pendingAsset.id)
     : false;
-  const displayedWeighting = pendingWeighting ?? activeWeighting;
+  const displayedWeighting = supportsWeighting
+    ? pendingWeighting ?? activeWeighting
+    : "all";
   const isWeightingPending =
-    Boolean(pendingWeighting) ||
-    isWeightingTransitionPending ||
-    Boolean(pendingVariantId);
+    Boolean(pendingWeighting) || isWeightingTransitionPending;
   const assetWeightingOptions = useMemo(
     () => createAssetWeightingOptions(weightings),
     [weightings],
   );
-  const usingVariantWeightingOptions = variantWeightingOptions.length > 0;
-  const viewerWeightingOptions = usingVariantWeightingOptions
-    ? variantWeightingOptions
-    : assetWeightingOptions;
-  const activeViewerWeightingValue = usingVariantWeightingOptions
-    ? (pendingVariantId ?? data?.modality.id ?? "")
-    : displayedWeighting;
+  const viewerWeightingOptions = supportsWeighting ? assetWeightingOptions : [];
   const activeFilmstripAssetId = currentAsset?.id ?? pendingAsset?.id ?? null;
   const isPreparingInitialAsset = activeAssets.length > 0 && !currentAsset;
   const activeAreaToolSize =
@@ -1868,6 +1851,13 @@ function ModalityViewerShell({
   const canDeleteLeftSlices = navigationAssetIndex > 0;
   const canDeleteRightSlices =
     navigationAssetIndex >= 0 && navigationAssetIndex < activeAssets.length - 1;
+  const canDeleteOddSlices =
+    oddSliceIds.length > 0 && oddSliceIds.length < activeAssets.length;
+  const canDeleteEvenSlices =
+    evenSliceIds.length > 0 && evenSliceIds.length < activeAssets.length;
+  const canDeleteMultiSelectedSlices =
+    activeMultiSelectedSliceIds.length > 0 &&
+    activeMultiSelectedSliceIds.length < activeAssets.length;
   const canFlipSliceTimeline = activeAssets.length > 1;
   const pendingDeletedSliceIds = useMemo(() => {
     const nextOrderSet = new Set(normalizedSliceTimelineIds);
@@ -2115,7 +2105,7 @@ function ModalityViewerShell({
   }, [resetAnnotationDraftToBaseline]);
 
   function handleWeightingChange(nextWeighting: string) {
-    if (sliceInteractionLocked) {
+    if (!supportsWeighting || sliceInteractionLocked) {
       return;
     }
 
@@ -2157,26 +2147,6 @@ function ModalityViewerShell({
   }
 
   function handleViewerWeightingChange(value: string) {
-    if (usingVariantWeightingOptions) {
-      if (sliceInteractionLocked) {
-        return;
-      }
-
-      const variant = variantWeightingById.get(value);
-
-      if (!variant || variant.id === data?.modality.id) {
-        return;
-      }
-
-      setPendingVariantId(variant.id);
-      router.push(
-        readOnly
-          ? `/${zoneSlug}/${variant.slug}`
-          : `/playground/zones/${zoneId}/modalities/${variant.id}/viewer`,
-      );
-      return;
-    }
-
     handleWeightingChange(value);
   }
 
@@ -2634,7 +2604,9 @@ function ModalityViewerShell({
 
     startTransition(() => {
       setSelectedAnnotationId(nextAnnotation.id);
-      setActiveWeighting(nextAsset.weightingCode ?? "all");
+      if (supportsWeighting) {
+        setActiveWeighting(nextAsset.weightingCode ?? "all");
+      }
     });
     lastNavigationDirectionRef.current = 0;
     void requestAssetNavigation(nextAsset, "search");
@@ -3022,6 +2994,94 @@ function ModalityViewerShell({
         (assetId) => assetId !== activeViewerAssetId,
       ),
     );
+    setMultiSelectedSliceIds((current) =>
+      current.filter((assetId) => assetId !== activeViewerAssetId),
+    );
+  }
+
+  function handleDeleteOddSlices() {
+    if (readOnly) {
+      return;
+    }
+
+    if (!canDeleteOddSlices) {
+      return;
+    }
+
+    const oddSliceIdSet = new Set(oddSliceIds);
+
+    commitSliceTimeline(
+      normalizedSliceTimelineIds.filter(
+        (assetId) => !oddSliceIdSet.has(assetId),
+      ),
+    );
+    setMultiSelectedSliceIds((current) =>
+      current.filter((assetId) => !oddSliceIdSet.has(assetId)),
+    );
+  }
+
+  function handleDeleteEvenSlices() {
+    if (readOnly) {
+      return;
+    }
+
+    if (!canDeleteEvenSlices) {
+      return;
+    }
+
+    const evenSliceIdSet = new Set(evenSliceIds);
+
+    commitSliceTimeline(
+      normalizedSliceTimelineIds.filter(
+        (assetId) => !evenSliceIdSet.has(assetId),
+      ),
+    );
+    setMultiSelectedSliceIds((current) =>
+      current.filter((assetId) => !evenSliceIdSet.has(assetId)),
+    );
+  }
+
+  function handleToggleSliceMultiSelect() {
+    if (readOnly) {
+      return;
+    }
+
+    if (multiSelectEnabled) {
+      setMultiSelectedSliceIds([]);
+    }
+
+    setMultiSelectEnabled((current) => !current);
+  }
+
+  function handleToggleMultiSelectedSlice(assetId: string) {
+    if (readOnly || !activeAssetIdSet.has(assetId)) {
+      return;
+    }
+
+    setMultiSelectedSliceIds((current) =>
+      current.includes(assetId)
+        ? current.filter((currentAssetId) => currentAssetId !== assetId)
+        : [...current, assetId],
+    );
+  }
+
+  function handleDeleteMultiSelectedSlices() {
+    if (readOnly) {
+      return;
+    }
+
+    if (!canDeleteMultiSelectedSlices) {
+      return;
+    }
+
+    const selectedSliceIdSet = new Set(activeMultiSelectedSliceIds);
+
+    commitSliceTimeline(
+      normalizedSliceTimelineIds.filter(
+        (assetId) => !selectedSliceIdSet.has(assetId),
+      ),
+    );
+    setMultiSelectedSliceIds([]);
   }
 
   function handleFlipSliceTimeline() {
@@ -3159,6 +3219,7 @@ function ModalityViewerShell({
     setSliceTimelineIds([]);
     setSliceTimelineUndoStack([]);
     setSliceTimelineRedoStack([]);
+    setMultiSelectedSliceIds([]);
     setIsApplyingSliceChanges(false);
 
     if (failedCount === 0) {
@@ -3359,6 +3420,9 @@ function ModalityViewerShell({
         activeAssetId={activeFilmstripAssetId}
         allowEditing={!readOnly}
         canDeleteLeftSlices={canDeleteLeftSlices}
+        canDeleteEvenSlices={canDeleteEvenSlices}
+        canDeleteMultiSelectedSlices={canDeleteMultiSelectedSlices}
+        canDeleteOddSlices={canDeleteOddSlices}
         canDeleteRightSlices={canDeleteRightSlices}
         canDeleteSelectedSlice={canDeleteSelectedSlice}
         canFlipSliceTimeline={canFlipSliceTimeline}
@@ -3373,11 +3437,16 @@ function ModalityViewerShell({
         navigationDisabled={sliceInteractionLocked}
         pendingDeletedSliceIds={pendingDeletedSliceIds}
         pendingSliceSortUpdates={pendingSliceSortUpdates}
+        multiSelectEnabled={multiSelectEnabled}
+        multiSelectedSliceIds={activeMultiSelectedSliceIds}
         showSliceEditorPanel={showSliceEditorPanel}
         sliceEditorScrollerRef={sliceEditorScrollerRef}
         totalSliceCount={activeAssets.length}
         onApplyChanges={handleApplySliceTimelineChanges}
+        onDeleteEven={handleDeleteEvenSlices}
         onDeleteLeft={handleDeleteLeftSlicesFromSelection}
+        onDeleteMultiSelected={handleDeleteMultiSelectedSlices}
+        onDeleteOdd={handleDeleteOddSlices}
         onDeleteRight={handleDeleteRightSlicesFromSelection}
         onDeleteSelected={handleDeleteSelectedSlice}
         onFlipOrder={handleFlipSliceTimeline}
@@ -3392,6 +3461,8 @@ function ModalityViewerShell({
 
           setShowBlockView((current) => !current);
         }}
+        onToggleMultiSelect={handleToggleSliceMultiSelect}
+        onToggleMultiSelectedAsset={handleToggleMultiSelectedSlice}
         onToggleSliceEditorPanel={() => {
           if (sliceInteractionLocked) {
             return;
@@ -3414,7 +3485,7 @@ function ModalityViewerShell({
 
       {showControlPanel ? (
         <ModalityViewerRightPanel
-          activeWeighting={activeViewerWeightingValue}
+          activeWeighting={displayedWeighting}
           annotationForm={annotationForm}
           busy={busy}
           canvasMode={canvasMode}

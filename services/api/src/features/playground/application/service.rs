@@ -338,7 +338,6 @@ impl PlaygroundService {
         let family_id = normalize_optional_uuid(input.family_id, "Modality family id is invalid")?;
         let requested_name = normalize_required_name(&input.name, "Modality name is required")?;
         let requested_modality_type = normalize_modality_type(&input.modality_type)?;
-        let weighting_code = normalize_weighting_code(input.weighting_code)?;
         let cover_image_url = normalize_optional_text(input.cover_image_url);
         let source_kind = normalize_source_kind(input.source_kind)?;
         let source_label = normalize_optional_text(input.source_label);
@@ -360,6 +359,10 @@ impl PlaygroundService {
             )
             .await?;
         let slug = self.allocate_modality_slug(zone_id, &family.name).await?;
+        let weighting_code = normalize_weighting_code_for_modality_type(
+            &family.modality_type,
+            input.weighting_code,
+        )?;
 
         let modality = self
             .repo
@@ -407,7 +410,6 @@ impl PlaygroundService {
         let family_id = normalize_optional_uuid(input.family_id, "Modality family id is invalid")?;
         let requested_name = normalize_required_name(&input.name, "Modality name is required")?;
         let requested_modality_type = normalize_modality_type(&input.modality_type)?;
-        let weighting_code = normalize_weighting_code(input.weighting_code)?;
         let source_kind = normalize_source_kind(Some(input.source_kind.clone()))?;
 
         if source_kind == "manual" {
@@ -437,6 +439,10 @@ impl PlaygroundService {
             )
             .await?;
         let slug = self.allocate_modality_slug(zone_id, &family.name).await?;
+        let weighting_code = normalize_weighting_code_for_modality_type(
+            &family.modality_type,
+            input.weighting_code,
+        )?;
 
         let modality = self
             .repo
@@ -768,7 +774,8 @@ impl PlaygroundService {
 
         let name = normalize_required_name(&input.name, "Modality name is required")?;
         let modality_type = normalize_modality_type(&input.modality_type)?;
-        let weighting_code = normalize_weighting_code(input.weighting_code)?;
+        let weighting_code =
+            normalize_weighting_code_for_modality_type(&modality_type, input.weighting_code)?;
         let cover_image_url = normalize_optional_text(input.cover_image_url);
         let source_kind = normalize_source_kind(input.source_kind)?;
         let source_label = normalize_optional_text(input.source_label);
@@ -903,7 +910,8 @@ impl PlaygroundService {
         for variant in input.variants {
             let modality_id = Uuid::parse_str(&variant.modality_id)
                 .map_err(|_| AppError::bad_request("Variant modality id is invalid"))?;
-            let weighting_code = normalize_weighting_code(variant.weighting_code)?;
+            let weighting_code =
+                normalize_weighting_code_for_modality_type(&modality_type, variant.weighting_code)?;
             variant_weightings.insert(modality_id, weighting_code);
         }
 
@@ -1011,12 +1019,18 @@ impl PlaygroundService {
         user_id: &str,
         input: CreateZoneModalityAssetInput,
     ) -> Result<ZoneModalityAsset, AppError> {
-        self.ensure_modality_exists(account_id, zone_id, modality_id)
-            .await?;
+        let modality = self
+            .repo
+            .get_zone_modality_detail(&self.pool, account_id, zone_id, modality_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
 
         let label = normalize_required_name(&input.label, "Asset label is required")?;
         let asset_kind = normalize_asset_kind(input.asset_kind)?;
-        let weighting_code = normalize_weighting_code(input.weighting_code)?;
+        let weighting_code = normalize_weighting_code_for_modality_type(
+            &modality.modality_type,
+            input.weighting_code,
+        )?;
         let image_url = normalize_required_image_url(&input.image_url)?;
         let thumbnail_url = normalize_optional_text(input.thumbnail_url);
         let sort_order = normalize_sort_order(input.sort_order)?;
@@ -1048,12 +1062,18 @@ impl PlaygroundService {
         user_id: &str,
         input: UpdateZoneModalityAssetInput,
     ) -> Result<ZoneModalityAsset, AppError> {
-        self.ensure_modality_exists(account_id, zone_id, modality_id)
-            .await?;
+        let modality = self
+            .repo
+            .get_zone_modality_detail(&self.pool, account_id, zone_id, modality_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
 
         let label = normalize_required_name(&input.label, "Asset label is required")?;
         let asset_kind = normalize_asset_kind(input.asset_kind)?;
-        let weighting_code = normalize_weighting_code(input.weighting_code)?;
+        let weighting_code = normalize_weighting_code_for_modality_type(
+            &modality.modality_type,
+            input.weighting_code,
+        )?;
         let image_url = normalize_required_image_url(&input.image_url)?;
         let thumbnail_url = normalize_optional_text(input.thumbnail_url);
         let sort_order = normalize_sort_order(input.sort_order)?;
@@ -2381,6 +2401,7 @@ impl PlaygroundService {
             SET
                 name = $2,
                 modality_type = $3,
+                weighting_code = CASE WHEN $3 = 'mri' THEN weighting_code ELSE NULL END,
                 cover_image_url = $4,
                 notes = $5,
                 updated_by_user_id = $6,
@@ -2641,8 +2662,8 @@ fn normalize_modality_type(value: &str) -> Result<String, AppError> {
     let normalized = value.trim().to_ascii_lowercase();
 
     match normalized.as_str() {
-        "mri" | "ct" | "mra" | "mrv" | "angiography" | "cbct" | "illustration" | "photography"
-        | "endoscopy" | "other" => Ok(normalized),
+        "mri" | "ct" | "pet" | "ultrasound" | "xray" | "mra" | "mrv" | "angiography" | "cbct"
+        | "illustration" | "photography" | "endoscopy" | "other" => Ok(normalized),
         _ => Err(AppError::bad_request("Modality type is invalid")),
     }
 }
@@ -2698,10 +2719,23 @@ fn normalize_weighting_code(value: Option<String>) -> Result<Option<String>, App
 
     match normalized.as_deref() {
         None => Ok(None),
-        Some("t1" | "t1_gado" | "t2" | "t2_star" | "flair" | "adc" | "dwi" | "other") => {
+        Some("t1" | "t1_gado" | "t2" | "t2_star" | "pd" | "flair" | "adc" | "dwi" | "other") => {
             Ok(normalized)
         }
         Some(_) => Err(AppError::bad_request("Weighting code is invalid")),
+    }
+}
+
+fn normalize_weighting_code_for_modality_type(
+    modality_type: &str,
+    value: Option<String>,
+) -> Result<Option<String>, AppError> {
+    let weighting_code = normalize_weighting_code(value)?;
+
+    if modality_type == "mri" {
+        Ok(weighting_code)
+    } else {
+        Ok(None)
     }
 }
 

@@ -129,7 +129,9 @@ export function ReferenceCard({
 }) {
   const imageFrameRef = useRef<HTMLDivElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const labels = ["SAGITTAL", "CORONAL", "3D"];
+  const referenceLabel = asset.label.trim() || `Ref ${index + 1}`;
+  const imageWidth = asset.width && asset.width > 0 ? asset.width : 400;
+  const imageHeight = asset.height && asset.height > 0 ? asset.height : 400;
   const calibration = useMemo(
     () => parseCrossReferenceCalibration(asset.notes),
     [asset.notes],
@@ -184,11 +186,11 @@ export function ReferenceCard({
   }, [disabled, isDragging, updateProgressFromClientY]);
 
   return (
-    <div>
+    <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
       <div className="grid grid-cols-1 items-center gap-2 px-1 xl:grid-cols-[4.5rem_minmax(0,1fr)_4.5rem] xl:px-4">
-        <span aria-hidden="true" />
+        <span aria-hidden="true" className="hidden xl:block" />
         <div className="text-center text-xs font-semibold uppercase tracking-[0.22em] text-indigo-300">
-          {labels[index] ?? `Ref ${index + 1}`}
+          {referenceLabel}
         </div>
         {allowEditing ? (
           <div className="flex items-center gap-1">
@@ -232,11 +234,11 @@ export function ReferenceCard({
           </div>
         ) : null}
       </div>
-      <div className="p-1 pt-2 xl:p-4 xl:pt-2">
+      <div className="flex min-h-0 items-center justify-center p-1 pt-2 xl:p-4 xl:pt-2">
         <div
           ref={imageFrameRef}
           className={cn(
-            "relative overflow-hidden",
+            "relative inline-flex max-h-full max-w-full overflow-hidden",
             disabled ? "cursor-not-allowed opacity-70" : "cursor-ns-resize",
           )}
           onPointerDown={(event) => {
@@ -251,14 +253,14 @@ export function ReferenceCard({
         >
           <Image
             alt={asset.label}
-            className="h-28 w-full select-none object-cover xl:h-96"
+            className="h-auto max-h-full w-auto max-w-full select-none object-contain"
             decoding="async"
             draggable={false}
             fetchPriority="low"
             loading="lazy"
             src={asset.thumbnailUrl || asset.imageUrl}
-            width={400}
-            height={400}
+            width={imageWidth}
+            height={imageHeight}
           />
           <div
             className="pointer-events-none absolute inset-x-0 z-10 h-0.5 -translate-y-1/2 bg-indigo-500 shadow-[0_0_0_1px_rgba(0,0,0,0.45),0_0_10px_rgba(56,189,248,0.55)]"
@@ -351,7 +353,7 @@ export function ReferenceCalibrationEditor({
       >
         <Image
           alt="Cross reference calibration"
-          className="h-full w-full select-none object-cover"
+          className="h-full w-full select-none object-contain"
           draggable={false}
           src={imageUrl}
           width={400}
@@ -406,7 +408,7 @@ export function StructureDrawer({
   );
 
   return (
-    <div className="max-h-[calc(100vh-8rem)] overflow-y-auto px-2 pb-8">
+    <div className="px-2 pb-4 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto xl:pb-8">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-2xl font-semibold">

@@ -36,6 +36,7 @@ import type {
   ZoneModalityFamilyListResponse,
 } from "@/lib/playground/types";
 import {
+  isMriModalityType,
   MODALITY_TYPE_OPTIONS,
   MODALITY_WEIGHTING_OPTIONS,
   type ModalityWeightingSelectValue,
@@ -620,6 +621,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     setCreateDetectedUpload(null);
     if (!preserveModalityType) {
       setCreateModalityTypeOverride("other");
+      setCreateWeightingCode("");
     }
     setSelectedSourceLabel(null);
     setSelectedSourceFiles([]);
@@ -669,6 +671,14 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     });
   }
 
+  function handleCreateModalityTypeChange(value: ModalityType) {
+    setCreateModalityTypeOverride(value);
+
+    if (!isMriModalityType(value)) {
+      setCreateWeightingCode("");
+    }
+  }
+
   function selectModality(family: ZoneModalityFamily) {
     const nextActiveVariantId = family.variants.some(
       (variant) => variant.id === resolvedActiveModalityId,
@@ -707,13 +717,13 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       const detectedUpload = await analyzeModalityUploadFiles(files);
       setCreateDetectedUpload(detectedUpload);
       if (createContext.kind === "new") {
-        setCreateModalityTypeOverride(detectedUpload.detectedModalityType);
+        handleCreateModalityTypeChange(detectedUpload.detectedModalityType);
       }
       setShowReadyPreview(true);
     } catch (error) {
       setCreateDetectedUpload(null);
       if (createContext.kind === "new") {
-        setCreateModalityTypeOverride("other");
+        handleCreateModalityTypeChange("other");
       }
       const message =
         error instanceof ModalityUploadValidationError
@@ -796,7 +806,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
         formData.append("familyId", createContext.familyId);
       }
       formData.append("modalityType", createModalityTypeOverride);
-      if (createWeightingCode) {
+      if (isMriModalityType(createModalityTypeOverride) && createWeightingCode) {
         formData.append("weightingCode", createWeightingCode);
       }
       formData.append("thumbnailUrl", createThumbnailUrl.trim());
@@ -903,13 +913,14 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   ) {
     const nextName = input.name.trim();
     const nextThumbnailUrl = input.thumbnailUrl.trim() || null;
+    const supportsWeighting = isMriModalityType(input.modalityType);
     const hasChanges =
       nextName !== family.name ||
       input.modalityType !== family.modalityType ||
       nextThumbnailUrl !== (family.thumbnailUrl ?? null) ||
       family.variants.some(
         (variant) =>
-          (input.weightingByVariantId[variant.id] || "") !==
+          (supportsWeighting ? input.weightingByVariantId[variant.id] || "" : "") !==
           (variant.weightingCode ?? ""),
       );
 
@@ -924,7 +935,9 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       thumbnailUrl: nextThumbnailUrl,
       variants: family.variants.map((variant) => ({
         modalityId: variant.id,
-        weightingCode: input.weightingByVariantId[variant.id] || null,
+        weightingCode: supportsWeighting
+          ? input.weightingByVariantId[variant.id] || null
+          : null,
       })),
     };
 
@@ -1219,24 +1232,26 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                     options={MODALITY_TYPE_OPTIONS}
                     value={createModalityTypeOverride}
                     disabled={createContext.kind === "variant"}
-                    onValueChange={setCreateModalityTypeOverride}
+                    onValueChange={handleCreateModalityTypeChange}
                   />
                 </Field>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-                <Field>
-                  <FieldLabel htmlFor={`modality-weighting-${zoneId}`}>
+              {isMriModalityType(createModalityTypeOverride) ? (
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                  <Field>
+                    <FieldLabel htmlFor={`modality-weighting-${zoneId}`}>
                       Signal Mode
                     </FieldLabel>
-                  <PlaygroundSelect
-                    id={`modality-weighting-${zoneId}`}
-                    options={MODALITY_WEIGHTING_OPTIONS}
-                    value={createWeightingCode}
-                    onValueChange={setCreateWeightingCode}
-                  />
-                </Field>
-              </div>
+                    <PlaygroundSelect
+                      id={`modality-weighting-${zoneId}`}
+                      options={MODALITY_WEIGHTING_OPTIONS}
+                      value={createWeightingCode}
+                      onValueChange={setCreateWeightingCode}
+                    />
+                  </Field>
+                </div>
+              ) : null}
 
               <Field>
                 <FieldLabel>Thumbnail image</FieldLabel>
@@ -1347,6 +1362,7 @@ function ZoneModalityEditorCard({
   const [weightingByVariantId, setWeightingByVariantId] = useState<
     Record<string, ModalityWeightingSelectValue>
   >(() => buildFamilyWeightingState(family));
+  const supportsWeighting = isMriModalityType(modalityType);
   const activeVariant =
     family.variants.find((variant) => variant.id === activeVariantId) ??
     family.variants[0] ??
@@ -1364,9 +1380,13 @@ function ZoneModalityEditorCard({
     thumbnailUrl.trim() !== (family.thumbnailUrl ?? "") ||
     family.variants.some(
       (variant) =>
-        (weightingByVariantId[variant.id] ?? "") !==
+        (supportsWeighting ? weightingByVariantId[variant.id] ?? "" : "") !==
         (variant.weightingCode ?? ""),
     );
+
+  function handleModalityTypeChange(value: ModalityType) {
+    setModalityType(value);
+  }
 
   async function handleSave() {
     const nextName = name.trim();
@@ -1422,7 +1442,7 @@ function ZoneModalityEditorCard({
                   id={`edit-modality-type-${family.id}`}
                   options={MODALITY_TYPE_OPTIONS}
                   value={modalityType}
-                  onValueChange={setModalityType}
+                  onValueChange={handleModalityTypeChange}
                 />
               </Field>
             </div>
@@ -1480,7 +1500,7 @@ function ZoneModalityEditorCard({
             <TableRow>
               <TableHead>SN</TableHead>
               <TableHead>Modality Name</TableHead>
-                  <TableHead>Signal Mode</TableHead>
+              {supportsWeighting ? <TableHead>Signal Mode</TableHead> : null}
               <TableHead>Action</TableHead>
             </TableRow>
           </TableHeader>
@@ -1507,20 +1527,22 @@ function ZoneModalityEditorCard({
                   <TableCell className="font-medium text-foreground truncate w-[10ch]">
                     {name}
                   </TableCell>
-                  <TableCell className="min-w-44 text-muted-foreground">
-                    <PlaygroundSelect
-                      id={`edit-modality-weighting-${variant.id}`}
-                      options={MODALITY_WEIGHTING_OPTIONS}
-                      value={weightingByVariantId[variant.id] ?? ""}
-                      onValueChange={(value) => {
-                        onActiveVariantChange(variant.id);
-                        setWeightingByVariantId((current) => ({
-                          ...current,
-                          [variant.id]: value,
-                        }));
-                      }}
-                    />
-                  </TableCell>
+                  {supportsWeighting ? (
+                    <TableCell className="min-w-44 text-muted-foreground">
+                      <PlaygroundSelect
+                        id={`edit-modality-weighting-${variant.id}`}
+                        options={MODALITY_WEIGHTING_OPTIONS}
+                        value={weightingByVariantId[variant.id] ?? ""}
+                        onValueChange={(value) => {
+                          onActiveVariantChange(variant.id);
+                          setWeightingByVariantId((current) => ({
+                            ...current,
+                            [variant.id]: value,
+                          }));
+                        }}
+                      />
+                    </TableCell>
+                  ) : null}
                   <TableCell className="capitalize text-muted-foreground">
                     <span className="flex gap-2">
                       {variantViewerReady ? (

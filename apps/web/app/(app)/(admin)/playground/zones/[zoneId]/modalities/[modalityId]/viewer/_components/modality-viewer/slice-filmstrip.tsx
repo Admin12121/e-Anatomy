@@ -3,8 +3,11 @@ import {
   ArrowRight,
   LayoutGrid,
   LoaderCircleIcon,
+  MousePointerClick,
   Redo2,
+  TicketMinus,
   Trash,
+  Tickets,
   Undo2,
 } from "lucide-react";
 import NextImage from "next/image";
@@ -21,6 +24,7 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import type {
   ZoneModalityAsset,
@@ -159,6 +163,9 @@ type SliceFilmstripProps = {
   activeAssetId: string | null;
   allowEditing: boolean;
   canDeleteLeftSlices: boolean;
+  canDeleteEvenSlices: boolean;
+  canDeleteMultiSelectedSlices: boolean;
+  canDeleteOddSlices: boolean;
   canDeleteRightSlices: boolean;
   canDeleteSelectedSlice: boolean;
   canFlipSliceTimeline: boolean;
@@ -176,11 +183,16 @@ type SliceFilmstripProps = {
     asset: ZoneModalityAsset;
     nextSortOrder: number;
   }>;
+  multiSelectEnabled: boolean;
+  multiSelectedSliceIds: string[];
   showSliceEditorPanel: boolean;
   sliceEditorScrollerRef: MutableRefObject<HTMLDivElement | null>;
   totalSliceCount: number;
+  onDeleteEven: () => void;
   onApplyChanges: () => void;
   onDeleteLeft: () => void;
+  onDeleteMultiSelected: () => void;
+  onDeleteOdd: () => void;
   onDeleteRight: () => void;
   onDeleteSelected: () => void;
   onFlipOrder: () => void;
@@ -188,6 +200,8 @@ type SliceFilmstripProps = {
   onPrevious: () => void;
   onSelectAsset: (assetIndex: number) => void;
   onToggleBlockView: () => void;
+  onToggleMultiSelect: () => void;
+  onToggleMultiSelectedAsset: (assetId: string) => void;
   onToggleSliceEditorPanel: () => void;
   onUndo: () => void;
   onWheel: (event: WheelEvent<HTMLDivElement>) => void;
@@ -198,6 +212,9 @@ export function SliceFilmstrip({
   activeAssetId,
   allowEditing,
   canDeleteLeftSlices,
+  canDeleteEvenSlices,
+  canDeleteMultiSelectedSlices,
+  canDeleteOddSlices,
   canDeleteRightSlices,
   canDeleteSelectedSlice,
   canFlipSliceTimeline,
@@ -212,11 +229,16 @@ export function SliceFilmstrip({
   navigationDisabled,
   pendingDeletedSliceIds,
   pendingSliceSortUpdates,
+  multiSelectEnabled,
+  multiSelectedSliceIds,
   showSliceEditorPanel,
   sliceEditorScrollerRef,
   totalSliceCount,
+  onDeleteEven,
   onApplyChanges,
   onDeleteLeft,
+  onDeleteMultiSelected,
+  onDeleteOdd,
   onDeleteRight,
   onDeleteSelected,
   onFlipOrder,
@@ -224,6 +246,8 @@ export function SliceFilmstrip({
   onPrevious,
   onSelectAsset,
   onToggleBlockView,
+  onToggleMultiSelect,
+  onToggleMultiSelectedAsset,
   onToggleSliceEditorPanel,
   onUndo,
   onWheel,
@@ -238,6 +262,10 @@ export function SliceFilmstrip({
     scrollLeft: 0,
     width: 0,
   });
+  const multiSelectedSliceIdSet = useMemo(
+    () => new Set(multiSelectedSliceIds),
+    [multiSelectedSliceIds],
+  );
 
   useEffect(() => {
     onSelectAssetRef.current = onSelectAsset;
@@ -254,6 +282,18 @@ export function SliceFilmstrip({
       onSelectAssetRef.current(assetIndex);
     },
     [],
+  );
+  const handleToggleMultiSelectedAsset = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      const assetId = event.currentTarget.dataset.assetId;
+
+      if (!assetId) {
+        return;
+      }
+
+      onToggleMultiSelectedAsset(assetId);
+    },
+    [onToggleMultiSelectedAsset],
   );
 
   const activeSliceIndex = useMemo(
@@ -438,6 +478,7 @@ export function SliceFilmstrip({
         thumbnailSrc,
       } = sliceItem;
       const isActive = assetId === activeAssetId;
+      const isMultiSelected = multiSelectedSliceIdSet.has(assetId);
       const thumbnailSizePx =
         variant === "compact" ? COMPACT_ITEM_WIDTH_PX : EDITOR_ITEM_WIDTH_PX;
       const atlasThumbnailStyle =
@@ -445,9 +486,9 @@ export function SliceFilmstrip({
           ? buildAtlasThumbnailStyle(atlasPage, atlasFrame, thumbnailSizePx)
           : null;
 
-      return (
+      const button = (
         <button
-          key={variant === "compact" ? assetId : `editor-${assetId}`}
+          key={variant === "compact" ? assetId : undefined}
           aria-label={asset.label}
           data-asset-id={assetId}
           data-asset-index={assetIndex}
@@ -455,18 +496,24 @@ export function SliceFilmstrip({
           className={cn(
             variant === "compact"
               ? "group relative w-9 shrink-0 overflow-hidden rounded-sm border border-transparent text-left transition"
-              : "relative w-32 shrink-0 overflow-hidden rounded-md border text-left transition",
+              : "relative w-full overflow-hidden rounded-md border text-left transition",
             variant === "compact"
               ? isActive
                 ? "bg-indigo-500/20 opacity-100"
                 : "bg-black/20 opacity-60 hover:bg-white/6 hover:opacity-100"
               : isActive
                 ? "border-indigo-600"
-                : "hover:border-white/45",
+                : isMultiSelected
+                  ? "border-primary"
+                  : "hover:border-white/45",
             navigationDisabled && "cursor-not-allowed opacity-60",
           )}
           disabled={navigationDisabled}
-          onClick={handleSelectAsset}
+          onClick={
+            variant === "editor" && multiSelectEnabled
+              ? handleToggleMultiSelectedAsset
+              : handleSelectAsset
+          }
         >
           <div
             className={cn(
@@ -495,8 +542,40 @@ export function SliceFilmstrip({
           ) : null}
         </button>
       );
+
+      if (variant === "compact") {
+        return button;
+      }
+
+      return (
+        <div
+          key={`editor-${assetId}`}
+          className="relative w-32 shrink-0 overflow-hidden rounded-md"
+        >
+          {button}
+          {multiSelectEnabled ? (
+            <Checkbox
+              aria-label={`Select ${asset.label}`}
+              checked={isMultiSelected}
+              className="absolute right-1.5 top-1.5 z-10 size-4 cursor-pointer"
+              data-asset-id={assetId}
+              disabled={navigationDisabled}
+              onCheckedChange={() => onToggleMultiSelectedAsset(assetId)}
+              onClick={(event) => event.stopPropagation()}
+            />
+          ) : null}
+        </div>
+      );
     },
-    [activeAssetId, handleSelectAsset, navigationDisabled],
+    [
+      activeAssetId,
+      handleSelectAsset,
+      handleToggleMultiSelectedAsset,
+      multiSelectEnabled,
+      multiSelectedSliceIdSet,
+      navigationDisabled,
+      onToggleMultiSelectedAsset,
+    ],
   );
 
   const filmstripButtons = useMemo(
@@ -607,6 +686,32 @@ export function SliceFilmstrip({
               <Button
                 type="button"
                 size="sm"
+                variant={multiSelectEnabled ? "default" : "ghost"}
+                title={
+                  multiSelectEnabled
+                    ? "Disable multi-select"
+                    : "Enable multi-select"
+                }
+                disabled={navigationDisabled}
+                onClick={onToggleMultiSelect}
+              >
+                <MousePointerClick className="size-4" />
+              </Button>
+              {multiSelectedSliceIds.length > 0 ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  title={`Delete ${multiSelectedSliceIds.length} selected slices`}
+                  disabled={navigationDisabled || !canDeleteMultiSelectedSlices}
+                  onClick={onDeleteMultiSelected}
+                >
+                  <Trash className="size-4" />
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
                 variant="ghost"
                 title="Undo"
                 disabled={navigationDisabled || !canUndoSliceTimeline}
@@ -643,6 +748,26 @@ export function SliceFilmstrip({
                 onClick={onDeleteRight}
               >
                 <DeleteAllRightIcon className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                title="Delete odd-numbered slices"
+                disabled={navigationDisabled || !canDeleteOddSlices}
+                onClick={onDeleteOdd}
+              >
+                <TicketMinus className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                title="Delete even-numbered slices"
+                disabled={navigationDisabled || !canDeleteEvenSlices}
+                onClick={onDeleteEven}
+              >
+                <Tickets className="size-4" />
               </Button>
               <Button
                 type="button"

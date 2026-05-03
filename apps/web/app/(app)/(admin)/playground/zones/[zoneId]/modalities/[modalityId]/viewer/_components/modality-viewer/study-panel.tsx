@@ -3,6 +3,13 @@ import { ArrowLeft, LoaderCircleIcon, Plus, SearchIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ImageUploadDropzone } from "@/components/ui/image-upload-dropzone";
 import { Input } from "@/components/ui/input";
 import type {
@@ -21,7 +28,8 @@ import {
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { uploadThumbnail } from "@/lib/playground/thumbnail-upload";
-import { Frame, FrameHeader, FramePanel } from "@/components/ui/frame";
+
+const MAX_REFERENCE_ASSET_COUNT = 3;
 
 type StudySearchHit = {
   asset: ZoneModalityAsset | null;
@@ -84,8 +92,7 @@ export function StudyPanel({
   const [referenceCalibration, setReferenceCalibration] = useState(() =>
     parseCrossReferenceCalibration(null),
   );
-  const [showCrossReferencesPanel, setShowCrossReferencesPanel] =
-    useState(true);
+  const [referenceDialogOpen, setReferenceDialogOpen] = useState(false);
   const [isUploadingReferenceImage, setIsUploadingReferenceImage] =
     useState(false);
   const showStructureDrawer = Boolean(selectedStructure);
@@ -94,6 +101,13 @@ export function StudyPanel({
     ? "Edit Cross Reference"
     : "Cross References";
   const referenceSaveLabel = isEditingReferenceAsset ? "Update" : "Save";
+  const visibleReferenceAssets = referenceAssets.slice(
+    0,
+    MAX_REFERENCE_ASSET_COUNT,
+  );
+  const referenceLimitReached =
+    !isEditingReferenceAsset &&
+    referenceAssets.length >= MAX_REFERENCE_ASSET_COUNT;
 
   const handleReferenceImageSelection = (file: File) => {
     setIsUploadingReferenceImage(true);
@@ -113,14 +127,42 @@ export function StudyPanel({
     setReferenceCalibration(parseCrossReferenceCalibration(null));
   };
 
+  const handleReferenceDialogOpenChange = (open: boolean) => {
+    setReferenceDialogOpen(open);
+
+    if (!open) {
+      resetReferenceForm();
+    }
+  };
+
+  const handleOpenReferenceDialog = () => {
+    if (showStructureDrawer) {
+      onCloseStructure();
+    }
+
+    if (referenceLimitReached) {
+      toast.error("Only 3 cross references are allowed.");
+      return;
+    }
+
+    resetReferenceForm();
+    setReferenceDialogOpen(true);
+  };
+
   const handleEditReferenceAsset = (asset: ZoneModalityAsset) => {
     setEditingReferenceAssetId(asset.id);
     setReferenceTitle(asset.label);
     setReferenceImageUrl(asset.thumbnailUrl || asset.imageUrl);
     setReferenceCalibration(parseCrossReferenceCalibration(asset.notes));
+    setReferenceDialogOpen(true);
   };
 
   const handleSaveReferenceAsset = async () => {
+    if (referenceLimitReached) {
+      toast.error("Only 3 cross references are allowed.");
+      return;
+    }
+
     const input = {
       imageUrl: referenceImageUrl,
       notes: serializeCrossReferenceCalibration(referenceCalibration),
@@ -135,6 +177,7 @@ export function StudyPanel({
     }
 
     resetReferenceForm();
+    setReferenceDialogOpen(false);
   };
 
   const handleDeleteReferenceAsset = async (asset: ZoneModalityAsset) => {
@@ -142,31 +185,22 @@ export function StudyPanel({
 
     if (deleted && editingReferenceAssetId === asset.id) {
       resetReferenceForm();
+      setReferenceDialogOpen(false);
     }
 
     return deleted;
   };
 
-  const handleToggleCrossReferences = () => {
-    if (showStructureDrawer) {
-      onCloseStructure();
-      setShowCrossReferencesPanel(true);
-      return;
-    }
-
-    setShowCrossReferencesPanel((current) => !current);
-  };
-
   return (
     <aside
       className={cn(
-        "h-full min-h-0 space-y-4 overflow-y-auto p-2",
+        "h-full min-h-0 p-2",
         showStructureDrawer
-          ? "max-xl:fixed max-xl:inset-x-0 max-xl:bottom-14 max-xl:top-0 max-xl:z-50 max-xl:bg-background max-xl:p-4"
-          : "max-xl:border-r max-xl:border-border/70 max-xl:bg-background/95 max-xl:p-1",
+          ? "space-y-4 overflow-y-auto max-xl:fixed max-xl:inset-x-0 max-xl:bottom-14 max-xl:top-0 max-xl:z-50 max-xl:bg-background max-xl:p-4"
+          : "flex flex-col gap-4 overflow-hidden max-xl:border-r max-xl:border-border/70 max-xl:bg-background/95 max-xl:p-1",
       )}
     >
-      <div className={cn("space-y-2", showStructureDrawer && "max-xl:hidden")}>
+      <div className={cn("shrink-0 space-y-2", showStructureDrawer && "max-xl:hidden")}>
         <span className={cn(readOnly ? "flex items-center flex-row gap-2" : "flex items-center gap-2")}>
           {readOnly && (
             <Link
@@ -189,14 +223,11 @@ export function StudyPanel({
           </div>
           {!readOnly && (
             <Button
-              aria-label={
-                showStructureDrawer || !showCrossReferencesPanel
-                  ? "Open cross references"
-                  : "Hide cross references"
-              }
+              aria-label="Add cross reference"
+              disabled={referenceLimitReached}
               variant="secondary"
               size="icon"
-              onClick={handleToggleCrossReferences}
+              onClick={handleOpenReferenceDialog}
             >
               <Plus className="size-5" />
             </Button>
@@ -221,71 +252,17 @@ export function StudyPanel({
         ) : null}
       </div>
 
-      {!showStructureDrawer && !readOnly && showCrossReferencesPanel ? (
-        <Frame>
-          <FrameHeader className="px-3 py-2 flex flex-row items-center justify-between">
-            <div className="text-sm font-semibold">{referenceFormTitle}</div>
-            <div className="flex items-center gap-2">
-              {isEditingReferenceAsset ? (
-                <Button
-                  disabled={referenceBusy || isUploadingReferenceImage}
-                  size="sm"
-                  type="button"
-                  variant="secondary"
-                  onClick={resetReferenceForm}
-                >
-                  Cancel
-                </Button>
-              ) : null}
-              <Button
-                disabled={
-                  referenceBusy ||
-                  isUploadingReferenceImage ||
-                  !referenceTitle.trim() ||
-                  !referenceImageUrl.trim()
-                }
-                size="sm"
-                type="button"
-                onClick={() => void handleSaveReferenceAsset()}
-              >
-                {(referenceBusy || isUploadingReferenceImage) && (
-                  <LoaderCircleIcon className="size-4 animate-spin" />
-                )}
-                {referenceSaveLabel}
-              </Button>
-            </div>
-          </FrameHeader>
-          <FramePanel className="space-y-3 p-3">
-            <Input
-              placeholder="Reference title"
-              value={referenceTitle}
-              onChange={(event) => setReferenceTitle(event.target.value)}
-            />
-            <ImageUploadDropzone
-              disabled={isUploadingReferenceImage}
-              emptyTitle="Drop cross reference image here"
-              onClear={() => {
-                setReferenceImageUrl("");
-                setReferenceCalibration(parseCrossReferenceCalibration(null));
-              }}
-              onFileAccepted={handleReferenceImageSelection}
-              previewAlt="Cross reference"
-              value={referenceImageUrl}
-            />
-            {referenceImageUrl ? (
-              <ReferenceCalibrationEditor
-                imageUrl={referenceImageUrl}
-                value={referenceCalibration}
-                onChange={setReferenceCalibration}
-              />
-            ) : null}
-          </FramePanel>
-        </Frame>
-      ) : null}
-
-      {!showStructureDrawer && referenceAssets.length > 0 ? (
-        <div className="space-y-3">
-          {referenceAssets.map((asset, index) => (
+      {!showStructureDrawer && visibleReferenceAssets.length > 0 ? (
+        <div
+          className={cn(
+            "grid h-[calc(100dvh-100px)] min-h-0 flex-1 auto-rows-min content-start gap-3 pr-1",
+            readOnly ? "overflow-hidden" : "overflow-y-auto",
+          )}
+          style={{
+            gridTemplateRows: `repeat(${visibleReferenceAssets.length}, minmax(0, 1fr))`,
+          }}
+        >
+          {visibleReferenceAssets.map((asset, index) => (
             <ReferenceCard
               key={asset.id}
               allowEditing={!readOnly}
@@ -300,6 +277,73 @@ export function StudyPanel({
             />
           ))}
         </div>
+      ) : null}
+
+      {!readOnly ? (
+        <Dialog
+          open={referenceDialogOpen}
+          onOpenChange={handleReferenceDialogOpenChange}
+        >
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-4 sm:max-w-xl">
+            <DialogHeader>
+              <DialogTitle>{referenceFormTitle}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Input
+                placeholder="Reference title"
+                value={referenceTitle}
+                onChange={(event) => setReferenceTitle(event.target.value)}
+              />
+              <ImageUploadDropzone
+                disabled={isUploadingReferenceImage}
+                dropzoneClassName="max-xl:min-h-32 max-xl:p-2"
+                emptyDescriptionClassName="max-xl:hidden"
+                emptyTitleClassName="max-xl:sr-only"
+                emptyTitle="Drop cross reference image here"
+                onClear={() => {
+                  setReferenceImageUrl("");
+                  setReferenceCalibration(parseCrossReferenceCalibration(null));
+                }}
+                onFileAccepted={handleReferenceImageSelection}
+                previewAlt="Cross reference"
+                value={referenceImageUrl}
+              />
+              {referenceImageUrl ? (
+                <ReferenceCalibrationEditor
+                  imageUrl={referenceImageUrl}
+                  value={referenceCalibration}
+                  onChange={setReferenceCalibration}
+                />
+              ) : null}
+            </div>
+            <DialogFooter className="mt-4">
+              <Button
+                disabled={referenceBusy || isUploadingReferenceImage}
+                type="button"
+                variant="secondary"
+                onClick={() => handleReferenceDialogOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  referenceBusy ||
+                  isUploadingReferenceImage ||
+                  referenceLimitReached ||
+                  !referenceTitle.trim() ||
+                  !referenceImageUrl.trim()
+                }
+                type="button"
+                onClick={() => void handleSaveReferenceAsset()}
+              >
+                {(referenceBusy || isUploadingReferenceImage) && (
+                  <LoaderCircleIcon className="size-4 animate-spin" />
+                )}
+                {referenceSaveLabel}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       ) : null}
 
       {selectedStructure ? (
