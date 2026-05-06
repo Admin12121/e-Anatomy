@@ -771,6 +771,28 @@ export function ViewerCanvas({
     };
   }, [onWheelNavigate, stageRef]);
 
+  useEffect(() => {
+    const stageElement = stageRef.current;
+
+    if (!stageElement) {
+      return;
+    }
+
+    const preventViewerTouchScroll = (event: TouchEvent) => {
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+    };
+
+    stageElement.addEventListener("touchmove", preventViewerTouchScroll, {
+      passive: false,
+    });
+
+    return () => {
+      stageElement.removeEventListener("touchmove", preventViewerTouchScroll);
+    };
+  }, [stageRef]);
+
   const commitBrushPoint = useCallback(
     (point: ViewerAnnotationPoint, force = false) => {
       const applyStrokePoint = (strokePoint: ViewerAnnotationPoint) => {
@@ -1034,6 +1056,8 @@ export function ViewerCanvas({
       return;
     }
 
+    event.preventDefault();
+
     if (mainInteractionTool === "layers") {
       if (totalSliceCount <= 1) {
         return;
@@ -1178,7 +1202,7 @@ export function ViewerCanvas({
   return (
     <div
       className={cn(
-        "relative overflow-hidden bg-black",
+        "relative overflow-hidden overscroll-none bg-black",
       )}
     >
       <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center px-6 py-4 text-sm">
@@ -1188,10 +1212,10 @@ export function ViewerCanvas({
       <div
         ref={stageRef}
         className={cn(
-          "relative flex min-h-160 h-full select-none items-center justify-center p-8",
-          isAreaPaintMode ? "touch-none" : null,
+          "relative flex h-full min-h-160 touch-none select-none items-center justify-center overscroll-none p-8",
+          isAreaPaintMode ? "cursor-crosshair" : null,
         )}
-        style={isAreaPaintMode ? { touchAction: "none" } : undefined}
+        style={{ touchAction: "none" }}
         onDoubleClick={(event) => {
           if (isAreaPaintMode) {
             event.preventDefault();
@@ -1232,10 +1256,10 @@ export function ViewerCanvas({
           <svg
             ref={overlayRef}
             className={cn(
-              "absolute inset-0 h-full w-full",
-              isAreaPaintMode ? "cursor-none touch-none" : null,
+              "absolute inset-0 h-full w-full touch-none",
+              isAreaPaintMode ? "cursor-none" : null,
             )}
-            style={isAreaPaintMode ? { touchAction: "none" } : undefined}
+            style={{ touchAction: "none" }}
             viewBox="0 0 1000 1000"
             onDoubleClick={(event) => {
               if (!isAreaPaintMode) {
