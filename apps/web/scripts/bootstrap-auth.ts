@@ -47,6 +47,16 @@ async function main() {
     })
   }
 
+  const [authUser] = await db
+    .select({ id: user.id })
+    .from(user)
+    .where(eq(user.email, email))
+    .limit(1)
+
+  if (!authUser) {
+    throw new Error(`Bootstrap auth user '${email}' was not created.`)
+  }
+
   await db
     .update(user)
     .set({
@@ -60,6 +70,23 @@ async function main() {
       status: "active",
     })
     .where(eq(user.email, email))
+
+  await sql`
+    INSERT INTO account_memberships (account_id, user_id, role_code, status, joined_at)
+    VALUES (${account.id}, ${authUser.id}, 'owner', 'active', NOW())
+    ON CONFLICT (account_id, user_id)
+    DO UPDATE SET
+      role_code = EXCLUDED.role_code,
+      status = EXCLUDED.status
+  `
+
+  await sql`
+    UPDATE accounts
+    SET owner_user_id = ${authUser.id},
+        updated_at = NOW()
+    WHERE id = ${account.id}
+      AND owner_user_id IS DISTINCT FROM ${authUser.id}
+  `
 
   console.log(`Bootstrap auth user '${email}' is ready for account '${account.slug}'.`)
 }
