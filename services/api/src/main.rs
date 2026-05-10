@@ -1,4 +1,3 @@
-mod bootstrap;
 mod features;
 mod infrastructure;
 
@@ -8,9 +7,7 @@ use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-use crate::bootstrap::seed::seed_default_admin;
 use crate::features::{
-    auth::http::routes as auth_routes,
     health::http::routes as health_routes,
     modules::http::routes as module_routes,
     playground::http::{public_routes as public_playground_routes, routes as playground_routes},
@@ -41,11 +38,9 @@ async fn main() -> Result<()> {
     run_migrations(&pool).await?;
 
     let state = AppState::new(pool, config);
-    seed_default_admin(&state).await?;
 
     let app = Router::new()
         .nest("/api/v1/health", health_routes())
-        .nest("/api/v1/auth", auth_routes())
         .nest("/api/v1/modules", module_routes())
         .nest("/api/v1/public/playground", public_playground_routes())
         .nest("/api/v1/playground", playground_routes())

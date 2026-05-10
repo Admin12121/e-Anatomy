@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
-    pub auth: AuthConfig,
     pub internal_web_api_key: String,
     pub storage: StorageConfig,
 }
@@ -19,16 +18,6 @@ pub struct ServerConfig {
 pub struct DatabaseConfig {
     pub url: String,
     pub max_connections: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthConfig {
-    pub cookie_name: String,
-    pub cookie_secure: bool,
-    pub session_ttl_hours: i64,
-    pub bootstrap_admin_email: String,
-    pub bootstrap_admin_password: String,
-    pub bootstrap_admin_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -47,14 +36,6 @@ impl AppConfig {
                 url: std::env::var("DATABASE_URL")
                     .context("DATABASE_URL must be set for the API service")?,
                 max_connections: env_or_parse("DATABASE_MAX_CONNECTIONS", 10)?,
-            },
-            auth: AuthConfig {
-                cookie_name: env_or("AUTH_COOKIE_NAME", "anatomy_session"),
-                cookie_secure: env_or_parse("AUTH_COOKIE_SECURE", false)?,
-                session_ttl_hours: env_or_parse("AUTH_SESSION_TTL_HOURS", 24 * 7)?,
-                bootstrap_admin_email: env_or("BOOTSTRAP_ADMIN_EMAIL", "admin@gmail.com"),
-                bootstrap_admin_password: env_or("BOOTSTRAP_ADMIN_PASSWORD", "admin@#12"),
-                bootstrap_admin_name: env_or("BOOTSTRAP_ADMIN_NAME", "Platform Admin"),
             },
             internal_web_api_key: env_or(
                 "INTERNAL_WEB_API_KEY",

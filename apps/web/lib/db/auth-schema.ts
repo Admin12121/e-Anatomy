@@ -14,6 +14,7 @@ export const user = pgTable("user", {
     .notNull(),
   role: text("role").default("reviewer"),
   status: text("status").default("active"),
+  lastLoginAt: timestamp("last_login_at"),
   apiAccountId: text("api_account_id"),
   apiAccountSlug: text("api_account_slug"),
   apiAccountName: text("api_account_name"),

@@ -1,5 +1,7 @@
 # Anatomy Platform Bootstrap
 
+/apps/web/public/og.webp
+
 This repository now matches the early monorepo shape from the architecture brief:
 
 - `apps/web`: Next.js 16 app with Better Auth, Drizzle table mappings, and RTK Query

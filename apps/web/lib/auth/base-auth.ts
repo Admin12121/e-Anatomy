@@ -48,6 +48,11 @@ export const baseAuthOptions = {
         required: false,
         defaultValue: "active",
       },
+      lastLoginAt: {
+        type: "date",
+        input: false,
+        required: false,
+      },
       apiAccountId: {
         type: "string",
         input: false,
