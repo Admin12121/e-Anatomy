@@ -8,7 +8,7 @@ import { authClient } from "@/lib/auth-client"
 
 export function AppShellActions() {
   const { data: session, isPending } = authClient.useSession()
-  const canAccessAdmin = session?.user.canAccessAdmin ?? false
+  const canAccessDashboard = session?.user.canAccessDashboard ?? false
 
   return (
     <div className="flex items-center gap-3">
@@ -18,7 +18,7 @@ export function AppShellActions() {
 
       {session ? (
         <>
-          {canAccessAdmin ? (
+          {canAccessDashboard ? (
             <Button asChild variant="ghost">
               <Link href="/dashboard">Dashboard</Link>
             </Button>

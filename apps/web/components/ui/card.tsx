@@ -89,6 +89,90 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+function CardFrame({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="card-frame"
+      className={cn(
+        "relative flex min-w-0 flex-col rounded-2xl border bg-card not-dark:bg-clip-padding text-card-foreground shadow-xs/5 [--clip-bottom:-1rem] [--clip-top:-1rem] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:bg-muted/72 before:shadow-[0_1px_--theme(--color-black/4%)] has-data-[slot=table-container]:overflow-x-auto has-data-[slot=table-container]:overflow-y-hidden *:data-[slot=card]:-m-px *:data-[slot=table-container]:-m-px *:data-[slot=table-container]:w-[calc(100%+2px)]",
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
+function CardFrameHeader({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="card-frame-header"
+      className={cn(
+        "relative grid auto-rows-min grid-rows-[auto_auto] flex-col items-start gap-x-4 px-6 py-4 has-data-[slot=card-frame-action]:grid-cols-[1fr_auto]",
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
+function CardFrameTitle({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="card-frame-title"
+      className={cn("self-center text-sm font-semibold", className)}
+      {...props}
+    />
+  )
+}
+
+function CardFrameDescription({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="card-frame-description"
+      className={cn("self-center text-sm text-muted-foreground", className)}
+      {...props}
+    />
+  )
+}
+
+function CardFrameAction({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="card-frame-action"
+      className={cn(
+        "col-start-2 inline-flex self-center justify-self-end nth-3:row-span-2 nth-3:row-start-1",
+        className,
+      )}
+      {...props}
+    />
+  )
+}
+
+function CardFrameFooter({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="card-frame-footer"
+      className={cn("px-6 py-4", className)}
+      {...props}
+    />
+  )
+}
+
 export {
   Card,
   CardHeader,
@@ -97,4 +181,10 @@ export {
   CardAction,
   CardDescription,
   CardContent,
+  CardFrame,
+  CardFrameAction,
+  CardFrameDescription,
+  CardFrameFooter,
+  CardFrameHeader,
+  CardFrameTitle,
 }

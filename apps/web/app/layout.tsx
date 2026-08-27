@@ -13,6 +13,7 @@ import {
 
 import "./globals.css";
 import { cn } from "@/lib/utils";
+import { AnalyticsTracker } from "@/components/analytics/analytics-tracker";
 
 const headingFont = Oxanium({
   subsets: ["latin"],
@@ -134,6 +135,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <TooltipProvider>
+            <AnalyticsTracker />
             {children}
             <Toaster />
           </TooltipProvider>

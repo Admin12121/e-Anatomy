@@ -1,0 +1,69 @@
+name: anatomy-dump-migration
+
+services:
+  postgres-dump:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: voxel_anatomy_migration_test
+      POSTGRES_USER: anatomy
+      POSTGRES_PASSWORD: anatomy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anatomy -d voxel_anatomy_migration_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - dump_postgres_data:/var/lib/postgresql/data
+      - ./services/api/dump:/dump:ro
+      - ./infra/docker/postgres-restore-dump.sh:/docker-entrypoint-initdb.d/001-restore-dump.sh:ro
+
+  api-dump-migration:
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    working_dir: /workspace/services/api
+    command: cargo run
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      DATABASE_URL: postgres://anatomy:anatomy@postgres-dump:5432/voxel_anatomy_migration_test
+      DATABASE_MAX_CONNECTIONS: 5
+      REDIS_URL: redis://redis-dump:6379
+      RUST_LOG: info,sqlx=warn,dicom_object::meta=error
+      INTERNAL_WEB_API_KEY: anatomy-internal-web-key-dump-test
+      STORAGE_ROOT_DIR: /workspace/services/api/data
+    depends_on:
+      postgres-dump:
+        condition: service_healthy
+      redis-dump:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/v1/health/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ./services/api:/workspace/services/api
+      - dump_cargo_registry:/usr/local/cargo/registry
+      - dump_cargo_git:/usr/local/cargo/git
+      - dump_api_target:/workspace/services/api/target
+
+  redis-dump:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  dump_postgres_data:
+  dump_cargo_registry:
+  dump_cargo_git:
+  dump_api_target:

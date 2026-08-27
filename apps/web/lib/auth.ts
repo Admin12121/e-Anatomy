@@ -7,7 +7,12 @@ import {
 } from "better-auth/plugins"
 import { nextCookies } from "better-auth/next-js"
 
-import { hasAdminAccess } from "@/lib/auth/access"
+import {
+  getRoleCapabilities,
+  hasAdminAccess,
+  hasDashboardAccess,
+  normalizeRoleCode,
+} from "@/lib/auth/access"
 import { baseAuthOptions } from "@/lib/auth/base-auth"
 import {
   AUTH_APP_NAME,
@@ -79,13 +84,21 @@ export const auth = betterAuth({
     ...(authOptions.plugins ?? []),
     customSession(
       async ({ user, session }) => {
+        const roleCode = normalizeRoleCode(user.role)
+
         return {
           user: {
             ...user,
             canAccessAdmin: hasAdminAccess({
               apiAccountId: user.apiAccountId,
-              roleCode: user.role,
+              roleCode,
             }),
+            canAccessDashboard: hasDashboardAccess({
+              apiAccountId: user.apiAccountId,
+              roleCode,
+            }),
+            capabilities: getRoleCapabilities(roleCode),
+            role: roleCode,
           },
           session,
         }

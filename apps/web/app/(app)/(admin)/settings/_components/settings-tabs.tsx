@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { LockKeyhole, UserRound } from "lucide-react"
+import { LockKeyhole, MonitorSmartphone, UserRound } from "lucide-react"
 
 import {
   Tabs,
@@ -13,6 +13,7 @@ import type { SessionUser } from "@/lib/auth/types"
 
 import { ProfileSettingsPanel, type ConnectedAccount } from "./profile-settings-panel"
 import { SecuritySettingsPanel } from "./security-settings-panel"
+import { SessionsSettingsPanel } from "./sessions-settings-panel"
 
 type SettingsTabsProps = {
   connectedAccounts: ConnectedAccount[]
@@ -58,6 +59,10 @@ export function SettingsTabs({
             <LockKeyhole />
             Security
           </TabsTrigger>
+          <TabsTrigger value="sessions" className="rounded-xl">
+            <MonitorSmartphone />
+            Sessions
+          </TabsTrigger>
         </TabsList>
       </div>
 
@@ -80,6 +85,18 @@ export function SettingsTabs({
             </p>
           </div>
           <SecuritySettingsPanel />
+        </TabsContent>
+        <TabsContent value="sessions" className="min-w-0">
+          <div className="space-y-1 pb-6">
+            <h2 className="font-heading text-2xl font-semibold tracking-tight">
+              Sessions
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Review signed-in devices and revoke access you no longer
+              recognize.
+            </p>
+          </div>
+          <SessionsSettingsPanel />
         </TabsContent>
       </div>
     </Tabs>

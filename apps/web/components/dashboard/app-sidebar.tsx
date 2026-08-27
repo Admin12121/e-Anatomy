@@ -2,8 +2,11 @@
 
 import * as React from "react";
 import {
+  BarChart3Icon,
+  FileStackIcon,
   FolderIcon,
   LayoutDashboardIcon,
+  UsersIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -24,11 +27,16 @@ import {
 import { IconHelp, IconSearch, IconSettings } from "@tabler/icons-react";
 import { NavSecondary } from "./nav-secondary";
 import Image from "next/image";
+import {
+  hasCapability,
+  type RoleCode,
+} from "@/lib/auth/access";
 
 type SidebarUser = {
   name: string;
   email: string;
   avatar: string | null;
+  roleCode: RoleCode;
 };
 
 function normalizePathname(pathname: string | null) {
@@ -39,11 +47,32 @@ function normalizePathname(pathname: string | null) {
     : pathname;
 }
 
-function getPrimaryNav() {
-  return [
-    { title: "Dashboard", href: "/dashboard", icon: <LayoutDashboardIcon /> },
-    { title: "Playground", href: "/playground", icon: <FolderIcon /> },
-  ];
+function getPrimaryNav(roleCode: RoleCode) {
+  const items = [];
+
+  if (hasCapability(roleCode, "view_analytics")) {
+    items.push(
+      { title: "Dashboard", href: "/dashboard", icon: <LayoutDashboardIcon /> },
+      { title: "Users", href: "/users", icon: <UsersIcon /> },
+    );
+  }
+
+  if (hasCapability(roleCode, "manage_content")) {
+    items.push(
+      { title: "Content", href: "/content", icon: <FileStackIcon /> },
+      { title: "Playground", href: "/playground", icon: <FolderIcon /> },
+    );
+  }
+
+  if (hasCapability(roleCode, "view_analytics")) {
+    items.push({
+      title: "Analytics",
+      href: "/analytics",
+      icon: <BarChart3Icon />,
+    });
+  }
+
+  return items;
 }
 
 const navSecondary = [
@@ -75,7 +104,7 @@ export function AppSidebar({
     () => normalizePathname(pathname),
     [pathname],
   );
-  const navItems = getPrimaryNav();
+  const navItems = getPrimaryNav(user.roleCode);
 
   const isActive = (url: string) => {
     if (url === "/dashboard" || url === "/bookings") {

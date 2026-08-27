@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 
-import { requireAdminSession } from "@/lib/auth/session";
+import { requireDashboardSession } from "@/lib/auth/session";
+import { AuthenticatedAppBoundary } from "@/components/auth/authenticated-app-boundary";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/dashboard/app-sidebar";
 import { SiteHeader } from "@/components/dashboard/site-header";
@@ -10,7 +11,7 @@ type AdminLayoutProps = {
 };
 
 export default async function AdminLayout({ children }: AdminLayoutProps) {
-  const { user } = await requireAdminSession();
+  const { session, user } = await requireDashboardSession();
 
   return (
     <SidebarProvider
@@ -28,6 +29,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
           name: user.name,
           email: user.email,
           avatar: user.image,
+          roleCode: user.roleCode,
         }}
       />
       <SidebarInset className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -36,7 +38,15 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
           data-lenis-prevent
           className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden overscroll-y-contain dark:bg-[#171717]"
         >
-          {children}
+          <AuthenticatedAppBoundary
+            expiresAt={
+              session.session.expiresAt instanceof Date
+                ? session.session.expiresAt.toISOString()
+                : String(session.session.expiresAt)
+            }
+          >
+            {children}
+          </AuthenticatedAppBoundary>
         </div>
       </SidebarInset>
     </SidebarProvider>

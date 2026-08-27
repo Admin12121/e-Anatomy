@@ -1,5 +1,7 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
+import { APIError } from "better-auth/api"
+import { eq } from "drizzle-orm"
 
 import {
   AUTH_APP_NAME,
@@ -19,6 +21,34 @@ export const baseAuthOptions = {
     provider: "pg",
     schema: authSchema,
   }),
+  databaseHooks: {
+    session: {
+      create: {
+        before: async (session) => {
+          const [sessionUser] = await db
+            .select({ status: authSchema.user.status })
+            .from(authSchema.user)
+            .where(eq(authSchema.user.id, session.userId))
+            .limit(1)
+
+          if (sessionUser?.status && sessionUser.status !== "active") {
+            throw new APIError("FORBIDDEN", {
+              message:
+                "This account is inactive. Contact an administrator for access.",
+            })
+          }
+
+          return { data: session }
+        },
+        after: async (session) => {
+          await db
+            .update(authSchema.user)
+            .set({ lastLoginAt: new Date() })
+            .where(eq(authSchema.user.id, session.userId))
+        },
+      },
+    },
+  },
   account: {
     accountLinking: {
       enabled: true,
@@ -40,7 +70,7 @@ export const baseAuthOptions = {
         type: "string",
         input: false,
         required: false,
-        defaultValue: "reviewer",
+        defaultValue: "viewer",
       },
       status: {
         type: "string",

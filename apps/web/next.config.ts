@@ -1,8 +1,12 @@
-import type { NextConfig } from "next"
+import type { NextConfig } from "next";
 
-const proxyTarget = process.env.NEXT_SERVER_API_PROXY_TARGET?.replace(/\/$/, "")
+const proxyTarget = process.env.NEXT_SERVER_API_PROXY_TARGET?.replace(
+  /\/$/,
+  "",
+);
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ["192.168.1.65", "localhost"],
   poweredByHeader: false,
   experimental: {
     proxyClientMaxBodySize: "600mb",
@@ -14,7 +18,7 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     if (!proxyTarget) {
-      return []
+      return [];
     }
 
     return [
@@ -22,8 +26,8 @@ const nextConfig: NextConfig = {
         source: "/api/v1/:path*",
         destination: `${proxyTarget}/api/v1/:path*`,
       },
-    ]
+    ];
   },
-}
+};
 
-export default nextConfig
+export default nextConfig;

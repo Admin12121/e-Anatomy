@@ -6,9 +6,15 @@ import { redirect } from "next/navigation"
 
 import { auth } from "@/lib/auth"
 import {
+  type Capability,
   createLoginRedirectPath,
   DEFAULT_AUTHENTICATED_REDIRECT,
+  getDefaultAuthenticatedPath,
+  getRoleCapabilities,
   hasAdminAccess,
+  hasCapability,
+  hasDashboardAccess,
+  normalizeRoleCode,
   resolveAuthenticatedRedirectPath,
 } from "@/lib/auth/access"
 import {
@@ -43,12 +49,18 @@ async function getValidatedSessionFromHeaders(requestHeaders: Headers) {
 }
 
 export function normalizeSessionUser(user: AuthSession["user"]): SessionUser {
+  const roleCode = normalizeRoleCode(user.role)
+  const canAccessDashboard = hasDashboardAccess({
+    apiAccountId: user.apiAccountId,
+    roleCode,
+  })
+
   return {
     id: user.id,
     name: user.name,
     email: user.email,
     image: user.image ?? null,
-    roleCode: user.role ?? "reviewer",
+    roleCode,
     status: user.status ?? "active",
     apiAccountId: user.apiAccountId ?? null,
     apiAccountSlug: user.apiAccountSlug ?? null,
@@ -56,8 +68,10 @@ export function normalizeSessionUser(user: AuthSession["user"]): SessionUser {
     apiAccountType: user.apiAccountType ?? null,
     canAccessAdmin: hasAdminAccess({
       apiAccountId: user.apiAccountId,
-      roleCode: user.role,
+      roleCode,
     }),
+    canAccessDashboard,
+    capabilities: getRoleCapabilities(roleCode),
     twoFactorEnabled: Boolean(user.twoFactorEnabled),
   }
 }
@@ -95,6 +109,10 @@ export const requireSession = cache(
 
     const user = normalizeSessionUser(session.user)
 
+    if (user.status !== "active") {
+      redirect("/")
+    }
+
     if (
       user.twoFactorEnabled &&
       !(await hasVerifiedSecondFactor(session.session.id))
@@ -117,15 +135,36 @@ export const requireSession = cache(
 
 export const requireAdminSession = cache(
   async (nextPath = DEFAULT_AUTHENTICATED_REDIRECT) => {
+    return requireCapabilitySession("manage_users", nextPath)
+  },
+)
+
+export const requireDashboardSession = cache(
+  async (nextPath = DEFAULT_AUTHENTICATED_REDIRECT) => {
     const result = await requireSession(undefined, nextPath)
 
-    if (!result.user.canAccessAdmin) {
+    if (!result.user.canAccessDashboard) {
       redirect(
         resolveAuthenticatedRedirectPath({
-          hasApiAccountId: Boolean(result.user.apiAccountId),
+          hasApiAccountId: result.user.canAccessDashboard,
           roleCode: result.user.roleCode,
         }),
       )
+    }
+
+    return result
+  },
+)
+
+export const requireCapabilitySession = cache(
+  async (
+    capability: Capability,
+    nextPath = DEFAULT_AUTHENTICATED_REDIRECT,
+  ) => {
+    const result = await requireDashboardSession(nextPath)
+
+    if (!hasCapability(result.user.roleCode, capability)) {
+      redirect(getDefaultAuthenticatedPath(result.user.roleCode))
     }
 
     return result
@@ -143,6 +182,10 @@ export async function requireApiSession(
   }
 
   const user = normalizeSessionUser(session.user)
+
+  if (user.status !== "active") {
+    return null
+  }
 
   if (
     user.twoFactorEnabled &&
@@ -164,7 +207,20 @@ export async function requireApiSession(
 export async function requireAdminApiSession(requestHeaders: Headers) {
   const result = await requireApiSession(requestHeaders)
 
-  if (!result || !result.user.canAccessAdmin) {
+  if (!result || !result.user.canAccessDashboard) {
+    return null
+  }
+
+  return result
+}
+
+export async function requireApiCapability(
+  requestHeaders: Headers,
+  capability: Capability,
+) {
+  const result = await requireApiSession(requestHeaders)
+
+  if (!result || !hasCapability(result.user.roleCode, capability)) {
     return null
   }
 

@@ -1,15 +1,19 @@
+import type { Capability, RoleCode } from "@/lib/auth/access"
+
 export type SessionUser = {
   id: string
   name: string
   email: string
   image: string | null
-  roleCode: string
+  roleCode: RoleCode
   status: string
   apiAccountId: string | null
   apiAccountSlug: string | null
   apiAccountName: string | null
   apiAccountType: string | null
   canAccessAdmin: boolean
+  canAccessDashboard: boolean
+  capabilities: readonly Capability[]
   twoFactorEnabled: boolean
 }
 
@@ -18,7 +22,7 @@ export type DashboardViewer = {
   displayName: string
   email: string
   expiresAt: string
-  roleCode: string
+  roleCode: RoleCode
   status: string
 }
 

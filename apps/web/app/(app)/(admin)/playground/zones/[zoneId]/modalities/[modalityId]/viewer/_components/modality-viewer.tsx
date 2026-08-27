@@ -94,6 +94,7 @@ import {
 import {
   toColorInputValue,
 } from "./modality-viewer/right-panel/utils";
+import { trackAnalyticsEvent } from "@/lib/analytics/client";
 
 type NavigationSource =
   | "button"
@@ -1264,6 +1265,43 @@ function ModalityViewerShell({
   const selectedStructure = selectedStructureId
     ? (structuresById.get(selectedStructureId) ?? null)
     : null;
+  const analyticsModalityId = data?.modality.id;
+  const analyticsZoneId = data?.zone.id;
+
+  useEffect(() => {
+    if (
+      !readOnly ||
+      !selectedStructureId ||
+      !analyticsModalityId ||
+      !analyticsZoneId
+    ) {
+      return;
+    }
+
+    void trackAnalyticsEvent("structure_selected", {
+      modalityId: analyticsModalityId,
+      structureId: selectedStructureId,
+      zoneId: analyticsZoneId,
+    });
+
+    const engagementStartedAt = Date.now();
+    const engagementTimer = window.setTimeout(() => {
+      void trackAnalyticsEvent("content_engaged", {
+        contentId: selectedStructureId,
+        durationSeconds: Math.round((Date.now() - engagementStartedAt) / 1000),
+        threshold: "30_seconds",
+      });
+    }, 30_000);
+
+    return () => {
+      window.clearTimeout(engagementTimer);
+    };
+  }, [
+    analyticsModalityId,
+    analyticsZoneId,
+    readOnly,
+    selectedStructureId,
+  ]);
   const selectedGroup = selectedGroupId
     ? (groupsById.get(selectedGroupId) ?? null)
     : null;

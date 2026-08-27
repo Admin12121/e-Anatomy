@@ -782,7 +782,7 @@ export default function Page() {
               </Link>
             </span>
             {selectedZone ? (
-              <Frame className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-20 md:left-5 md:bottom-auto md:w-80">
+              <Frame className="absolute hidden md:flex inset-x-4 z-10 md:inset-x-auto md:top-5 md:right-5 md:w-80">
                 <Table>
                   <TableHeader>
                     <TableRow className="text-left">
@@ -834,7 +834,7 @@ export default function Page() {
               </Frame>
             ) : null}
 
-            <Frame className="absolute hidden md:flex inset-x-4 z-10 md:inset-x-auto  md:top-5 md:right-5 md:w-80">
+            <Frame className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-20 md:left-5 md:bottom-auto md:w-80">
               <Table>
                 <TableHeader>
                   <TableRow className="text-left">

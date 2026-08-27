@@ -1,13 +1,13 @@
 import { eq } from "drizzle-orm"
 
 import { SettingsTabs } from "./_components/settings-tabs"
-import { requireAdminSession } from "@/lib/auth/session"
+import { requireDashboardSession } from "@/lib/auth/session"
 import { getAuthFeatureFlags } from "@/lib/auth/runtime-config"
 import { account } from "@/lib/db/auth-schema"
 import { db } from "@/lib/db/client"
 
 export default async function SettingsPage() {
-  const { user } = await requireAdminSession("/settings")
+  const { user } = await requireDashboardSession("/settings")
   const featureFlags = getAuthFeatureFlags()
   const linkedAccounts = await db
     .select({
