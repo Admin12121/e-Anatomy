@@ -17,14 +17,193 @@ export const LABEL_SAFE_MAX_Y = 0.9;
 export const MAIN_LABEL_BASE_OFFSET_PX = 112;
 export const MAIN_LABEL_OFFSET_MIN_PX = 76;
 export const MAIN_LABEL_OFFSET_MAX_PX = 172;
-export const MAIN_LABEL_BAND_WIDTH_PX = 180;
 export const MAIN_LABEL_BAND_MIN_GAP_PX = 24;
 export const LABEL_ROW_GAP_PX = 28;
-export const LABEL_ROW_GAP_LARGE_PX = 36;
 export const LABEL_BOX_MIN_WIDTH = 46;
 export const LABEL_BOX_MAX_WIDTH = 180;
 export const LABEL_BOX_PADDING_X = 10;
 export const LABEL_BOX_HEIGHT_PADDING = 10;
+
+const VIEWER_COORDINATE_HEIGHT = 1000;
+const VIEWER_LABEL_SCALE_MIN = 0.65;
+const VIEWER_LABEL_GUTTER_MIN_PX = 88;
+const VIEWER_LABEL_GUTTER_MAX_PX = 210;
+const VIEWER_IMAGE_MIN_WIDTH_PX = 96;
+
+type DimensionCandidate = {
+  height: number | null | undefined;
+  width: number | null | undefined;
+};
+
+export type ViewerLayout = {
+  boundsBottom: number;
+  boundsHeight: number;
+  boundsLeft: number;
+  boundsRight: number;
+  boundsTop: number;
+  boundsWidth: number;
+  coordinateHeight: number;
+  coordinateWidth: number;
+  fontSize: number;
+  labelBaseOffset: number;
+  labelBoxHeightPadding: number;
+  labelBoxMaxWidth: number;
+  labelBoxMinWidth: number;
+  labelBoxPaddingX: number;
+  labelGutter: number;
+  labelOffsetMax: number;
+  labelOffsetMin: number;
+  labelRowGap: number;
+  labelScale: number;
+  stagePadding: number;
+  surfaceHeight: number;
+  surfaceWidth: number;
+};
+
+export type ViewerLayoutInput = {
+  imageHeight: number;
+  imageWidth: number;
+  reserveLabelSpace: boolean;
+  rotationQuarterTurns: number;
+  stageHeight: number;
+  stageWidth: number;
+};
+
+type AnnotationFocusInput = {
+  annotationId: string;
+  hoveredId: string | null;
+  selectedId: string | null;
+};
+
+function isValidDimension(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+export function resolveViewerImageDimensions(
+  candidates: DimensionCandidate[],
+): { height: number; width: number } | null {
+  for (const candidate of candidates) {
+    if (
+      isValidDimension(candidate.width) &&
+      isValidDimension(candidate.height)
+    ) {
+      return {
+        height: candidate.height,
+        width: candidate.width,
+      };
+    }
+  }
+
+  return null;
+}
+
+export function getAnnotationFocusOpacity({
+  annotationId,
+  hoveredId,
+  selectedId,
+}: AnnotationFocusInput) {
+  if (!hoveredId || annotationId === hoveredId || annotationId === selectedId) {
+    return 1;
+  }
+
+  return 0.28;
+}
+
+export function calculateViewerLayout({
+  imageHeight,
+  imageWidth,
+  reserveLabelSpace,
+  rotationQuarterTurns,
+  stageHeight,
+  stageWidth,
+}: ViewerLayoutInput): ViewerLayout {
+  const safeStageWidth = isValidDimension(stageWidth) ? stageWidth : 1;
+  const safeStageHeight = isValidDimension(stageHeight) ? stageHeight : 1;
+  const safeImageWidth = isValidDimension(imageWidth) ? imageWidth : 1;
+  const safeImageHeight = isValidDimension(imageHeight) ? imageHeight : 1;
+  const stagePadding = clamp(
+    Math.min(safeStageWidth, safeStageHeight) * 0.035,
+    12,
+    32,
+  );
+  const labelScale = clamp(
+    Math.min(safeStageWidth / 1200, safeStageHeight / 760),
+    VIEWER_LABEL_SCALE_MIN,
+    1,
+  );
+  const innerWidth = Math.max(safeStageWidth - stagePadding * 2, 1);
+  const innerHeight = Math.max(safeStageHeight - stagePadding * 2, 1);
+  const minimumImageWidth = Math.min(
+    180,
+    Math.max(VIEWER_IMAGE_MIN_WIDTH_PX, innerWidth * 0.35),
+  );
+  const maximumGutter = Math.max((innerWidth - minimumImageWidth) / 2, 0);
+  const desiredGutter = clamp(
+    safeStageWidth * 0.18,
+    VIEWER_LABEL_GUTTER_MIN_PX,
+    VIEWER_LABEL_GUTTER_MAX_PX,
+  );
+  const labelGutter = reserveLabelSpace
+    ? Math.min(desiredGutter, maximumGutter)
+    : 0;
+  const availableWidth = Math.max(innerWidth - labelGutter * 2, 1);
+  const availableHeight = innerHeight;
+  const normalizedRotation = ((rotationQuarterTurns % 4) + 4) % 4;
+  const rotatedByQuarterTurn = normalizedRotation % 2 === 1;
+  const effectiveWidth = rotatedByQuarterTurn
+    ? safeImageHeight
+    : safeImageWidth;
+  const effectiveHeight = rotatedByQuarterTurn
+    ? safeImageWidth
+    : safeImageHeight;
+  const fitScale = Math.min(
+    availableWidth / effectiveWidth,
+    availableHeight / effectiveHeight,
+  );
+  const surfaceWidth = safeImageWidth * fitScale;
+  const surfaceHeight = safeImageHeight * fitScale;
+  const boundsWidth = rotatedByQuarterTurn ? surfaceHeight : surfaceWidth;
+  const boundsHeight = rotatedByQuarterTurn ? surfaceWidth : surfaceHeight;
+  const boundsLeft = (safeStageWidth - boundsWidth) / 2;
+  const boundsTop = (safeStageHeight - boundsHeight) / 2;
+  const responsiveLabelBoxMaxWidth = LABEL_BOX_MAX_WIDTH * labelScale;
+  const availableLabelBoxWidth = reserveLabelSpace
+    ? Math.max(
+        76,
+        labelGutter + stagePadding - LABEL_BOX_PADDING_X * 1.6,
+      )
+    : responsiveLabelBoxMaxWidth;
+  const labelBoxMaxWidth = Math.min(
+    responsiveLabelBoxMaxWidth,
+    availableLabelBoxWidth,
+  );
+
+  return {
+    boundsBottom: boundsTop + boundsHeight,
+    boundsHeight,
+    boundsLeft,
+    boundsRight: boundsLeft + boundsWidth,
+    boundsTop,
+    boundsWidth,
+    coordinateHeight: VIEWER_COORDINATE_HEIGHT,
+    coordinateWidth:
+      VIEWER_COORDINATE_HEIGHT * (safeImageWidth / safeImageHeight),
+    fontSize: 18 * labelScale,
+    labelBaseOffset: MAIN_LABEL_BASE_OFFSET_PX * labelScale,
+    labelBoxHeightPadding: LABEL_BOX_HEIGHT_PADDING * labelScale,
+    labelBoxMaxWidth,
+    labelBoxMinWidth: LABEL_BOX_MIN_WIDTH * labelScale,
+    labelBoxPaddingX: LABEL_BOX_PADDING_X * labelScale,
+    labelGutter,
+    labelOffsetMax: MAIN_LABEL_OFFSET_MAX_PX * labelScale,
+    labelOffsetMin: MAIN_LABEL_OFFSET_MIN_PX * labelScale,
+    labelRowGap: LABEL_ROW_GAP_PX * labelScale,
+    labelScale,
+    stagePadding,
+    surfaceHeight,
+    surfaceWidth,
+  };
+}
 
 export type LabelSide = "left" | "right";
 

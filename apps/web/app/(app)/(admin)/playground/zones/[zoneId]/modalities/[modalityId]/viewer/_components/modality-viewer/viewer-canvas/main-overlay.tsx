@@ -9,11 +9,10 @@ import type {
 import {
   DEFAULT_ANNOTATION_COLOR,
   type AnnotationFormState,
-  type FontScaleMode,
   type ViewerCanvasMode,
 } from "../../modality-viewer.types";
 import { clamp } from "../utils";
-import { LABEL_BOX_HEIGHT_PADDING, LABEL_BOX_PADDING_X } from "./helpers";
+import { getAnnotationFocusOpacity, type ViewerLayout } from "./helpers";
 
 type AnchorDragState = {
   annotationId: string;
@@ -34,12 +33,6 @@ type ViewerCanvasMainOverlayProps = {
   areaEditTool: "brush" | "erase";
   areaToolCursorPoint: ViewerAnnotationPoint | null;
   canvasMode: ViewerCanvasMode;
-  clampTextXForLabelBox: (
-    textX: number,
-    textAnchor: "start" | "end",
-    labelRectWidth: number,
-    viewportWidth: number,
-  ) => number;
   disconnectedOverlayColor: string;
   draftDisconnectedPolygons: ViewerAnnotationPoint[][];
   draftPointerColor: string;
@@ -53,7 +46,6 @@ type ViewerCanvasMainOverlayProps = {
     fontSize: number,
     fontWeight: 500 | 700,
   ) => string;
-  fontScaleMode: FontScaleMode;
   hoveredAnnotationId: string | null;
   isAreaPaintMode: boolean;
   measureLabelRectWidth: (
@@ -66,8 +58,6 @@ type ViewerCanvasMainOverlayProps = {
   onDraftAnchorMove: (point: ViewerAnnotationPoint) => void;
   onDraftLabelMove: (point: ViewerAnnotationPoint) => void;
   overlayOpacity: number;
-  pinsOnly: boolean;
-  practiceMode: boolean;
   resolvePointerPoint: (
     event: ResolvePointerPointInput,
   ) => ViewerAnnotationPoint;
@@ -78,17 +68,22 @@ type ViewerCanvasMainOverlayProps = {
   showDraftPointer: boolean;
   showLabels: boolean;
   structuresById: Map<string, ViewerStructure>;
+  viewerLayout: ViewerLayout;
   visibleAnnotations: ViewerAnnotation[];
 };
 
-function pointsToSmoothClosedPath(points: ViewerAnnotationPoint[]) {
+function pointsToSmoothClosedPath(
+  points: ViewerAnnotationPoint[],
+  coordinateWidth: number,
+  coordinateHeight: number,
+) {
   if (points.length < 3) {
     return "";
   }
 
   const scaledPoints = points.map((point) => ({
-    x: point.x * 1000,
-    y: point.y * 1000,
+    x: point.x * coordinateWidth,
+    y: point.y * coordinateHeight,
   }));
   const firstPoint = scaledPoints[0]!;
   const secondPoint = scaledPoints[1]!;
@@ -124,7 +119,6 @@ export function ViewerCanvasMainOverlay({
   areaEditTool,
   areaToolCursorPoint,
   canvasMode,
-  clampTextXForLabelBox,
   disconnectedOverlayColor,
   draftDisconnectedPolygons,
   draftPointerColor,
@@ -134,7 +128,6 @@ export function ViewerCanvasMainOverlay({
   draggingLabelRef,
   editLockEnabled,
   fitLabelText,
-  fontScaleMode,
   hoveredAnnotationId,
   isAreaPaintMode,
   measureLabelRectWidth,
@@ -143,8 +136,6 @@ export function ViewerCanvasMainOverlay({
   onDraftAnchorMove,
   onDraftLabelMove,
   overlayOpacity,
-  pinsOnly,
-  practiceMode,
   resolvePointerPoint,
   selectedAnnotationId,
   setDraggingLabelId,
@@ -153,11 +144,19 @@ export function ViewerCanvasMainOverlay({
   showDraftPointer,
   showLabels,
   structuresById,
+  viewerLayout,
   visibleAnnotations,
 }: ViewerCanvasMainOverlayProps) {
+  const canvasUnitsPerScreenPixel =
+    viewerLayout.coordinateHeight /
+    Math.max(viewerLayout.surfaceHeight, 1);
   const overlayPreview =
     canvasMode !== "browse" && !areaPaintPreviewActive
-      ? pointsToSmoothClosedPath(annotationForm.polygonPoints)
+      ? pointsToSmoothClosedPath(
+          annotationForm.polygonPoints,
+          viewerLayout.coordinateWidth,
+          viewerLayout.coordinateHeight,
+        )
       : null;
 
   return (
@@ -170,6 +169,11 @@ export function ViewerCanvasMainOverlay({
 
         const isSelected = annotation.id === selectedAnnotationId;
         const isHovered = annotation.id === hoveredAnnotationId;
+        const focusOpacity = getAnnotationFocusOpacity({
+          annotationId: annotation.id,
+          hoveredId: hoveredAnnotationId,
+          selectedId: selectedAnnotationId,
+        });
         const isInteractionBlocked = editLockEnabled
           ? selectedAnnotationId
             ? !isSelected
@@ -215,13 +219,10 @@ export function ViewerCanvasMainOverlay({
           0.92,
         );
         const label = annotation.titleOverride || structure.title;
-        const markerVisible = (showLabels || pinsOnly) && !isInteractionBlocked;
-        const textVisible =
-          showLabels &&
-          !pinsOnly &&
-          !isInteractionBlocked &&
-          (!practiceMode || isSelected || isHovered);
-        const fontSize = fontScaleMode === "large" ? 24 : 18;
+        const markerVisible = showLabels && !isInteractionBlocked;
+        const textVisible = showLabels && !isInteractionBlocked;
+        const screenFontSize = viewerLayout.fontSize;
+        const fontSize = screenFontSize * canvasUnitsPerScreenPixel;
         const annotationPositionEditingActive =
           canvasMode === "set-anchor" || canvasMode === "set-label";
         const canDragAnchor =
@@ -237,39 +238,62 @@ export function ViewerCanvasMainOverlay({
           annotationPositionEditingActive;
         const highlightLabel =
           isSelected || isHovered || draggingLabelId === annotation.id;
-        const leaderStrokeWidth = isSelected ? 3.5 : isHovered ? 3 : 2;
-        const markerRadius = isSelected ? 8 : isHovered ? 7 : 6;
+        const leaderStrokeWidth =
+          (isSelected ? 3.5 : isHovered ? 3 : 2) *
+          viewerLayout.labelScale *
+          canvasUnitsPerScreenPixel;
+        const markerRadius =
+          (isSelected ? 8 : isHovered ? 7 : 6) *
+          viewerLayout.labelScale *
+          canvasUnitsPerScreenPixel;
         const labelFontWeight: 500 | 700 = isSelected ? 700 : 500;
-        const displayLabel = fitLabelText(label, fontSize, labelFontWeight);
+        const displayLabel = fitLabelText(
+          label,
+          screenFontSize,
+          labelFontWeight,
+        );
         const shouldRenderCanvasLeaders =
           markerVisible && !shouldAutoArrangeLabels && !isInteractionBlocked;
         const shouldRenderCanvasLabel =
           textVisible && !shouldAutoArrangeLabels && !isInteractionBlocked;
-        const labelRectWidth = measureLabelRectWidth(
-          displayLabel,
-          fontSize,
-          labelFontWeight,
-        );
-        const labelRectHeight = fontSize + LABEL_BOX_HEIGHT_PADDING;
-        const resolvedLabelTextX = clampTextXForLabelBox(
-          labelX * 1000,
-          rawLabelTextAnchor,
-          labelRectWidth,
-          1000,
-        );
+        const labelRectWidth =
+          measureLabelRectWidth(
+            displayLabel,
+            screenFontSize,
+            labelFontWeight,
+          ) * canvasUnitsPerScreenPixel;
+        const labelRectHeight =
+          (screenFontSize + viewerLayout.labelBoxHeightPadding) *
+          canvasUnitsPerScreenPixel;
+        const labelBoxPaddingX =
+          viewerLayout.labelBoxPaddingX * canvasUnitsPerScreenPixel;
+        const rawLabelTextX = labelX * viewerLayout.coordinateWidth;
+        const resolvedLabelTextX =
+          rawLabelTextAnchor === "start"
+            ? clamp(
+                rawLabelTextX,
+                labelBoxPaddingX,
+                viewerLayout.coordinateWidth -
+                  (labelRectWidth - labelBoxPaddingX),
+              )
+            : clamp(
+                rawLabelTextX,
+                labelRectWidth - labelBoxPaddingX,
+                viewerLayout.coordinateWidth - labelBoxPaddingX,
+              );
         const resolvedLabelRectX =
           rawLabelTextAnchor === "start"
-            ? resolvedLabelTextX - LABEL_BOX_PADDING_X
-            : resolvedLabelTextX - labelRectWidth + LABEL_BOX_PADDING_X;
+            ? resolvedLabelTextX - labelBoxPaddingX
+            : resolvedLabelTextX - labelRectWidth + labelBoxPaddingX;
 
         return (
           <g
             key={annotation.id}
-            style={
-              isInteractionBlocked
-                ? { pointerEvents: "none" }
-                : undefined
-            }
+            style={{
+              opacity: focusOpacity,
+              pointerEvents: isInteractionBlocked ? "none" : undefined,
+              transition: "opacity 140ms ease",
+            }}
             onMouseEnter={() => {
               if (isInteractionBlocked) {
                 return;
@@ -296,7 +320,11 @@ export function ViewerCanvasMainOverlay({
             {polygonPoints.length >= 3 &&
             !(areaPaintPreviewActive && isAreaPaintMode && isSelected) ? (
               <path
-                d={pointsToSmoothClosedPath(polygonPoints)}
+                d={pointsToSmoothClosedPath(
+                  polygonPoints,
+                  viewerLayout.coordinateWidth,
+                  viewerLayout.coordinateHeight,
+                )}
                 fill={overlayColor}
                 fillOpacity={emphasizedOpacity}
               />
@@ -309,16 +337,16 @@ export function ViewerCanvasMainOverlay({
                     strokeLinecap="round"
                     strokeOpacity={highlightLabel ? 1 : 0.86}
                     strokeWidth={leaderStrokeWidth}
-                    x1={anchorX * 1000}
+                    x1={anchorX * viewerLayout.coordinateWidth}
                     x2={resolvedLabelTextX}
-                    y1={anchorY * 1000}
-                    y2={labelY * 1000}
+                    y1={anchorY * viewerLayout.coordinateHeight}
+                    y2={labelY * viewerLayout.coordinateHeight}
                   />
                 ) : null}
                 <circle
                   className={canDragAnchor ? "cursor-move" : undefined}
-                  cx={anchorX * 1000}
-                  cy={anchorY * 1000}
+                  cx={anchorX * viewerLayout.coordinateWidth}
+                  cy={anchorY * viewerLayout.coordinateHeight}
                   fill={color}
                   opacity={highlightLabel ? 1 : 0.88}
                   r={markerRadius}
@@ -361,7 +389,10 @@ export function ViewerCanvasMainOverlay({
                     rx={6}
                     width={labelRectWidth}
                     x={resolvedLabelRectX}
-                    y={labelY * 1000 - labelRectHeight / 2}
+                    y={
+                      labelY * viewerLayout.coordinateHeight -
+                      labelRectHeight / 2
+                    }
                   />
                 ) : null}
                 <text
@@ -375,7 +406,7 @@ export function ViewerCanvasMainOverlay({
                   fontWeight={labelFontWeight}
                   textAnchor={rawLabelTextAnchor}
                   x={resolvedLabelTextX}
-                  y={labelY * 1000}
+                  y={labelY * viewerLayout.coordinateHeight}
                   onPointerDown={(event) => {
                     if (!canDragLabel) {
                       return;
@@ -411,10 +442,10 @@ export function ViewerCanvasMainOverlay({
           <line
             stroke={annotationForm.leaderColorHex || draftPointerColor}
             strokeWidth={2}
-            x1={annotationForm.anchorX * 1000}
-            x2={annotationForm.labelX * 1000}
-            y1={annotationForm.anchorY * 1000}
-            y2={annotationForm.labelY * 1000}
+            x1={annotationForm.anchorX * viewerLayout.coordinateWidth}
+            x2={annotationForm.labelX * viewerLayout.coordinateWidth}
+            y1={annotationForm.anchorY * viewerLayout.coordinateHeight}
+            y2={annotationForm.labelY * viewerLayout.coordinateHeight}
           />
           <circle
             className={
@@ -423,8 +454,8 @@ export function ViewerCanvasMainOverlay({
                 ? "cursor-move"
                 : undefined
             }
-            cx={annotationForm.anchorX * 1000}
-            cy={annotationForm.anchorY * 1000}
+            cx={annotationForm.anchorX * viewerLayout.coordinateWidth}
+            cy={annotationForm.anchorY * viewerLayout.coordinateHeight}
             fill={draftPointerColor}
             r={7}
             onPointerDown={(event) => {
@@ -455,14 +486,14 @@ export function ViewerCanvasMainOverlay({
               );
             }}
           />
-          {showLabels && !pinsOnly ? (
+          {showLabels ? (
             <text
               fill={draftPointerColor}
               fontFamily="system-ui"
-              fontSize={fontScaleMode === "large" ? 24 : 18}
+              fontSize={viewerLayout.fontSize * canvasUnitsPerScreenPixel}
               fontWeight={600}
-              x={annotationForm.labelX * 1000}
-              y={annotationForm.labelY * 1000}
+              x={annotationForm.labelX * viewerLayout.coordinateWidth}
+              y={annotationForm.labelY * viewerLayout.coordinateHeight}
             >
               {draftPointerLabel}
             </text>
@@ -484,7 +515,11 @@ export function ViewerCanvasMainOverlay({
 
             return (
               <path
-                d={pointsToSmoothClosedPath(polygonPoints)}
+                d={pointsToSmoothClosedPath(
+                  polygonPoints,
+                  viewerLayout.coordinateWidth,
+                  viewerLayout.coordinateHeight,
+                )}
                 key={`draft-disconnected-${polygonIndex}`}
                 fill={disconnectedOverlayColor}
                 fillOpacity={annotationForm.overlayOpacity * overlayOpacity}
@@ -494,15 +529,15 @@ export function ViewerCanvasMainOverlay({
         : null}
       {isAreaPaintMode && areaToolCursorPoint ? (
         <circle
-          cx={areaToolCursorPoint.x * 1000}
-          cy={areaToolCursorPoint.y * 1000}
+          cx={areaToolCursorPoint.x * viewerLayout.coordinateWidth}
+          cy={areaToolCursorPoint.y * viewerLayout.coordinateHeight}
           fill={
             areaEditTool === "erase"
               ? "rgba(248,113,113,0.14)"
               : "rgba(34,211,238,0.14)"
           }
           pointerEvents="none"
-          r={activeAreaCursorRadius * 1000}
+          r={activeAreaCursorRadius * viewerLayout.coordinateHeight}
         />
       ) : null}
       {showCrossReferences ? (
@@ -510,18 +545,18 @@ export function ViewerCanvasMainOverlay({
           <line
             stroke="rgb(17 107 207)"
             strokeWidth={2}
-            x1={500}
-            x2={500}
+            x1={viewerLayout.coordinateWidth / 2}
+            x2={viewerLayout.coordinateWidth / 2}
             y1={0}
-            y2={1000}
+            y2={viewerLayout.coordinateHeight}
           />
           <line
             stroke="rgb(17 107 207)"
             strokeWidth={2}
             x1={0}
-            x2={1000}
-            y1={500}
-            y2={500}
+            x2={viewerLayout.coordinateWidth}
+            y1={viewerLayout.coordinateHeight / 2}
+            y2={viewerLayout.coordinateHeight / 2}
           />
         </>
       ) : null}

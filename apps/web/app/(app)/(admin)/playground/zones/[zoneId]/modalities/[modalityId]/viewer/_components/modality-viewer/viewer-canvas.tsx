@@ -23,7 +23,6 @@ import {
   DEFAULT_ANNOTATION_COLOR,
   EMPTY_ANNOTATION_FORM,
   type AnnotationFormState,
-  type FontScaleMode,
   type ViewerCanvasMode,
 } from "../modality-viewer.types";
 import { clamp } from "./utils";
@@ -31,18 +30,9 @@ import { ViewerCanvasAutoArrangedLabelOverlay } from "./viewer-canvas/auto-arran
 import {
   AREA_MASK_RESOLUTION,
   type ArrangedLabel,
-  LABEL_BOX_MAX_WIDTH,
-  LABEL_BOX_MIN_WIDTH,
-  LABEL_BOX_PADDING_X,
-  LABEL_ROW_GAP_LARGE_PX,
-  LABEL_ROW_GAP_PX,
   LABEL_SAFE_MAX_Y,
   LABEL_SAFE_MIN_Y,
   MAIN_LABEL_BAND_MIN_GAP_PX,
-  MAIN_LABEL_BAND_WIDTH_PX,
-  MAIN_LABEL_BASE_OFFSET_PX,
-  MAIN_LABEL_OFFSET_MAX_PX,
-  MAIN_LABEL_OFFSET_MIN_PX,
   MAX_AREA_RADIUS,
   MAX_AREA_STROKE_STEP,
   MAX_ZOOM_SCALE,
@@ -50,15 +40,15 @@ import {
   MIN_AREA_STROKE_STEP,
   MIN_ZOOM_SCALE,
   type LabelSide,
+  calculateViewerLayout,
   distributeLabelRows,
   extractPolygonsFromMask,
+  resolveViewerImageDimensions,
 } from "./viewer-canvas/helpers";
 import { ViewerCanvasMainOverlay } from "./viewer-canvas/main-overlay";
 
 export type MainInteractionTool = "layers" | "pan" | "zoom";
 export type AreaEditTool = "brush" | "erase";
-
-const AREA_MASK_PREVIEW_OPACITY_MULTIPLIER = 1;
 
 type LabelTextWidthMeasurer = (
   text: string,
@@ -81,7 +71,6 @@ type ViewerCanvasProps = {
   currentAtlasFrame: ZoneModalityAtlasFrame | null;
   currentImageElement: HTMLImageElement | null;
   draftStructureTitle: string;
-  fontScaleMode: FontScaleMode;
   hoveredAnnotationId: string | null;
   ingestFailureMessage: string | null;
   isIngesting: boolean;
@@ -90,7 +79,6 @@ type ViewerCanvasProps = {
   onAnnotationHover: (annotationId: string | null) => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   onCanvasClick: (point: ViewerAnnotationPoint) => void;
-  onCanvasDoubleClick: () => void;
   onDraftAnchorMove: (point: ViewerAnnotationPoint) => void;
   onDraftDisconnectedPolygonsChange: (
     polygons: ViewerAnnotationPoint[][],
@@ -105,9 +93,6 @@ type ViewerCanvasProps = {
   onWheelNavigate: (deltaY: number) => void;
   overlayOpacity: number;
   overlayRef: MutableRefObject<SVGSVGElement | null>;
-  pinsOnly: boolean;
-  pointAnimation: boolean;
-  practiceMode: boolean;
   selectedAnnotationId: string | null;
   showCrossReferences: boolean;
   showLabels: boolean;
@@ -135,7 +120,6 @@ export function ViewerCanvas({
   currentAtlasFrame,
   currentImageElement,
   draftStructureTitle,
-  fontScaleMode,
   hoveredAnnotationId,
   ingestFailureMessage,
   isIngesting,
@@ -144,7 +128,6 @@ export function ViewerCanvas({
   onAnnotationHover,
   onAnnotationSelect,
   onCanvasClick,
-  onCanvasDoubleClick,
   onDraftAnchorMove,
   onDraftDisconnectedPolygonsChange,
   onDraftLabelMove,
@@ -154,9 +137,6 @@ export function ViewerCanvas({
   onWheelNavigate,
   overlayOpacity,
   overlayRef,
-  pinsOnly,
-  pointAnimation,
-  practiceMode,
   selectedAnnotationId,
   showCrossReferences,
   showLabels,
@@ -220,6 +200,47 @@ export function ViewerCanvas({
       () => (text: string, fontSize: number) =>
         Math.ceil(text.length * fontSize * 0.6),
     );
+  const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
+  const shouldAutoArrangeLabels = showLabels && canvasMode === "browse";
+  const sourceDimensions = resolveViewerImageDimensions([
+    {
+      height: currentAtlasFrame?.height,
+      width: currentAtlasFrame?.width,
+    },
+    {
+      height: currentImageElement?.naturalHeight,
+      width: currentImageElement?.naturalWidth,
+    },
+    {
+      height: currentAsset?.height,
+      width: currentAsset?.width,
+    },
+    {
+      height: currentImageElement?.height,
+      width: currentImageElement?.width,
+    },
+  ]) ?? { height: 1, width: 1 };
+  const sourceImageHeight = sourceDimensions.height;
+  const sourceImageWidth = sourceDimensions.width;
+  const viewerLayout = useMemo(
+    () =>
+      calculateViewerLayout({
+        imageHeight: sourceImageHeight,
+        imageWidth: sourceImageWidth,
+        reserveLabelSpace: shouldAutoArrangeLabels,
+        rotationQuarterTurns: normalizedCanvasRotation,
+        stageHeight: stageSizePx.height,
+        stageWidth: stageSizePx.width,
+      }),
+    [
+      normalizedCanvasRotation,
+      shouldAutoArrangeLabels,
+      sourceImageHeight,
+      sourceImageWidth,
+      stageSizePx.height,
+      stageSizePx.width,
+    ],
+  );
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -248,15 +269,15 @@ export function ViewerCanvas({
   const measureLabelRectWidth = useCallback(
     (text: string, fontSize: number, fontWeight: 500 | 700) => {
       return clamp(
-        LABEL_BOX_MIN_WIDTH,
+        viewerLayout.labelBoxMinWidth,
         Math.ceil(
           measureLabelTextWidth(text, fontSize, fontWeight) +
-            LABEL_BOX_PADDING_X * 2,
+            viewerLayout.labelBoxPaddingX * 2,
         ),
-        LABEL_BOX_MAX_WIDTH,
+        viewerLayout.labelBoxMaxWidth,
       );
     },
-    [measureLabelTextWidth],
+    [measureLabelTextWidth, viewerLayout],
   );
 
   useEffect(() => {
@@ -272,7 +293,8 @@ export function ViewerCanvas({
 
   const fitLabelText = useCallback(
     (text: string, fontSize: number, fontWeight: 500 | 700) => {
-      const maxTextWidth = LABEL_BOX_MAX_WIDTH - LABEL_BOX_PADDING_X * 2;
+      const maxTextWidth =
+        viewerLayout.labelBoxMaxWidth - viewerLayout.labelBoxPaddingX * 2;
       const normalized = text.trim();
 
       if (!normalized) {
@@ -318,7 +340,7 @@ export function ViewerCanvas({
 
       return best;
     },
-    [measureLabelTextWidth],
+    [measureLabelTextWidth, viewerLayout],
   );
 
   const clampTextXForLabelBox = useCallback(
@@ -331,18 +353,19 @@ export function ViewerCanvas({
       if (textAnchor === "start") {
         return clamp(
           textX,
-          LABEL_BOX_PADDING_X,
-          viewportWidth - (labelRectWidth - LABEL_BOX_PADDING_X),
+          viewerLayout.labelBoxPaddingX,
+          viewportWidth -
+            (labelRectWidth - viewerLayout.labelBoxPaddingX),
         );
       }
 
       return clamp(
         textX,
-        labelRectWidth - LABEL_BOX_PADDING_X,
-        viewportWidth - LABEL_BOX_PADDING_X,
+        labelRectWidth - viewerLayout.labelBoxPaddingX,
+        viewportWidth - viewerLayout.labelBoxPaddingX,
       );
     },
-    [],
+    [viewerLayout.labelBoxPaddingX],
   );
 
   const activeAreaToolSize =
@@ -375,7 +398,6 @@ export function ViewerCanvas({
   const draftPointerColor =
     annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
   const draftPointerLabel = draftStructureTitle.trim() || "Draft";
-  const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
   const canvasSurfaceTransform = `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale}) rotate(${normalizedCanvasRotation * 90}deg) scaleX(${canvasFlipHorizontal ? -1 : 1}) scaleY(${canvasFlipVertical ? -1 : 1})`;
 
   const resolvePointerPoint = useCallback(
@@ -465,9 +487,7 @@ export function ViewerCanvas({
     previewContext.drawImage(areaMaskCanvas, 0, 0);
     previewContext.globalCompositeOperation = "source-in";
     previewContext.globalAlpha = clamp(
-      annotationForm.overlayOpacity *
-        overlayOpacity *
-        AREA_MASK_PREVIEW_OPACITY_MULTIPLIER,
+      annotationForm.overlayOpacity * overlayOpacity,
       0,
       0.92,
     );
@@ -650,8 +670,8 @@ export function ViewerCanvas({
       const anchorX = isSelected ? annotationForm.anchorX : annotation.anchorX;
       const anchorY = isSelected ? annotationForm.anchorY : annotation.anchorY;
 
-      svgPoint.x = anchorX * 1000;
-      svgPoint.y = anchorY * 1000;
+      svgPoint.x = anchorX * viewerLayout.coordinateWidth;
+      svgPoint.y = anchorY * viewerLayout.coordinateHeight;
 
       const projectedPoint = svgPoint.matrixTransform(screenMatrix);
 
@@ -676,6 +696,8 @@ export function ViewerCanvas({
     overlayRef,
     selectedAnnotationId,
     stageRef,
+    viewerLayout.coordinateHeight,
+    viewerLayout.coordinateWidth,
     visibleAnnotations,
   ]);
 
@@ -838,16 +860,8 @@ export function ViewerCanvas({
       return;
     }
 
-    const width =
-      currentAtlasFrame?.width ??
-      currentAsset?.width ??
-      currentImageElement.naturalWidth ??
-      currentImageElement.width;
-    const height =
-      currentAtlasFrame?.height ??
-      currentAsset?.height ??
-      currentImageElement.naturalHeight ??
-      currentImageElement.height;
+    const height = sourceImageHeight;
+    const width = sourceImageWidth;
     const context = canvas.getContext("2d");
 
     if (!context || width <= 0 || height <= 0) {
@@ -883,12 +897,11 @@ export function ViewerCanvas({
     currentAtlasFrame,
     currentAsset?.height,
     currentAsset?.id,
-    currentAsset?.width,
     currentImageElement,
+    sourceImageHeight,
+    sourceImageWidth,
   ]);
 
-  const shouldAutoArrangeLabels =
-    showLabels && !pinsOnly && canvasMode === "browse";
   const labelLayout = useMemo(() => {
     const labels = new Map<string, ArrangedLabel>();
 
@@ -900,14 +913,10 @@ export function ViewerCanvas({
 
     const stageWidth = Math.max(stageSizePx.width, 1);
     const stageHeight = Math.max(stageSizePx.height, 1);
-    const minRowGap =
-      fontScaleMode === "large" ? LABEL_ROW_GAP_LARGE_PX : LABEL_ROW_GAP_PX;
+    const minRowGap = viewerLayout.labelRowGap;
     const safeMinY = stageHeight * LABEL_SAFE_MIN_Y;
     const safeMaxY = stageHeight * LABEL_SAFE_MAX_Y;
-    const sideBandWidth = Math.min(
-      MAIN_LABEL_BAND_WIDTH_PX,
-      Math.max(stageWidth / 2 - MAIN_LABEL_BAND_MIN_GAP_PX, 120),
-    );
+    const labelBandGap = MAIN_LABEL_BAND_MIN_GAP_PX * viewerLayout.labelScale;
     const bySide: Record<
       LabelSide,
       Array<{ anchorX: number; anchorY: number; id: string }>
@@ -969,22 +978,24 @@ export function ViewerCanvas({
       sideItems.forEach((item, index) => {
         const rowY = distributedRows[index] ?? item.anchorY;
         const labelOffset = clamp(
-          MAIN_LABEL_BASE_OFFSET_PX +
+          viewerLayout.labelBaseOffset +
             Math.abs(item.anchorX - stageWidth / 2) * 0.12,
-          MAIN_LABEL_OFFSET_MIN_PX,
-          MAIN_LABEL_OFFSET_MAX_PX,
+          viewerLayout.labelOffsetMin,
+          viewerLayout.labelOffsetMax,
         );
         const textX =
           side === "right"
             ? clamp(
                 item.anchorX + labelOffset,
-                stageWidth - sideBandWidth + LABEL_BOX_PADDING_X,
-                stageWidth - LABEL_BOX_PADDING_X,
+                viewerLayout.boundsRight + labelBandGap,
+                stageWidth -
+                  viewerLayout.stagePadding -
+                  viewerLayout.labelBoxPaddingX,
               )
             : clamp(
                 item.anchorX - labelOffset,
-                LABEL_BOX_PADDING_X,
-                sideBandWidth - LABEL_BOX_PADDING_X,
+                viewerLayout.stagePadding + viewerLayout.labelBoxPaddingX,
+                viewerLayout.boundsLeft - labelBandGap,
               );
 
         labels.set(item.id, {
@@ -1002,11 +1013,11 @@ export function ViewerCanvas({
       labels,
     };
   }, [
-    fontScaleMode,
     stageSizePx.height,
     stageSizePx.width,
     shouldAutoArrangeLabels,
     mainStageAnchors,
+    viewerLayout,
     visibleAnnotations,
   ]);
 
@@ -1212,18 +1223,19 @@ export function ViewerCanvas({
       <div
         ref={stageRef}
         className={cn(
-          "relative flex h-full min-h-160 touch-none select-none items-center justify-center overscroll-none p-8",
+          "relative flex h-full min-h-160 touch-none select-none items-center justify-center overscroll-none",
           isAreaPaintMode ? "cursor-crosshair" : null,
         )}
         style={{ touchAction: "none" }}
         onDoubleClick={(event) => {
-          if (isAreaPaintMode) {
-            event.preventDefault();
-            event.stopPropagation();
+          if (!isAreaPaintMode) {
             return;
           }
 
-          onCanvasDoubleClick();
+          // Painting saves only from the explicit Save button. Double-clicks
+          // are too easy to trigger while brushing and interrupt the stroke.
+          event.preventDefault();
+          event.stopPropagation();
         }}
         onPointerDown={handleStagePointerDown}
         onPointerMove={handleStagePointerMove}
@@ -1231,16 +1243,18 @@ export function ViewerCanvas({
         onPointerCancel={handleStagePointerEnd}
       >
         <div
-          className="relative inline-block max-w-full"
+          className="relative shrink-0"
           style={{
+            height: viewerLayout.surfaceHeight,
             transform: canvasSurfaceTransform,
             transformOrigin: "center center",
+            width: viewerLayout.surfaceWidth,
           }}
         >
           <canvas
             ref={canvasRef}
             aria-label={currentAsset.label}
-            className="block max-h-[84vh] w-[min(82vh,82vw)] max-w-full object-contain"
+            className="block h-full w-full"
             draggable={false}
           />
           <canvas
@@ -1260,7 +1274,7 @@ export function ViewerCanvas({
               isAreaPaintMode ? "cursor-none" : null,
             )}
             style={{ touchAction: "none" }}
-            viewBox="0 0 1000 1000"
+            viewBox={`0 0 ${viewerLayout.coordinateWidth} ${viewerLayout.coordinateHeight}`}
             onDoubleClick={(event) => {
               if (!isAreaPaintMode) {
                 return;
@@ -1445,7 +1459,6 @@ export function ViewerCanvas({
               areaEditTool={areaEditTool}
               areaToolCursorPoint={areaToolCursorPoint}
               canvasMode={canvasMode}
-              clampTextXForLabelBox={clampTextXForLabelBox}
               disconnectedOverlayColor={disconnectedOverlayColor}
               draftDisconnectedPolygons={draftDisconnectedPolygons}
               draftPointerColor={draftPointerColor}
@@ -1455,7 +1468,6 @@ export function ViewerCanvas({
               draggingLabelRef={draggingLabelRef}
               editLockEnabled={editLockEnabled}
               fitLabelText={fitLabelText}
-              fontScaleMode={fontScaleMode}
               hoveredAnnotationId={hoveredAnnotationId}
               areaPaintPreviewActive={isAreaBrushActive}
               isAreaPaintMode={isAreaPaintMode}
@@ -1465,8 +1477,6 @@ export function ViewerCanvas({
               onDraftAnchorMove={onDraftAnchorMove}
               onDraftLabelMove={onDraftLabelMove}
               overlayOpacity={overlayOpacity}
-              pinsOnly={pinsOnly}
-              practiceMode={practiceMode}
               resolvePointerPoint={resolvePointerPoint}
               selectedAnnotationId={selectedAnnotationId}
               setDraggingLabelId={setDraggingLabelId}
@@ -1475,6 +1485,7 @@ export function ViewerCanvas({
               showDraftPointer={showDraftPointer}
               showLabels={showLabels}
               structuresById={structuresById}
+              viewerLayout={viewerLayout}
               visibleAnnotations={visibleAnnotations}
             />
           </svg>
@@ -1487,26 +1498,22 @@ export function ViewerCanvas({
             draggingLabelId={draggingLabelId}
             editLockEnabled={editLockEnabled}
             fitLabelText={fitLabelText}
-            fontScaleMode={fontScaleMode}
             hoveredAnnotationId={hoveredAnnotationId}
             labelLayout={labelLayout}
             measureLabelRectWidth={measureLabelRectWidth}
             onAnnotationHover={onAnnotationHover}
             onAnnotationSelect={onAnnotationSelect}
-            pinsOnly={pinsOnly}
-            practiceMode={practiceMode}
             selectedAnnotationId={selectedAnnotationId}
             showLabels={showLabels}
             stageSizePx={stageSizePx}
             structuresById={structuresById}
+            viewerLayout={viewerLayout}
             visibleAnnotations={visibleAnnotations}
           />
         ) : null}
       </div>
 
-      {pointAnimation ? (
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.03),transparent_60%)]" />
-      ) : null}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.03),transparent_60%)]" />
     </div>
   );
 }

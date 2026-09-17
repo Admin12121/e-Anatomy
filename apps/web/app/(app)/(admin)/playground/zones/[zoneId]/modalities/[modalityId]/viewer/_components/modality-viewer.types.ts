@@ -7,8 +7,6 @@ export type ViewerCanvasMode =
   | "set-label"
   | "draw-region";
 
-export type FontScaleMode = "auto" | "large";
-
 export type StructureFormState = {
   colorHex: string;
   groupId: string;

@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useGetPublicZoneModalityViewerManifestQuery } from "@/lib/store/services/public-playground-api";
 import { useGetZoneModalityViewerManifestQuery } from "@/lib/store/services/playground-api";
 
-import { isSliceAsset } from "./utils";
+import { isSliceAsset } from "./viewer-data";
 
 const ACTIVE_INGEST_STATUSES = new Set([
   "queued",

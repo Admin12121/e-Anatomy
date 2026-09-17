@@ -6,12 +6,11 @@ import type {
 import {
   DEFAULT_ANNOTATION_COLOR,
   type AnnotationFormState,
-  type FontScaleMode,
 } from "../../modality-viewer.types";
 import {
   type ArrangedLabel,
-  LABEL_BOX_HEIGHT_PADDING,
-  LABEL_BOX_PADDING_X,
+  type ViewerLayout,
+  getAnnotationFocusOpacity,
 } from "./helpers";
 
 type ViewerCanvasAutoArrangedLabelOverlayProps = {
@@ -29,7 +28,6 @@ type ViewerCanvasAutoArrangedLabelOverlayProps = {
     fontSize: number,
     fontWeight: 500 | 700,
   ) => string;
-  fontScaleMode: FontScaleMode;
   hoveredAnnotationId: string | null;
   labelLayout: {
     labels: Map<string, ArrangedLabel>;
@@ -41,8 +39,6 @@ type ViewerCanvasAutoArrangedLabelOverlayProps = {
   ) => number;
   onAnnotationHover: (annotationId: string | null) => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
-  pinsOnly: boolean;
-  practiceMode: boolean;
   selectedAnnotationId: string | null;
   showLabels: boolean;
   stageSizePx: {
@@ -50,6 +46,7 @@ type ViewerCanvasAutoArrangedLabelOverlayProps = {
     height: number;
   };
   structuresById: Map<string, ViewerStructure>;
+  viewerLayout: ViewerLayout;
   visibleAnnotations: ViewerAnnotation[];
 };
 
@@ -59,18 +56,16 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
   draggingLabelId,
   editLockEnabled,
   fitLabelText,
-  fontScaleMode,
   hoveredAnnotationId,
   labelLayout,
   measureLabelRectWidth,
   onAnnotationHover,
   onAnnotationSelect,
-  pinsOnly,
-  practiceMode,
   selectedAnnotationId,
   showLabels,
   stageSizePx,
   structuresById,
+  viewerLayout,
   visibleAnnotations,
 }: ViewerCanvasAutoArrangedLabelOverlayProps) {
   return (
@@ -93,6 +88,11 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
         }
 
         const isHovered = annotation.id === hoveredAnnotationId;
+        const focusOpacity = getAnnotationFocusOpacity({
+          annotationId: annotation.id,
+          hoveredId: hoveredAnnotationId,
+          selectedId: selectedAnnotationId,
+        });
         const preferredAnnotationColor = isSelected
           ? annotationForm.colorHex.trim() || structure.colorHex
           : structure.colorHex;
@@ -101,11 +101,8 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
           ? annotationForm.leaderColorHex || color
           : color;
         const label = annotation.titleOverride || structure.title;
-        const textVisible =
-          showLabels &&
-          !pinsOnly &&
-          (!practiceMode || isSelected || isHovered);
-        const fontSize = fontScaleMode === "large" ? 24 : 18;
+        const textVisible = showLabels;
+        const fontSize = viewerLayout.fontSize;
         const labelFontWeight: 500 | 700 = isSelected ? 700 : 500;
         const displayLabel = fitLabelText(label, fontSize, labelFontWeight);
         const highlightLabel =
@@ -116,7 +113,8 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
           fontSize,
           labelFontWeight,
         );
-        const labelRectHeight = fontSize + LABEL_BOX_HEIGHT_PADDING;
+        const labelRectHeight =
+          fontSize + viewerLayout.labelBoxHeightPadding;
         const resolvedLabelTextX = clampTextXForLabelBox(
           arrangedLabel.textX,
           arrangedLabel.textAnchor,
@@ -125,8 +123,10 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
         );
         const labelRectX =
           arrangedLabel.textAnchor === "start"
-            ? resolvedLabelTextX - LABEL_BOX_PADDING_X
-            : resolvedLabelTextX - labelRectWidth + LABEL_BOX_PADDING_X;
+            ? resolvedLabelTextX - viewerLayout.labelBoxPaddingX
+            : resolvedLabelTextX -
+              labelRectWidth +
+              viewerLayout.labelBoxPaddingX;
         const labelRectY = arrangedLabel.y - labelRectHeight / 2;
         const labelTickX =
           arrangedLabel.textAnchor === "start"
@@ -141,6 +141,10 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
           <g
             key={`main-label-${annotation.id}`}
             className="pointer-events-auto"
+            style={{
+              opacity: focusOpacity,
+              transition: "opacity 140ms ease",
+            }}
             onMouseEnter={() => {
               onAnnotationHover(annotation.id);
             }}

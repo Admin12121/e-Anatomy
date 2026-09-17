@@ -26,8 +26,6 @@ import type {
   ViewerAnnotationPoint,
   ViewerStructure,
   ViewerStructureGroup,
-  ZoneModalityAtlasFrame,
-  ZoneModalityAtlasPage,
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 import {
@@ -56,17 +54,49 @@ import {
   EMPTY_GROUP_FORM,
   EMPTY_STRUCTURE_FORM,
   type AnnotationFormState,
-  type FontScaleMode,
   type GroupFormState,
   type StructureFormState,
   type ViewerCanvasMode,
 } from "./modality-viewer.types";
 import EmptyParticle from "./empty";
+import {
+  areAnnotationFormsEqual,
+  buildAnnotationFormState,
+  moveAnnotationPolygonPoint,
+  replaceAnnotationPolygon,
+} from "./modality-viewer/annotation-form";
+import {
+  buildStructureSearchHits,
+  filterVisibleAnnotations,
+} from "./modality-viewer/annotation-visibility";
 import { ViewerBlockView } from "./modality-viewer/block-view";
+import {
+  findNextPreloadTaskIndex,
+  sortPreloadQueue,
+  type PreloadPriority,
+  type PreloadQueueItem,
+} from "./modality-viewer/preload-queue";
 import { SliceFilmstrip } from "./modality-viewer/slice-filmstrip";
-import { areAssetIdOrdersEqual } from "./modality-viewer/slice-timeline";
+import {
+  areAssetIdOrdersEqual,
+  filterAssetIdsBySet,
+  getAlternatingAssetIds,
+  getPendingDeletedAssetIds,
+  getPendingSliceSortUpdates,
+  getValidHistoryOrder,
+  removeAssetIds,
+} from "./modality-viewer/slice-timeline";
 import { StudyPanel } from "./modality-viewer/study-panel";
 import { useViewerManifest } from "./modality-viewer/use-viewer-manifest";
+import {
+  buildAssetImageSourceMap,
+  buildViewerSliceItems,
+  getAssetImageSource,
+  getSortedSliceAssets,
+  isSliceAsset,
+  mergeSliceTimelineIds,
+  orderAssetsByIds,
+} from "./modality-viewer/viewer-data";
 import { ViewerToolbar } from "./modality-viewer/viewer-toolbar";
 import {
   ViewerCanvas,
@@ -80,10 +110,8 @@ import {
   createDefaultLabelX,
   formatModalityTypeLabel,
   formatOrientationLabel,
-  isSliceAsset,
   readMutationError,
   splitMultilineList,
-  structureMatchesSearch,
 } from "./modality-viewer/utils";
 import {
   createAssetWeightingOptions,
@@ -103,25 +131,6 @@ type NavigationSource =
   | "search"
   | "weighting"
   | "wheel";
-type PreloadPriority = "high" | "low";
-
-type ViewerSliceItem = {
-  asset: ZoneModalityAsset;
-  assetId: string;
-  assetIndex: number;
-  atlasFrame: ZoneModalityAtlasFrame | null;
-  atlasPage: ZoneModalityAtlasPage | null;
-  thumbnailSrc: string;
-};
-
-type PreloadQueueItem = {
-  asset: ZoneModalityAsset;
-  cacheKey: string;
-  imageUrl: string;
-  order: number;
-  priority: PreloadPriority;
-  resolve: () => void;
-};
 
 const IMAGE_PRELOAD_RADIUS = 16;
 const IMMEDIATE_PRELOAD_BURST = 6;
@@ -135,110 +144,7 @@ const FILMSTRIP_SCROLL_JUMP_THRESHOLD_PX = 1600;
 const WHEEL_DELTA_THRESHOLD = 120;
 const WHEEL_NAVIGATION_COOLDOWN_MS = 110;
 
-function buildAnnotationFormState({
-  annotation,
-  fallbackColor,
-}: {
-  annotation: ViewerAnnotation | null;
-  fallbackColor: string;
-}): AnnotationFormState {
-  const resolvedColor = toColorInputValue(annotation?.colorHex, fallbackColor);
-
-  return {
-    anchorX: annotation?.anchorX ?? EMPTY_ANNOTATION_FORM.anchorX,
-    anchorY: annotation?.anchorY ?? EMPTY_ANNOTATION_FORM.anchorY,
-    colorHex: resolvedColor,
-    labelX: annotation?.labelX ?? EMPTY_ANNOTATION_FORM.labelX,
-    labelY: annotation?.labelY ?? EMPTY_ANNOTATION_FORM.labelY,
-    leaderColorHex: toColorInputValue(
-      annotation?.leaderColorHex,
-      resolvedColor,
-    ),
-    overlayColorHex: toColorInputValue(
-      annotation?.overlayColorHex,
-      resolvedColor,
-    ),
-    overlayOpacity:
-      annotation?.overlayOpacity ?? EMPTY_ANNOTATION_FORM.overlayOpacity,
-    polygonPoints: annotation?.polygonPoints ?? [],
-  };
-}
-
-function areAnnotationPointsEqual(
-  left: ViewerAnnotationPoint[],
-  right: ViewerAnnotationPoint[],
-) {
-  const epsilon = 0.0005;
-
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every((point, index) => {
-    const other = right[index];
-
-    if (!other) {
-      return false;
-    }
-
-    return (
-      Math.abs(point.x - other.x) <= epsilon &&
-      Math.abs(point.y - other.y) <= epsilon
-    );
-  });
-}
-
-function areAnnotationFormsEqual(
-  left: AnnotationFormState,
-  right: AnnotationFormState,
-) {
-  const epsilon = 0.0005;
-
-  return (
-    Math.abs(left.anchorX - right.anchorX) <= epsilon &&
-    Math.abs(left.anchorY - right.anchorY) <= epsilon &&
-    toColorInputValue(left.colorHex, DEFAULT_ANNOTATION_COLOR).toLowerCase() ===
-      toColorInputValue(right.colorHex, DEFAULT_ANNOTATION_COLOR).toLowerCase() &&
-    Math.abs(left.labelX - right.labelX) <= epsilon &&
-    Math.abs(left.labelY - right.labelY) <= epsilon &&
-    toColorInputValue(
-      left.leaderColorHex,
-      DEFAULT_ANNOTATION_COLOR,
-    ).toLowerCase() ===
-      toColorInputValue(
-        right.leaderColorHex,
-        DEFAULT_ANNOTATION_COLOR,
-      ).toLowerCase() &&
-    toColorInputValue(
-      left.overlayColorHex,
-      DEFAULT_ANNOTATION_COLOR,
-    ).toLowerCase() ===
-      toColorInputValue(
-        right.overlayColorHex,
-        DEFAULT_ANNOTATION_COLOR,
-      ).toLowerCase() &&
-    Math.abs(left.overlayOpacity - right.overlayOpacity) <= epsilon &&
-    areAnnotationPointsEqual(left.polygonPoints, right.polygonPoints)
-  );
-}
 const SCRUB_PREVIEW_CACHE_MAX_ASSET_COUNT = 240;
-
-function preloadPriorityRank(priority: PreloadPriority) {
-  return priority === "high" ? 0 : 1;
-}
-
-function sortPreloadQueue(queue: PreloadQueueItem[]) {
-  queue.sort((left, right) => {
-    const priorityDiff =
-      preloadPriorityRank(left.priority) - preloadPriorityRank(right.priority);
-
-    if (priorityDiff !== 0) {
-      return priorityDiff;
-    }
-
-    return left.order - right.order;
-  });
-}
 
 type DraftModalityViewerProps = {
   modalityId: string;
@@ -358,16 +264,11 @@ function ModalityViewerShell({
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [canvasMode, setCanvasMode] = useState<ViewerCanvasMode>("browse");
   const [showLabels, setShowLabels] = useState(true);
-  const practiceMode = false;
-  const pinsOnly = false;
   const [targetedLabeling, setTargetedLabeling] = useState(false);
   const [showOrientation, setShowOrientation] = useState(true);
   const [showCrossReferences, setShowCrossReferences] = useState(false);
   const darkMode = resolvedTheme !== "light";
   const [overlayOpacity, setOverlayOpacity] = useState(0.72);
-  const reverseScroll = false;
-  const pointAnimation = true;
-  const fontScaleMode: FontScaleMode = "auto";
   const [groupForm, setGroupForm] = useState<GroupFormState>(EMPTY_GROUP_FORM);
   const [structureForm, setStructureForm] =
     useState<StructureFormState>(EMPTY_STRUCTURE_FORM);
@@ -384,7 +285,6 @@ function ModalityViewerShell({
   const [showSliceEditorPanel, setShowSliceEditorPanel] = useState(false);
   const [mainInteractionTool, setMainInteractionTool] =
     useState<MainInteractionTool>("layers");
-  const effectiveShowCrossReferences = showCrossReferences;
   const [showStudyPanel, setShowStudyPanel] = useState(true);
   const [showControlPanel, setShowControlPanel] = useState(false);
   const [canvasRotationQuarterTurns, setCanvasRotationQuarterTurns] =
@@ -478,14 +378,7 @@ function ModalityViewerShell({
     [annotations],
   );
   const baseSliceAssets = useMemo(
-    () =>
-      assets
-        .filter((asset) => isSliceAsset(asset))
-        .sort((left, right) =>
-          left.sortOrder === right.sortOrder
-            ? left.createdAt.localeCompare(right.createdAt)
-            : left.sortOrder - right.sortOrder,
-        ),
+    () => getSortedSliceAssets(assets),
     [assets],
   );
   const baseSliceAssetIds = useMemo(
@@ -515,33 +408,17 @@ function ModalityViewerShell({
   );
   const assetImageSourceById = useMemo(
     () =>
-      new Map(
-        assets.map((asset) => {
-          const atlasFrame = atlasFrameByAssetId.get(asset.id) ?? null;
-          const atlasPage = atlasFrame
-            ? (atlasPageById.get(atlasFrame.atlasId) ?? null)
-            : null;
-
-          return [
-            asset.id,
-            {
-              atlasFrame,
-              atlasPage,
-              cacheKey: atlasPage?.id ?? asset.id,
-              imageUrl: atlasPage?.imageUrl ?? asset.imageUrl,
-            },
-          ];
-        }),
+      buildAssetImageSourceMap(
+        assets,
+        atlasFrameByAssetId,
+        atlasPageById,
       ),
     [assets, atlasFrameByAssetId, atlasPageById],
   );
   const normalizedSliceTimelineIds =
     sliceTimelineIds.length > 0 ? sliceTimelineIds : baseSliceAssetIds;
   const orderedSliceAssets = useMemo(
-    () =>
-      normalizedSliceTimelineIds
-        .map((assetId) => sliceAssetById.get(assetId))
-        .filter((asset): asset is ZoneModalityAsset => Boolean(asset)),
+    () => orderAssetsByIds(normalizedSliceTimelineIds, sliceAssetById),
     [normalizedSliceTimelineIds, sliceAssetById],
   );
   const weightings = useMemo(
@@ -557,43 +434,19 @@ function ModalityViewerShell({
     [activeAssets],
   );
   const oddSliceIds = useMemo(
-    () =>
-      activeAssets
-        .filter((_, index) => index % 2 === 0)
-        .map((asset) => asset.id),
+    () => getAlternatingAssetIds(activeAssets, 0),
     [activeAssets],
   );
   const evenSliceIds = useMemo(
-    () =>
-      activeAssets
-        .filter((_, index) => index % 2 === 1)
-        .map((asset) => asset.id),
+    () => getAlternatingAssetIds(activeAssets, 1),
     [activeAssets],
   );
   const activeMultiSelectedSliceIds = useMemo(
-    () =>
-      multiSelectedSliceIds.filter((assetId) => activeAssetIdSet.has(assetId)),
+    () => filterAssetIdsBySet(multiSelectedSliceIds, activeAssetIdSet),
     [activeAssetIdSet, multiSelectedSliceIds],
   );
-  const viewerSliceItems = useMemo<ViewerSliceItem[]>(
-    () =>
-      activeAssets.map((asset, assetIndex) => {
-        const source = assetImageSourceById.get(asset.id) ?? {
-          atlasFrame: null,
-          atlasPage: null,
-          cacheKey: asset.id,
-          imageUrl: asset.thumbnailUrl || asset.imageUrl,
-        };
-
-        return {
-          asset,
-          assetId: asset.id,
-          assetIndex,
-          atlasFrame: source.atlasFrame,
-          atlasPage: source.atlasPage,
-          thumbnailSrc: source.imageUrl,
-        };
-      }),
+  const viewerSliceItems = useMemo(
+    () => buildViewerSliceItems(activeAssets, assetImageSourceById),
     [activeAssets, assetImageSourceById],
   );
   const activeSliceAssetById = useMemo(
@@ -608,18 +461,11 @@ function ModalityViewerShell({
 
   useEffect(() => {
     setSliceTimelineIds((current) => {
-      const preserved = current.filter((assetId) =>
-        baseSliceAssetIdSet.has(assetId),
-      );
-      const preservedSet = new Set(preserved);
-      const appended = baseSliceAssetIds.filter(
-        (assetId) => !preservedSet.has(assetId),
-      );
-      const next = [...preserved, ...appended];
+      const next = mergeSliceTimelineIds(current, baseSliceAssetIds);
 
       return areAssetIdOrdersEqual(current, next) ? current : next;
     });
-  }, [baseSliceAssetIdSet, baseSliceAssetIds]);
+  }, [baseSliceAssetIds]);
   useEffect(() => {
     setMultiSelectedSliceIds((current) => {
       const next = current.filter((assetId) => activeAssetIdSet.has(assetId));
@@ -759,10 +605,7 @@ function ModalityViewerShell({
 
   const preloadAssetPreview = useCallback(
     (asset: ZoneModalityAsset) => {
-      const source = assetImageSourceById.get(asset.id) ?? {
-        cacheKey: asset.id,
-        imageUrl: asset.thumbnailUrl || asset.imageUrl,
-      };
+      const source = getAssetImageSource(asset, assetImageSourceById);
       const { cacheKey, imageUrl } = source;
       const fullImage = imageElementCacheRef.current.get(cacheKey);
 
@@ -846,27 +689,16 @@ function ModalityViewerShell({
       preloadInFlightCountRef.current < PRELOAD_MAX_IN_FLIGHT &&
       preloadQueueRef.current.length > 0
     ) {
-      const hasHighPriorityQueued = preloadQueueRef.current.some(
-        (task) => task.priority === "high",
+      const nextTaskIndex = findNextPreloadTaskIndex(
+        preloadQueueRef.current,
+        {
+          inFlightCount: preloadInFlightCountRef.current,
+          lowInFlightCount: preloadLowInFlightCountRef.current,
+          maxInFlight: PRELOAD_MAX_IN_FLIGHT,
+          maxLowInFlight: PRELOAD_MAX_LOW_IN_FLIGHT,
+          reservedHighPrioritySlots: PRELOAD_HIGH_PRIORITY_RESERVED_SLOTS,
+        },
       );
-      const nextTaskIndex = preloadQueueRef.current.findIndex((task) => {
-        if (task.priority === "high") {
-          return true;
-        }
-
-        if (preloadLowInFlightCountRef.current >= PRELOAD_MAX_LOW_IN_FLIGHT) {
-          return false;
-        }
-
-        if (!hasHighPriorityQueued) {
-          return true;
-        }
-
-        return (
-          preloadInFlightCountRef.current <
-          PRELOAD_MAX_IN_FLIGHT - PRELOAD_HIGH_PRIORITY_RESERVED_SLOTS
-        );
-      });
 
       if (nextTaskIndex < 0) {
         return;
@@ -963,10 +795,7 @@ function ModalityViewerShell({
         return Promise.resolve();
       }
 
-      const source = assetImageSourceById.get(asset.id) ?? {
-        cacheKey: asset.id,
-        imageUrl: asset.thumbnailUrl || asset.imageUrl,
-      };
+      const source = getAssetImageSource(asset, assetImageSourceById);
       const { cacheKey, imageUrl } = source;
 
       if (
@@ -1045,10 +874,7 @@ function ModalityViewerShell({
     (asset: ZoneModalityAsset, source: NavigationSource) => {
       const activeCurrentAssetId = currentAssetIdRef.current;
       const activePendingAssetId = pendingAssetIdRef.current;
-      const sourceImage = assetImageSourceById.get(asset.id) ?? {
-        cacheKey: asset.id,
-        imageUrl: asset.thumbnailUrl || asset.imageUrl,
-      };
+      const sourceImage = getAssetImageSource(asset, assetImageSourceById);
       const cacheKey = sourceImage.cacheKey;
 
       if (activePendingAssetId && activePendingAssetId !== asset.id) {
@@ -1347,47 +1173,12 @@ function ModalityViewerShell({
   }, [annotationBaselineForm]);
 
   const searchHits = useMemo(() => {
-    const query = deferredSearchQuery.trim().toLowerCase();
-
-    if (!query) {
-      return [];
-    }
-
-    return structures
-      .map((structure) => {
-        const haystack = [
-          structure.title,
-          structure.latinName ?? "",
-          structure.shortDescription ?? "",
-          ...structure.synonyms,
-        ]
-          .join(" ")
-          .toLowerCase();
-
-        if (!haystack.includes(query)) {
-          return null;
-        }
-
-        const relatedAnnotation = annotations.find(
-          (annotation) => annotation.structureId === structure.id,
-        );
-        const relatedAsset =
-          relatedAnnotation && assetById.get(relatedAnnotation.assetId);
-
-        return {
-          asset: relatedAsset ?? null,
-          structure,
-        };
-      })
-      .filter(
-        (
-          value,
-        ): value is {
-          asset: ZoneModalityAsset | null;
-          structure: ViewerStructure;
-        } => Boolean(value),
-      )
-      .slice(0, 8);
+    return buildStructureSearchHits({
+      annotations,
+      assetsById: assetById,
+      query: deferredSearchQuery,
+      structures,
+    });
   }, [annotations, assetById, deferredSearchQuery, structures]);
 
   useEffect(() => {
@@ -1742,32 +1533,13 @@ function ModalityViewerShell({
   }, []);
 
   const visibleAnnotations = useMemo(() => {
-    const normalizedSearch = deferredSearchQuery.trim().toLowerCase();
-
-    return currentAnnotations.filter((annotation) => {
-      const structure = structuresById.get(annotation.structureId);
-
-      if (!structure) {
-        return false;
-      }
-
-      if (structure.groupId && !visibleGroupIds.includes(structure.groupId)) {
-        return false;
-      }
-
-      if (
-        targetedLabeling &&
-        selectedStructureId &&
-        structure.id !== selectedStructureId
-      ) {
-        return false;
-      }
-
-      if (!normalizedSearch) {
-        return true;
-      }
-
-      return structureMatchesSearch(structure, normalizedSearch);
+    return filterVisibleAnnotations({
+      annotations: currentAnnotations,
+      query: deferredSearchQuery,
+      selectedStructureId,
+      structuresById,
+      targetedLabeling,
+      visibleGroupIds,
     });
   }, [
     currentAnnotations,
@@ -1897,55 +1669,29 @@ function ModalityViewerShell({
     activeMultiSelectedSliceIds.length > 0 &&
     activeMultiSelectedSliceIds.length < activeAssets.length;
   const canFlipSliceTimeline = activeAssets.length > 1;
-  const pendingDeletedSliceIds = useMemo(() => {
-    const nextOrderSet = new Set(normalizedSliceTimelineIds);
-
-    return baseSliceAssetIds.filter((assetId) => !nextOrderSet.has(assetId));
-  }, [baseSliceAssetIds, normalizedSliceTimelineIds]);
-  const pendingSliceSortUpdates = useMemo(() => {
-    if (areAssetIdOrdersEqual(normalizedSliceTimelineIds, baseSliceAssetIds)) {
-      return [];
-    }
-
-    const sortStart = baseSliceAssets.reduce(
-      (minimum, asset) => Math.min(minimum, asset.sortOrder),
-      Number.POSITIVE_INFINITY,
-    );
-    const startSortOrder = Number.isFinite(sortStart) ? sortStart : 0;
-
-    return normalizedSliceTimelineIds
-      .map((assetId, index) => {
-        const asset = sliceAssetById.get(assetId);
-
-        if (!asset) {
-          return null;
-        }
-
-        const nextSortOrder = startSortOrder + index;
-
-        if (asset.sortOrder === nextSortOrder) {
-          return null;
-        }
-
-        return {
-          asset,
-          nextSortOrder,
-        };
-      })
-      .filter(
-        (
-          value,
-        ): value is {
-          asset: ZoneModalityAsset;
-          nextSortOrder: number;
-        } => Boolean(value),
-      );
-  }, [
-    baseSliceAssetIds,
-    baseSliceAssets,
-    normalizedSliceTimelineIds,
-    sliceAssetById,
-  ]);
+  const pendingDeletedSliceIds = useMemo(
+    () =>
+      getPendingDeletedAssetIds(
+        baseSliceAssetIds,
+        normalizedSliceTimelineIds,
+      ),
+    [baseSliceAssetIds, normalizedSliceTimelineIds],
+  );
+  const pendingSliceSortUpdates = useMemo(
+    () =>
+      getPendingSliceSortUpdates({
+        assetsById: sliceAssetById,
+        baseAssets: baseSliceAssets,
+        baseOrder: baseSliceAssetIds,
+        nextOrder: normalizedSliceTimelineIds,
+      }),
+    [
+      baseSliceAssetIds,
+      baseSliceAssets,
+      normalizedSliceTimelineIds,
+      sliceAssetById,
+    ],
+  );
   const hasPendingSliceTimelineChanges =
     pendingDeletedSliceIds.length > 0 || pendingSliceSortUpdates.length > 0;
 
@@ -2746,23 +2492,9 @@ function ModalityViewerShell({
       return;
     }
 
-    if (index < 0) {
-      return;
-    }
-
-    setAnnotationForm((current) => {
-      if (index >= current.polygonPoints.length) {
-        return current;
-      }
-
-      const nextPolygonPoints = [...current.polygonPoints];
-      nextPolygonPoints[index] = point;
-
-      return {
-        ...current,
-        polygonPoints: nextPolygonPoints,
-      };
-    });
+    setAnnotationForm((current) =>
+      moveAnnotationPolygonPoint(current, index, point),
+    );
   }
 
   function handleDraftPolygonReplace(points: ViewerAnnotationPoint[]) {
@@ -2770,33 +2502,9 @@ function ModalityViewerShell({
       return;
     }
 
-    setAnnotationForm((current) => {
-      if (points.length < 3 || selectedAnnotationId) {
-        return {
-          ...current,
-          polygonPoints: points,
-        };
-      }
-
-      const { sumX, sumY } = points.reduce(
-        (accumulator, point) => ({
-          sumX: accumulator.sumX + point.x,
-          sumY: accumulator.sumY + point.y,
-        }),
-        { sumX: 0, sumY: 0 },
-      );
-      const nextAnchorX = clamp(sumX / points.length, 0.03, 0.97);
-      const nextAnchorY = clamp(sumY / points.length, 0.03, 0.97);
-
-      return {
-        ...current,
-        anchorX: nextAnchorX,
-        anchorY: nextAnchorY,
-        labelX: createDefaultLabelX(nextAnchorX),
-        labelY: clamp(nextAnchorY, 0.08, 0.92),
-        polygonPoints: points,
-      };
-    });
+    setAnnotationForm((current) =>
+      replaceAnnotationPolygon(current, points, Boolean(selectedAnnotationId)),
+    );
   }
 
   function handleDraftDisconnectedPolygonsChange(
@@ -2809,21 +2517,12 @@ function ModalityViewerShell({
     setDraftDisconnectedPolygons(polygons);
   }
 
-  function handleCanvasDoubleClick() {
-    if (readOnly) {
-      return;
-    }
-
-    // Painting should only save from the explicit Save button. Double-clicks
-    // are too easy to trigger while brushing and interrupt the stroke.
-  }
-
   function handleWheelNavigation(deltaY: number) {
     if (activeAssets.length <= 1) {
       return;
     }
 
-    wheelDeltaRef.current += reverseScroll ? -deltaY : deltaY;
+    wheelDeltaRef.current += deltaY;
 
     if (Math.abs(wheelDeltaRef.current) < WHEEL_DELTA_THRESHOLD) {
       return;
@@ -2988,9 +2687,7 @@ function ModalityViewerShell({
     }
 
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter(
-        (assetId) => !leftSliceIds.has(assetId),
-      ),
+      removeAssetIds(normalizedSliceTimelineIds, leftSliceIds),
     );
   }
 
@@ -3012,9 +2709,7 @@ function ModalityViewerShell({
     }
 
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter(
-        (assetId) => !rightSliceIds.has(assetId),
-      ),
+      removeAssetIds(normalizedSliceTimelineIds, rightSliceIds),
     );
   }
 
@@ -3027,13 +2722,13 @@ function ModalityViewerShell({
       return;
     }
 
+    const selectedSliceIdSet = new Set([activeViewerAssetId]);
+
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter(
-        (assetId) => assetId !== activeViewerAssetId,
-      ),
+      removeAssetIds(normalizedSliceTimelineIds, selectedSliceIdSet),
     );
     setMultiSelectedSliceIds((current) =>
-      current.filter((assetId) => assetId !== activeViewerAssetId),
+      removeAssetIds(current, selectedSliceIdSet),
     );
   }
 
@@ -3049,12 +2744,10 @@ function ModalityViewerShell({
     const oddSliceIdSet = new Set(oddSliceIds);
 
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter(
-        (assetId) => !oddSliceIdSet.has(assetId),
-      ),
+      removeAssetIds(normalizedSliceTimelineIds, oddSliceIdSet),
     );
     setMultiSelectedSliceIds((current) =>
-      current.filter((assetId) => !oddSliceIdSet.has(assetId)),
+      removeAssetIds(current, oddSliceIdSet),
     );
   }
 
@@ -3070,12 +2763,10 @@ function ModalityViewerShell({
     const evenSliceIdSet = new Set(evenSliceIds);
 
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter(
-        (assetId) => !evenSliceIdSet.has(assetId),
-      ),
+      removeAssetIds(normalizedSliceTimelineIds, evenSliceIdSet),
     );
     setMultiSelectedSliceIds((current) =>
-      current.filter((assetId) => !evenSliceIdSet.has(assetId)),
+      removeAssetIds(current, evenSliceIdSet),
     );
   }
 
@@ -3115,9 +2806,7 @@ function ModalityViewerShell({
     const selectedSliceIdSet = new Set(activeMultiSelectedSliceIds);
 
     commitSliceTimeline(
-      normalizedSliceTimelineIds.filter(
-        (assetId) => !selectedSliceIdSet.has(assetId),
-      ),
+      removeAssetIds(normalizedSliceTimelineIds, selectedSliceIdSet),
     );
     setMultiSelectedSliceIds([]);
   }
@@ -3146,11 +2835,12 @@ function ModalityViewerShell({
       return;
     }
 
-    const filteredPrevious = previousOrder.filter((assetId) =>
-      baseSliceAssetIdSet.has(assetId),
+    const filteredPrevious = getValidHistoryOrder(
+      previousOrder,
+      baseSliceAssetIdSet,
     );
 
-    if (filteredPrevious.length === 0) {
+    if (!filteredPrevious) {
       return;
     }
 
@@ -3173,11 +2863,12 @@ function ModalityViewerShell({
       return;
     }
 
-    const filteredNext = nextOrder.filter((assetId) =>
-      baseSliceAssetIdSet.has(assetId),
+    const filteredNext = getValidHistoryOrder(
+      nextOrder,
+      baseSliceAssetIdSet,
     );
 
-    if (filteredNext.length === 0) {
+    if (!filteredNext) {
       return;
     }
 
@@ -3328,19 +3019,15 @@ function ModalityViewerShell({
           currentAsset={currentAsset}
           currentAtlasFrame={currentAtlasFrame}
           currentImageElement={currentImageElement}
-          fontScaleMode={fontScaleMode}
           hoveredAnnotationId={hoveredAnnotationId}
           ingestFailureMessage={ingestFailureMessage}
           isIngesting={shouldPollViewerData && !hasSliceAssets}
           isPreparingInitialAsset={isPreparingInitialAsset}
           overlayOpacity={overlayOpacity}
           overlayRef={overlayRef}
-          pinsOnly={pinsOnly}
-          pointAnimation={pointAnimation}
-          practiceMode={practiceMode}
           selectedAnnotationId={selectedAnnotationId}
           draftStructureTitle={selectedStructure?.title ?? structureForm.title}
-          showCrossReferences={effectiveShowCrossReferences}
+          showCrossReferences={showCrossReferences}
           showOrientation={showOrientation}
           showLabels={showLabels}
           viewerTitle={viewerTitle}
@@ -3360,7 +3047,6 @@ function ModalityViewerShell({
             setSelectedGroupId(structure?.groupId ?? null);
           }}
           onCanvasClick={handleCanvasClick}
-          onCanvasDoubleClick={handleCanvasDoubleClick}
           onDraftAnchorMove={handleDraftAnchorMove}
           onDraftDisconnectedPolygonsChange={
             handleDraftDisconnectedPolygonsChange
@@ -3380,7 +3066,7 @@ function ModalityViewerShell({
           showControlPanel={showControlPanel}
           crossReferenceToggleDisabled={readOnly}
           overlayOpacity={annotationForm.overlayOpacity}
-          showCrossReferences={effectiveShowCrossReferences}
+          showCrossReferences={showCrossReferences}
           showStudyPanel={showStudyPanel}
           onAreaBrushSizeChange={setAreaBrushSize}
           onAreaDraftReset={clearPolygonDraft}
