@@ -89,20 +89,18 @@ export function ContentFilters({
         <SelectPopup>
           <SelectItem value="all">All statuses</SelectItem>
           <SelectItem value="draft">Draft</SelectItem>
-          <SelectItem value="active">Active</SelectItem>
-          <SelectItem value="published">Published</SelectItem>
-          <SelectItem value="archived">Archived</SelectItem>
+          <SelectItem value="uploaded">Uploaded</SelectItem>
+          <SelectItem value="processing">Processing</SelectItem>
+          <SelectItem value="ready">Ready</SelectItem>
+          <SelectItem value="failed">Failed</SelectItem>
         </SelectPopup>
       </Select>
 
       <div className="flex justify-end gap-2">
-        <Button type="submit" variant="outline">
-          Search
-        </Button>
         {hasFilters ? (
           <Button
             type="button"
-            size="icon"
+            size="icon-lg"
             variant="ghost"
             aria-label="Clear filters"
             onClick={() => {
@@ -113,10 +111,9 @@ export function ContentFilters({
             <XIcon />
           </Button>
         ) : null}
-        <Button asChild>
+        <Button asChild size="icon-lg" aria-label="Add content">
           <Link href="/playground">
             <PlusIcon />
-            Add content
           </Link>
         </Button>
       </div>

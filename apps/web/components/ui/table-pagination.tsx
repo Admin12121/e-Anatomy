@@ -14,7 +14,6 @@ import {
   PaginationContent,
   PaginationEllipsis,
   PaginationItem,
-  PaginationLink,
 } from "@/components/ui/pagination"
 import { Button } from "@/components/ui/button"
 
@@ -51,11 +50,7 @@ function PageControl({
   href: string
   label?: string
 }) {
-  const className = cn(
-    "size-9 min-w-9 rounded-lg",
-    active &&
-      "border-primary bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 hover:text-primary-foreground",
-  )
+  const className = cn("size-9 min-w-9 rounded-lg")
 
   if (disabled) {
     return (
@@ -73,14 +68,19 @@ function PageControl({
   }
 
   return (
-    <PaginationLink
+    <Button
+      asChild
+      aria-current={active ? "page" : undefined}
       aria-label={label}
       className={className}
-      isActive={active}
-      render={<Link href={href} scroll={false} />}
+      data-slot="table-pagination-button"
+      size="icon"
+      variant={active ? "default" : "ghost"}
     >
-      {children}
-    </PaginationLink>
+      <Link href={href} scroll={false}>
+        {children}
+      </Link>
+    </Button>
   )
 }
 

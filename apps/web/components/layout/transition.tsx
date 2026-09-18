@@ -8,11 +8,13 @@ import {
   type Ref,
 } from "react"
 import Image from "next/image"
+import { usePathname } from "next/navigation"
 import gsap from "gsap"
 import { CustomEase } from "gsap/CustomEase"
 import { TransitionRouter } from "next-transition-router"
 
 import { cn } from "@/lib/utils"
+import { markNonRootClientRouteVisited } from "./preloader-session"
 
 gsap.registerPlugin(CustomEase)
 
@@ -29,6 +31,49 @@ const BACKDROP_Z_INDEX = 2147482999
 const PAGE_Z_INDEX = 2147483001
 const CHROME_Z_INDEX = 2147483002
 const REVEALER_Z_INDEX = 2147483003
+
+const PUBLIC_STATIC_ROUTES = new Set(["/", "/account", "/login"])
+const ADMIN_ROUTE_SEGMENTS = new Set([
+  "analytics",
+  "content",
+  "dashboard",
+  "playground",
+  "settings",
+  "users",
+])
+
+function normalizeRoutePath(path: string | undefined) {
+  if (!path) {
+    return null
+  }
+
+  const pathname = path.split(/[?#]/, 1)[0] || "/"
+
+  return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname
+}
+
+function isPublicAnimatedRoute(path: string | undefined) {
+  const pathname = normalizeRoutePath(path)
+
+  if (!pathname) {
+    return false
+  }
+
+  if (PUBLIC_STATIC_ROUTES.has(pathname)) {
+    return true
+  }
+
+  const segments = pathname.split("/").filter(Boolean)
+
+  return segments.length === 2 && !ADMIN_ROUTE_SEGMENTS.has(segments[0] ?? "")
+}
+
+function shouldAnimateRouteTransition(
+  from: string | undefined,
+  to: string | undefined,
+) {
+  return isPublicAnimatedRoute(from) && isPublicAnimatedRoute(to)
+}
 
 const BACKDROP_ROWS = [
   [
@@ -225,6 +270,7 @@ function TransitionChrome({
 }
 
 export default function TransitionProvider({ children }: TransitionProviderProps) {
+  const pathname = usePathname()
   const pageRef = useRef<HTMLDivElement | null>(null)
   const backdropRef = useRef<HTMLDivElement | null>(null)
   const chromeRef = useRef<HTMLDivElement | null>(null)
@@ -350,8 +396,12 @@ export default function TransitionProvider({ children }: TransitionProviderProps
   }, [getRefs, unlockScroll])
 
   const handleLeave = useCallback(
-    (next: () => void) => {
-      if (prefersReducedMotion()) {
+    (next: () => void, from?: string, to?: string) => {
+      if (
+        prefersReducedMotion() ||
+        !shouldAnimateRouteTransition(from, to)
+      ) {
+        resetTransition()
         next()
         return
       }
@@ -451,7 +501,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
         timeline.kill()
       }
     },
-    [getRefs, lockScroll],
+    [getRefs, lockScroll, resetTransition],
   )
 
   const handleEnter = useCallback(
@@ -526,6 +576,12 @@ export default function TransitionProvider({ children }: TransitionProviderProps
     },
     [getRefs, resetTransition, setPageShell],
   )
+
+  useEffect(() => {
+    if (pathname !== "/") {
+      markNonRootClientRouteVisited()
+    }
+  }, [pathname])
 
   useEffect(() => {
     return () => {

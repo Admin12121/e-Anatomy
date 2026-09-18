@@ -1,9 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { Link } from "next-transition-router";
+import { Link, useTransitionRouter } from "next-transition-router";
 import { RiGoogleFill } from "@remixicon/react";
 import {
   ArrowLeft,
@@ -121,7 +120,7 @@ export function LoginForm({
   resumeTwoFactorSession = false,
   ...props
 }: LoginFormProps) {
-  const router = useRouter();
+  const router = useTransitionRouter();
   const nextUrl =
     nextPath && nextPath.startsWith("/")
       ? nextPath
@@ -229,12 +228,10 @@ export function LoginForm({
 
     if (isTwoFactorEnabled(user)) {
       router.push(createLoginRedirectPath(nextUrl));
-      router.refresh();
       return;
     }
 
     router.push(destination);
-    router.refresh();
   }
 
   async function handlePasswordSignIn(event: React.FormEvent<HTMLFormElement>) {
@@ -472,7 +469,6 @@ export function LoginForm({
       await markSecondFactorVerified();
       toast.success("Second factor verified.");
       router.push(resolveDestination(nextUrl, extractAuthUser(result.data)));
-      router.refresh();
     } catch (error) {
       toast.error(
         error instanceof Error
@@ -500,7 +496,6 @@ export function LoginForm({
       setShowAlternateMethods(false);
       setStep("identify");
       router.replace("/login");
-      router.refresh();
     } finally {
       setPending(false);
     }

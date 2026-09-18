@@ -10,6 +10,7 @@ import {
   type SQL,
 } from "drizzle-orm"
 import { CircleCheckIcon } from "lucide-react"
+import Link from "next/link"
 
 import { UsersFilters } from "./_components/users-filters"
 import { UserActions } from "./_components/user-actions"
@@ -171,7 +172,12 @@ export default async function UsersPage({
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
-                      <div className="font-medium">{item.name}</div>
+                      <Link
+                        className="font-medium underline-offset-4 hover:underline"
+                        href={`/users/${encodeURIComponent(item.id)}`}
+                      >
+                        {item.name}
+                      </Link>
                       <div className="mt-1 text-xs text-muted-foreground">
                         Joined {formatDate(item.createdAt)}
                       </div>

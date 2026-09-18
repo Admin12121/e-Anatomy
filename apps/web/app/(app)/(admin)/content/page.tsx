@@ -17,10 +17,22 @@ import { buildInternalAdminHeaders } from "@/lib/api/admin"
 import { ApiClientError } from "@/lib/api/errors"
 import { serverApiFetch } from "@/lib/api/server"
 import { requireCapabilitySession } from "@/lib/auth/session"
-import type { ModuleListResponse } from "@/lib/auth/types"
+import type {
+  ModalityProcessingStatus,
+  ZoneListResponse,
+  ZoneModalityFamily,
+  ZoneModalityFamilyListResponse,
+} from "@/lib/playground/types"
 
 const PAGE_SIZE = 25
-const STATUSES = new Set(["draft", "active", "published", "archived"])
+const STATUSES = new Set(["draft", "uploaded", "processing", "ready", "failed"])
+
+type ContentItem = ZoneModalityFamily & {
+  latestUpdatedAt: string
+  primaryModalityId: string
+  zoneId: string
+  zoneName: string
+}
 
 function readParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? ""
@@ -28,7 +40,7 @@ function readParam(value: string | string[] | undefined) {
 
 function formatDate(value: string | null) {
   if (!value) {
-    return "Not published"
+    return "Unknown"
   }
 
   return new Intl.DateTimeFormat("en", {
@@ -37,11 +49,27 @@ function formatDate(value: string | null) {
 }
 
 function badgeVariant(status: string) {
-  if (status === "published" || status === "active") {
+  if (status === "ready") {
     return "outline" as const
   }
 
   return "secondary" as const
+}
+
+function getContentStatus(item: ZoneModalityFamily): ModalityProcessingStatus {
+  const statuses = new Set(
+    item.variants.map((variant) => variant.processingStatus),
+  )
+
+  if (item.totalVariantCount > 0 && item.readyVariantCount === item.totalVariantCount) {
+    return "ready"
+  }
+
+  if (statuses.has("processing")) return "processing"
+  if (statuses.has("uploaded")) return "uploaded"
+  if (statuses.has("failed")) return "failed"
+
+  return "draft"
 }
 
 export default async function ContentPage({
@@ -55,15 +83,63 @@ export default async function ContentPage({
   const requestedStatus = readParam(params.status)
   const status = STATUSES.has(requestedStatus) ? requestedStatus : "all"
   const requestedPage = Number.parseInt(readParam(params.page), 10)
-  let response: ModuleListResponse = { items: [], total: 0 }
+  let contentItems: ContentItem[] = []
   let loadError: string | null = null
 
   try {
-    response = await serverApiFetch<ModuleListResponse>("/modules", {
-      cache: "no-store",
-      includeCookie: false,
-      headers: buildInternalAdminHeaders(user),
-    })
+    const zonesResponse = await serverApiFetch<ZoneListResponse>(
+      "/playground/zones",
+      {
+        cache: "no-store",
+        includeCookie: false,
+        headers: buildInternalAdminHeaders(user),
+      },
+    )
+    const modalityResponses = await Promise.all(
+      zonesResponse.items.map(async (zone) => ({
+        response: await serverApiFetch<ZoneModalityFamilyListResponse>(
+          `/playground/zones/${zone.id}/modalities`,
+          {
+            cache: "no-store",
+            includeCookie: false,
+            headers: buildInternalAdminHeaders(user),
+          },
+        ),
+        zone,
+      })),
+    )
+
+    contentItems = modalityResponses
+      .flatMap(({ response, zone }) =>
+        response.items.flatMap((family) => {
+          const primaryModality = family.variants[0]
+
+          if (!primaryModality) {
+            return []
+          }
+
+          const latestUpdatedAt = family.variants.reduce(
+            (latest, variant) =>
+              variant.updatedAt.localeCompare(latest) > 0
+                ? variant.updatedAt
+                : latest,
+            primaryModality.updatedAt,
+          )
+
+          return [
+            {
+              ...family,
+              latestUpdatedAt,
+              primaryModalityId: primaryModality.id,
+              zoneId: zone.id,
+              zoneName: zone.name,
+            },
+          ]
+        }),
+      )
+      .sort((left, right) =>
+        right.latestUpdatedAt.localeCompare(left.latestUpdatedAt),
+      )
   } catch (error) {
     loadError =
       error instanceof ApiClientError
@@ -71,12 +147,21 @@ export default async function ContentPage({
         : "Content is temporarily unavailable."
   }
 
-  const filteredItems = response.items.filter((item) => {
+  const filteredItems = contentItems.filter((item) => {
+    const normalizedSearch = search.toLowerCase()
+    const contentStatus = getContentStatus(item)
     const matchesSearch =
       !search ||
-      item.title.toLowerCase().includes(search.toLowerCase()) ||
-      item.slug.toLowerCase().includes(search.toLowerCase())
-    const matchesStatus = status === "all" || item.status === status
+      item.name.toLowerCase().includes(normalizedSearch) ||
+      item.zoneName.toLowerCase().includes(normalizedSearch) ||
+      item.modalityType.toLowerCase().includes(normalizedSearch) ||
+      item.variants.some(
+        (variant) =>
+          variant.name.toLowerCase().includes(normalizedSearch) ||
+          variant.slug.toLowerCase().includes(normalizedSearch) ||
+          variant.weightingCode?.toLowerCase().includes(normalizedSearch),
+      )
+    const matchesStatus = status === "all" || contentStatus === status
 
     return matchesSearch && matchesStatus
   })
@@ -108,9 +193,9 @@ export default async function ContentPage({
           <TableHeader>
             <TableRow>
               <TableHead>Content — {total}</TableHead>
+              <TableHead className="w-44">Zone</TableHead>
               <TableHead className="w-40">Status</TableHead>
-              <TableHead className="w-36">Latest version</TableHead>
-              <TableHead className="w-44">Published</TableHead>
+              <TableHead className="w-44">Updated</TableHead>
               <TableHead className="w-28 text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
@@ -134,39 +219,45 @@ export default async function ContentPage({
                 </TableCell>
               </TableRow>
             ) : (
-              items.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>
-                    <div className="font-medium">{item.title}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {item.slug}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={badgeVariant(item.status)}>
-                      {item.status.replaceAll("_", " ")}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {item.latestVersionNo
-                      ? `v${item.latestVersionNo}${
-                          item.latestVersionState
-                            ? ` · ${item.latestVersionState}`
-                            : ""
-                        }`
-                      : "No version"}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDate(item.currentReleasePublishedAt)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <LinkButton href="/playground" size="sm" variant="ghost">
-                      Manage
-                      <ExternalLinkIcon />
-                    </LinkButton>
-                  </TableCell>
-                </TableRow>
-              ))
+              items.map((item) => {
+                const contentStatus = getContentStatus(item)
+
+                return (
+                  <TableRow key={item.id}>
+                    <TableCell>
+                      <div className="font-medium">{item.name}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {item.modalityType.toUpperCase()} · {item.totalVariantCount}{" "}
+                        {item.totalVariantCount === 1 ? "variant" : "variants"}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {item.zoneName}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={badgeVariant(contentStatus)}>
+                        {contentStatus.replaceAll("_", " ")}
+                        {item.totalVariantCount > 1
+                          ? ` · ${item.readyVariantCount}/${item.totalVariantCount} ready`
+                          : ""}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatDate(item.latestUpdatedAt)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <LinkButton
+                        href={`/playground/zones/${item.zoneId}/modalities/${item.primaryModalityId}/viewer`}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        Manage
+                        <ExternalLinkIcon />
+                      </LinkButton>
+                    </TableCell>
+                  </TableRow>
+                )
+              })
             )}
           </TableBody>
         </Table>

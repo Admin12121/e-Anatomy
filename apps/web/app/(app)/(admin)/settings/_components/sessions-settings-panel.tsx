@@ -176,32 +176,6 @@ export function SessionsSettingsPanel() {
 
   return (
     <Frame>
-      <FrameHeader className="gap-1">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <FrameTitle className="flex items-center gap-2">
-              <MonitorSmartphoneIcon className="size-4" />
-              Active sessions
-            </FrameTitle>
-            <FrameDescription className="mt-1">
-              Review browsers and devices currently signed in to your account.
-            </FrameDescription>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={revokingOthers || otherSessionCount === 0}
-            onClick={revokeOtherSessions}
-          >
-            {revokingOthers ? (
-              <LoaderCircleIcon className="animate-spin" />
-            ) : (
-              <ShieldXIcon />
-            )}
-            Revoke other sessions
-          </Button>
-        </div>
-      </FrameHeader>
       <Table>
         <TableHeader>
           <TableRow>

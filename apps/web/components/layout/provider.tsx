@@ -10,8 +10,6 @@ import {
   PreloaderStateProvider,
   type PreloaderStartMode,
 } from "./preloader-state"
-import { markNonRootClientRouteVisited } from "./preloader-session"
-import TransitionProvider from "./transition"
 import { cn } from "@/lib/utils"
 
 type LayoutProviderProps = {
@@ -67,18 +65,9 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
     return () => window.removeEventListener("resize", handleResize)
   }, [])
 
-  useEffect(() => {
-    if (pathname === "/") {
-      return
-    }
-
-    markNonRootClientRouteVisited()
-  }, [pathname])
-
   const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
   const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
   const isPublicViewerRoute = isPublicViewerPath(pathname)
-  const shouldShowMusicToggle = pathname !== "/" && !isPublicViewerRoute
   const preloaderStateValue = useMemo(
     () => ({
       isPreloaderActive: false,
@@ -108,16 +97,14 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
   )
 
   return (
-    <TransitionProvider>
-      <PreloaderStateProvider value={preloaderStateValue}>
-        {isPublicViewerRoute ? (
-          content
-        ) : (
-          <ReactLenis root options={lenisOptions}>
-            {content}
-          </ReactLenis>
-        )}
-      </PreloaderStateProvider>
-    </TransitionProvider>
+    <PreloaderStateProvider value={preloaderStateValue}>
+      {isPublicViewerRoute ? (
+        content
+      ) : (
+        <ReactLenis root options={lenisOptions}>
+          {content}
+        </ReactLenis>
+      )}
+    </PreloaderStateProvider>
   )
 }

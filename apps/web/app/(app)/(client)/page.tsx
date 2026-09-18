@@ -3,18 +3,27 @@
 import { skipToken } from "@reduxjs/toolkit/query";
 import {
   startTransition,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import Image from "next/image";
 import gsap from "gsap";
 import { CustomEase } from "gsap/CustomEase";
 import { SplitText } from "gsap/SplitText";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { shouldRunHomePreloader } from "@/components/layout/preloader-session";
+import { ArrowLeftIcon } from "lucide-react";
+import {
+  markHomePreloaderSeen,
+  shouldRunHomePreloader,
+} from "@/components/layout/preloader-session";
+import { PublicAccountMenu } from "@/components/account/public-account-menu";
+import { Button } from "@/components/ui/button";
 import { Frame } from "@/components/ui/frame";
 
 import {
@@ -160,6 +169,42 @@ const PRELOADER_CRITICAL_CSS = `
 
 const EMPTY_ZONES: PublicZoneSummary[] = [];
 const EMPTY_MODALITIES: PublicZoneModalitySummary[] = [];
+const DESKTOP_PANEL_VARIANTS = {
+  hidden: { filter: "blur(8px)", opacity: 0 },
+  visible: { filter: "blur(0px)", opacity: 1 },
+};
+const MOBILE_PANEL_VARIANTS = {
+  center: { opacity: 1, x: 0 },
+  enter: (direction: number) => ({ opacity: 0, x: direction * 24 }),
+  exit: (direction: number) => ({ opacity: 0, x: direction * -24 }),
+};
+
+type HomePreloaderMode = "checking" | "show" | "skip";
+
+function subscribeToPreloaderPolicy() {
+  return () => {};
+}
+
+function getServerPreloaderMode(): HomePreloaderMode {
+  return "checking";
+}
+
+function useHomePreloaderMode() {
+  const decisionRef = useRef<Exclude<HomePreloaderMode, "checking"> | null>(
+    null,
+  );
+  const getClientSnapshot = useCallback(() => {
+    decisionRef.current ??= shouldRunHomePreloader() ? "show" : "skip";
+
+    return decisionRef.current;
+  }, []);
+
+  return useSyncExternalStore(
+    subscribeToPreloaderPolicy,
+    getClientSnapshot,
+    getServerPreloaderMode,
+  );
+}
 const STAGE_PRELOAD_READY_TIMEOUT_MS = 8000;
 const PRELOADER_READY_TIMEOUT_MS = 12000;
 
@@ -193,14 +238,20 @@ function getApiErrorMessage(error: unknown, fallbackMessage: string) {
 
 export default function Page() {
   const pageRef = useRef<HTMLDivElement | null>(null);
-  const [shouldRunInitialPreloader] = useState(shouldRunHomePreloader);
-  const [shouldRenderStage, setShouldRenderStage] = useState(
-    () => !shouldRunInitialPreloader,
-  );
+  const preloaderMode = useHomePreloaderMode();
+  const shouldRunInitialPreloader = preloaderMode === "show";
+  const [isStageActivated, setIsStageActivated] = useState(false);
+  const shouldRenderStage = preloaderMode === "skip" || isStageActivated;
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const stageReadyRef = useRef(false);
   const pendingEngageRef = useRef(false);
   const runExitAnimationRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (preloaderMode === "show") {
+      markHomePreloaderSeen();
+    }
+  }, [preloaderMode]);
   const {
     data: zonesResponse,
     error: zonesQueryError,
@@ -227,12 +278,32 @@ export default function Page() {
     ? (zones.find((zone) => zone.id === activeSelectedZoneId) ?? null)
     : null;
   const selectedZoneModalities = modalitiesResponse?.items ?? EMPTY_MODALITIES;
+  const prefersReducedMotion = useReducedMotion();
+  const mobilePanelDirection = selectedZone ? 1 : -1;
+  const desktopRegionsState = isZonesLoading
+    ? "loading"
+    : isZonesError
+      ? "error"
+      : zones.length === 0
+        ? "empty"
+        : "ready";
+  const desktopModalitiesState = isModalitiesLoading
+    ? "loading"
+    : isModalitiesError
+      ? "error"
+      : selectedZoneModalities.length === 0
+        ? "empty"
+        : "ready";
 
   function handleSelectZone(zoneId: string) {
     setSelectedZoneId(zoneId);
   }
 
   useEffect(() => {
+    if (preloaderMode === "checking") {
+      return;
+    }
+
     if (!shouldRunInitialPreloader) {
       stageReadyRef.current = true;
       return;
@@ -273,9 +344,13 @@ export default function Page() {
       cancelled = true;
       window.clearTimeout(readyFallback);
     };
-  }, [shouldRunInitialPreloader]);
+  }, [preloaderMode, shouldRunInitialPreloader]);
 
   useLayoutEffect(() => {
+    if (preloaderMode === "checking") {
+      return;
+    }
+
     if (!shouldRunInitialPreloader) {
       return;
     }
@@ -397,7 +472,7 @@ export default function Page() {
       }
 
       startTransition(() => {
-        setShouldRenderStage(true);
+        setIsStageActivated(true);
       });
       exitTimeline?.kill();
       exitTimeline = gsap.timeline();
@@ -605,7 +680,7 @@ export default function Page() {
       heroSplit?.revert();
       preloaderSplits.forEach((split) => split.revert());
     };
-  }, [shouldRunInitialPreloader]);
+  }, [preloaderMode, shouldRunInitialPreloader]);
 
   const heroClassName = shouldRunInitialPreloader
     ? "hero"
@@ -770,6 +845,9 @@ export default function Page() {
                 className="text-xl md:text-3xl"
               />
             </span>
+            <PublicAccountMenu
+              className="absolute right-4 top-4 z-20 md:right-5 md:top-5"
+            />
             <span className="absolute inset-x-4 bottom-2 left-1/2 transform -translate-x-1/2 z-10 text-xs flex justify-center gap-1">
               <p className="font-light opacity-50">Designed and Developed by </p>
               <Link href={"https://admin12121.com"} target="_blank">
@@ -781,9 +859,22 @@ export default function Page() {
                 />
               </Link>
             </span>
-            {selectedZone ? (
-              <Frame className="absolute hidden md:flex inset-x-4 z-10 md:inset-x-auto md:top-5 md:right-5 md:w-80">
-                <Table>
+            <AnimatePresence>
+              {selectedZone ? (
+                <motion.div
+                  animate="visible"
+                  className="absolute z-10 hidden md:top-20 md:right-5 md:block md:w-80"
+                  exit="hidden"
+                  initial={prefersReducedMotion ? false : "hidden"}
+                  key={`${selectedZone.id}-${desktopModalitiesState}`}
+                  transition={{
+                    duration: prefersReducedMotion ? 0 : 0.28,
+                    ease: "easeOut",
+                  }}
+                  variants={DESKTOP_PANEL_VARIANTS}
+                >
+                  <Frame className="w-full">
+                    <Table>
                   <TableHeader>
                     <TableRow className="text-left">
                       <TableHead>Modalities</TableHead>
@@ -830,12 +921,27 @@ export default function Page() {
                       ))
                     )}
                   </TableBody>
-                </Table>
-              </Frame>
-            ) : null}
+                    </Table>
+                  </Frame>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
 
-            <Frame className="absolute inset-x-4 bottom-4 z-10 md:inset-x-auto md:top-20 md:left-5 md:bottom-auto md:w-80">
-              <Table>
+            <AnimatePresence>
+              <motion.div
+                animate="visible"
+                className="absolute z-10 hidden md:top-20 md:left-5 md:block md:w-80"
+                exit="hidden"
+                initial={prefersReducedMotion ? false : "hidden"}
+                key={`${desktopRegionsState}-${activeSelectedZoneId ?? "none"}`}
+                transition={{
+                  duration: prefersReducedMotion ? 0 : 0.28,
+                  ease: "easeOut",
+                }}
+                variants={DESKTOP_PANEL_VARIANTS}
+              >
+                <Frame className="w-full">
+                  <Table>
                 <TableHeader>
                   <TableRow className="text-left">
                     <TableHead>Regions / Zone</TableHead>
@@ -882,7 +988,138 @@ export default function Page() {
                     ))
                   )}
                 </TableBody>
-              </Table>
+                  </Table>
+                </Frame>
+              </motion.div>
+            </AnimatePresence>
+
+            <Frame className="absolute inset-x-4 bottom-4 z-10 flex max-h-[40svh] overflow-y-auto md:hidden">
+              <motion.div
+                className="relative overflow-hidden rounded-xl"
+                layout={!prefersReducedMotion}
+                transition={{
+                  duration: prefersReducedMotion ? 0 : 0.24,
+                  ease: "easeOut",
+                }}
+              >
+                <AnimatePresence
+                  custom={mobilePanelDirection}
+                  initial={false}
+                  mode="popLayout"
+                >
+                  <motion.div
+                    animate="center"
+                    custom={mobilePanelDirection}
+                    exit="exit"
+                    initial={prefersReducedMotion ? false : "enter"}
+                    key={selectedZone ? `modalities-${selectedZone.id}` : "regions"}
+                    transition={{
+                      duration: prefersReducedMotion ? 0 : 0.24,
+                      ease: "easeOut",
+                    }}
+                    variants={MOBILE_PANEL_VARIANTS}
+                  >
+                    <Table>
+                <TableHeader>
+                  <TableRow className="text-left">
+                    <TableHead>
+                      {selectedZone ? (
+                        <span className="flex items-center gap-1.5">
+                          <Button
+                            aria-label="Back to regions"
+                            className="-ml-1"
+                            onClick={() => setSelectedZoneId(null)}
+                            size="icon-xs"
+                            variant="ghost"
+                          >
+                            <ArrowLeftIcon aria-hidden="true" />
+                          </Button>
+                          Modalities
+                        </span>
+                      ) : (
+                        "Regions / Zone"
+                      )}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedZone ? (
+                    isModalitiesLoading ? (
+                      <TableRow>
+                        <TableCell className="text-left text-muted-foreground">
+                          Loading modalities...
+                        </TableCell>
+                      </TableRow>
+                    ) : isModalitiesError ? (
+                      <TableRow>
+                        <TableCell className="text-left text-destructive">
+                          {getApiErrorMessage(
+                            modalitiesQueryError,
+                            "Unable to load modalities.",
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ) : selectedZoneModalities.length === 0 ? (
+                      <TableRow>
+                        <TableCell className="text-left text-muted-foreground">
+                          No modalities are attached to this zone yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      selectedZoneModalities.map((modality) => (
+                        <TableRow key={modality.id}>
+                          <TableCell className="font-medium text-left">
+                            <Link
+                              className="inline-flex items-center underline-offset-4 hover:underline"
+                              href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
+                            >
+                              {modality.name}
+                            </Link>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )
+                  ) : isZonesLoading ? (
+                    <TableRow>
+                      <TableCell className="text-left text-muted-foreground">
+                        Loading zones...
+                      </TableCell>
+                    </TableRow>
+                  ) : isZonesError ? (
+                    <TableRow>
+                      <TableCell className="text-left text-destructive">
+                        {getApiErrorMessage(
+                          zonesQueryError,
+                          "Unable to load zones.",
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ) : zones.length === 0 ? (
+                    <TableRow>
+                      <TableCell className="text-left text-muted-foreground">
+                        No zones are available yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    zones.map((zone) => (
+                      <TableRow key={zone.id}>
+                        <TableCell className="text-left">
+                          <Button
+                            className="h-auto w-full justify-start rounded-none border-0 p-0 font-medium shadow-none"
+                            onClick={() => handleSelectZone(zone.id)}
+                            variant="ghost"
+                          >
+                            {zone.name}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+                    </Table>
+                  </motion.div>
+                </AnimatePresence>
+              </motion.div>
             </Frame>
           </div>
         ) : null}

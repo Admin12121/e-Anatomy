@@ -136,9 +136,6 @@ export function UsersFilters({
       </Select>
 
       <div className="flex gap-2">
-        <Button type="submit" variant="outline">
-          Search
-        </Button>
         {hasFilters ? (
           <Button
             type="button"
