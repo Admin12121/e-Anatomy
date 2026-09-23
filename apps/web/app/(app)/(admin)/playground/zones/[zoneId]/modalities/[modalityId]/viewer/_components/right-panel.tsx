@@ -42,7 +42,6 @@ import type {
 } from "@/lib/playground/types";
 import {
   DEFAULT_ANNOTATION_COLOR,
-  EMPTY_ANNOTATION_FORM,
   type AnnotationFormState,
   type GroupFormState,
   type StructureFormState,
@@ -106,6 +105,7 @@ type RightPanelProps = {
   canvasFlipHorizontal: boolean;
   canvasFlipVertical: boolean;
   currentAsset: ZoneModalityAsset | null;
+  draftPointerPlaced: boolean;
   groupForm: GroupFormState;
   groups: ViewerStructureGroup[];
   groupsById: Map<string, ViewerStructureGroup>;
@@ -140,9 +140,11 @@ type RightPanelProps = {
   onSaveAnnotation: (options?: {
     structureId?: string;
   }) => void | Promise<void>;
-  onSaveGroup: () => Promise<ViewerStructureGroup | null>;
+  onSaveGroup: (options?: { forceCreate?: boolean }) => Promise<ViewerStructureGroup | null>;
   onSaveStructure: (options?: {
     groupId?: string | null;
+    preserveAnnotationDraft?: boolean;
+    silentSuccess?: boolean;
   }) => Promise<ViewerStructure | null>;
   onSelectGroup: (groupId: string) => void;
   onSelectStructure: (structureId: string, groupId: string | null) => void;
@@ -157,28 +159,16 @@ type RightPanelProps = {
   handleReset: () => void;
 };
 
-function hasPointerPlacementDraft(annotationForm: AnnotationFormState) {
-  const epsilon = 0.0005;
-
-  return (
-    Math.abs(annotationForm.anchorX - EMPTY_ANNOTATION_FORM.anchorX) >
-      epsilon ||
-    Math.abs(annotationForm.anchorY - EMPTY_ANNOTATION_FORM.anchorY) >
-      epsilon ||
-    Math.abs(annotationForm.labelX - EMPTY_ANNOTATION_FORM.labelX) > epsilon ||
-    Math.abs(annotationForm.labelY - EMPTY_ANNOTATION_FORM.labelY) > epsilon
-  );
-}
-
 function hasPartAnnotationDraft(
   mode: PartInteractionMode,
   annotationForm: AnnotationFormState,
+  draftPointerPlaced: boolean,
 ) {
   if (mode === "area") {
     return annotationForm.polygonPoints.length >= 3;
   }
 
-  return hasPointerPlacementDraft(annotationForm);
+  return draftPointerPlaced;
 }
 
 export function ModalityViewerRightPanel({
@@ -189,6 +179,7 @@ export function ModalityViewerRightPanel({
   canvasFlipHorizontal,
   canvasFlipVertical,
   currentAsset,
+  draftPointerPlaced,
   groupForm,
   groups,
   groupsById,
@@ -269,7 +260,7 @@ export function ModalityViewerRightPanel({
     canvasMode === "set-anchor" ||
     canvasMode === "set-label";
   const placementTypeLocked = Boolean(selectedStructureId);
-  const hasPointerDraft = hasPointerPlacementDraft(annotationForm);
+  const hasPointerDraft = draftPointerPlaced;
 
   const resetPartEditorState = useCallback(() => {
     setShowPartEditorWindow(false);
@@ -332,7 +323,9 @@ export function ModalityViewerRightPanel({
   }, [showCreatePartFrame, structureForm.learningPoints]);
 
   const handleSaveAnatomicalPart = async () => {
-    const savedGroup = await onSaveGroup();
+    // Creation is explicit. Even if an older selected group is still settling
+    // elsewhere in the viewer state, the + flow must never mutate it.
+    const savedGroup = await onSaveGroup({ forceCreate: true });
 
     if (!savedGroup) {
       return;
@@ -356,18 +349,34 @@ export function ModalityViewerRightPanel({
       "learningPoints",
       `${PART_INTERACTION_MARKER}${nextMode}`,
     );
+
+    // New structures are authored directly on the scan. Switching placement
+    // type should activate the matching tool instead of silently dropping back
+    // to browse mode and requiring a second, easy-to-miss click.
     onCancelAnnotationEdit();
+    if (nextMode === "area") {
+      onCanvasModeChange("draw-region");
+    } else {
+      onCanvasModeChange("create-label");
+    }
   };
 
   const handleEnablePointerPlacementEditing = () => {
-    onCanvasModeChange("set-anchor");
+    // A new draft has no anchor yet, so enter create-label mode. Existing or
+    // already-placed pointers can go straight to set-anchor for refinement.
+    onCanvasModeChange(
+      hasPointerDraft || selectedAnnotationId ? "set-anchor" : "create-label",
+    );
   };
 
   const handlePlacementToolToggle = (nextValues: string[]) => {
     const nextTool = nextValues[0];
 
     if (!nextTool) {
-      onCancelAnnotationEdit();
+      // Leaving the placement tool should keep the draft geometry. The old
+      // behavior reset the form back to the center/default point, which made
+      // a correctly placed pointer disappear as soon as editing was toggled off.
+      onCanvasModeChange("browse");
       return;
     }
 
@@ -407,20 +416,31 @@ export function ModalityViewerRightPanel({
       return;
     }
 
+    const shouldSaveDraftAnnotation =
+      selectedAnnotationId !== null ||
+      hasPartAnnotationDraft(
+        partInteractionMode,
+        annotationForm,
+        draftPointerPlaced,
+      );
+
     const savedStructure = await onSaveStructure({
       groupId: selectedAnatomicalPart.id,
+      preserveAnnotationDraft: shouldSaveDraftAnnotation,
+      silentSuccess: true,
     });
 
     if (!savedStructure) {
       return;
     }
 
-    const shouldSaveDraftAnnotation =
-      selectedAnnotationId !== null ||
-      hasPartAnnotationDraft(partInteractionMode, annotationForm);
-
     if (shouldSaveDraftAnnotation) {
+      // Annotation save owns the single success notification for this combined
+      // operation. The structure save above is intentionally silent so users
+      // do not receive two toasts for one Save click.
       await onSaveAnnotation({ structureId: savedStructure.id });
+    } else {
+      toast.success(selectedStructureId ? "Structure updated." : "Structure created.");
     }
 
     onCanvasModeChange("browse");
@@ -507,18 +527,15 @@ export function ModalityViewerRightPanel({
                     size="icon"
                     variant={showAnatomicalPartsPanel ? "default" : "secondary"}
                     onClick={() => {
-                      const next = !showAnatomicalPartsPanel;
-
+                      // + always means "create a new zone". Do not toggle the
+                      // existing editor closed and do not inherit a selected
+                      // structure/group that would turn Save into an update.
                       setShowCreatePartFrame(false);
                       resetPartEditorState();
-
-                      if (next) {
-                        // Create-area mode and edit-area mode are mutually exclusive.
-                        setSelectedAnatomicalPartId(null);
-                        onResetGroup();
-                      }
-
-                      setShowAnatomicalPartsPanel(next);
+                      onResetStructure();
+                      onResetGroup();
+                      setSelectedAnatomicalPartId(null);
+                      setShowAnatomicalPartsPanel(true);
                     }}
                   >
                     <PlusIcon className="size-4" />
@@ -552,39 +569,35 @@ export function ModalityViewerRightPanel({
                     <div
                       key={group.id}
                       className={cn(
-                        "flex w-full items-center justify-between gap-3 rounded-lg px-1 py-1.5 text-left transition",
-                        "hover:bg-white/3",
+                        "flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-left transition",
+                        !readOnly && "hover:bg-white/3",
                       )}
                     >
-                      <span className="flex min-w-0 flex-1 items-center gap-2.5">
-                        <button
-                          type="button"
-                          className="inline-flex size-6 items-center justify-center rounded-md transition"
-                          disabled={readOnly}
-                          aria-label={`Open ${group.title} details`}
-                          onClick={() => {
-                            if (readOnly) {
-                              return;
-                            }
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex min-w-0 flex-1 items-center gap-2.5 rounded-md pr-3 text-left",
+                          !readOnly && "cursor-pointer",
+                        )}
+                        disabled={readOnly}
+                        aria-label={`Open ${group.title} details`}
+                        onClick={() => {
+                          if (readOnly) {
+                            return;
+                          }
 
-                            const nextGroupId =
-                              selectedAnatomicalPartId === group.id
-                                ? null
-                                : group.id;
-
-                            setShowAnatomicalPartsPanel(false);
-                            setShowCreatePartFrame(false);
-                            resetPartEditorState();
-
-                            if (nextGroupId) {
-                              onSelectGroup(nextGroupId);
-                            } else {
-                              onResetGroup();
-                            }
-
-                            setSelectedAnatomicalPartId(nextGroupId);
-                          }}
-                        >
+                          // Clicking anywhere in the thumbnail/title row always
+                          // opens this existing zone for editing. It never acts
+                          // as a toggle and never switches into create mode.
+                          setShowAnatomicalPartsPanel(false);
+                          setShowCreatePartFrame(false);
+                          resetPartEditorState();
+                          onResetStructure();
+                          onSelectGroup(group.id);
+                          setSelectedAnatomicalPartId(group.id);
+                        }}
+                      >
+                        <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md transition">
                           {group.thumbnailUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
@@ -595,11 +608,11 @@ export function ModalityViewerRightPanel({
                           ) : (
                             <ImageIcon className="size-4" />
                           )}
-                        </button>
+                        </span>
                         <span className="truncate text-[15px] leading-5">
                           {group.title}
                         </span>
-                      </span>
+                      </button>
                       <Switch
                         checked={isVisible}
                         onCheckedChange={(checked) => {
@@ -817,28 +830,24 @@ export function ModalityViewerRightPanel({
                     type="button"
                     size="icon"
                     onClick={() => {
-                      const next = !showCreatePartFrame;
-
-                      if (next) {
-                        onResetStructure();
-                        onStructureFormChange(
-                          "groupId",
-                          selectedAnatomicalPart.id,
-                        );
-                        onStructureFormChange(
-                          "learningPoints",
-                          `${PART_INTERACTION_MARKER}pointer`,
-                        );
-                        setPartInteractionMode("pointer");
-                        setPartEditorInitialContent("");
-                        setShowPartEditorWindow(false);
-                        onClearPolygonDraft();
-                        onCanvasModeChange("browse");
-                      } else {
-                        resetPartEditorState();
-                      }
-
-                      setShowCreatePartFrame(next);
+                      // + always opens a fresh structure form. If an existing
+                      // structure is currently being edited, discard that editor
+                      // selection instead of using the + button as a close toggle.
+                      onResetStructure();
+                      onStructureFormChange(
+                        "groupId",
+                        selectedAnatomicalPart.id,
+                      );
+                      onStructureFormChange(
+                        "learningPoints",
+                        `${PART_INTERACTION_MARKER}pointer`,
+                      );
+                      setPartInteractionMode("pointer");
+                      setPartEditorInitialContent("");
+                      setShowPartEditorWindow(false);
+                      onClearPolygonDraft();
+                      onCanvasModeChange("browse");
+                      setShowCreatePartFrame(true);
                     }}
                   >
                     <PlusIcon className="size-4" />
@@ -1024,27 +1033,44 @@ export function ModalityViewerRightPanel({
                             ) : (
                               <Pen className="size-4" />
                             )}
-                            {areaEditingActive ? "Cancel area" : "Edit area"}
+                            {areaEditingActive
+                              ? annotationForm.polygonPoints.length >= 3
+                                ? "Done area"
+                                : "Cancel area"
+                              : "Edit area"}
                           </ToggleGroupItem>
-                        ) : null}
-                        <ToggleGroupItem
-                          aria-label="Toggle pointer placement editing"
-                          className="gap-2"
-                          value="pointer-edit"
-                        >
-                          {pointerPlacementEditingActive ? (
-                            <PenOff className="size-4" />
-                          ) : (
-                            <MousePointer2 className="size-4" />
-                          )}
-                          {pointerPlacementEditingActive
-                            ? "Cancel pointer"
-                            : hasPointerDraft || selectedAnnotationId
-                              ? "Fix pointer"
-                              : "Place pointer"}
-                        </ToggleGroupItem>
+                        ) : (
+                          <ToggleGroupItem
+                            aria-label="Toggle pointer placement editing"
+                            className="gap-2"
+                            value="pointer-edit"
+                          >
+                            {pointerPlacementEditingActive ? (
+                              <PenOff className="size-4" />
+                            ) : (
+                              <MousePointer2 className="size-4" />
+                            )}
+                            {pointerPlacementEditingActive
+                              ? hasPointerDraft || selectedAnnotationId
+                                ? "Done pointer"
+                                : "Cancel pointer"
+                              : hasPointerDraft || selectedAnnotationId
+                                ? "Fix pointer"
+                                : "Place pointer"}
+                          </ToggleGroupItem>
+                        )}
                       </ToggleGroup>
                     </div>
+                    {partInteractionMode === "pointer" && pointerPlacementEditingActive ? (
+                      <p className="text-[11px] leading-4 text-white/45">
+                        Click anywhere on the scan to place the pointer. Drag the point to refine it; the label rail is arranged automatically.
+                      </p>
+                    ) : null}
+                    {partInteractionMode === "area" && areaEditingActive ? (
+                      <p className="text-[11px] leading-4 text-white/45">
+                        Drag directly on the scan to paint the region. Use the toolbar brush/eraser controls to refine it, then choose Done area.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="space-y-1.5">

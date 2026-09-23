@@ -1,0 +1,162 @@
+.card {
+  position: absolute;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(246, 247, 248, 0.92);
+  border-radius: 4px;
+  background: #363636;
+  color: #f0f0f0;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.42);
+  opacity: 0;
+  pointer-events: none;
+  user-select: text;
+  transform: translate3d(var(--note-enter-x, 0), var(--note-enter-y, 0), 0)
+    scale(0.982);
+  transition:
+    opacity 150ms ease-out,
+    transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+  cursor: pointer;
+}
+
+.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.left {
+  --note-enter-x: -8px;
+}
+
+.right {
+  --note-enter-x: 8px;
+}
+
+.below {
+  --note-enter-y: -7px;
+}
+
+.above {
+  --note-enter-y: 7px;
+}
+
+.left.below {
+  transform-origin: left top;
+}
+
+.right.below {
+  transform-origin: right top;
+}
+
+.left.above {
+  transform-origin: left bottom;
+}
+
+.right.above {
+  transform-origin: right bottom;
+}
+
+.header {
+  margin: 4px;
+  min-height: 26px;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 2px;
+  background: #f7f7f7;
+  color: #191a1b;
+  font-size: 12px;
+  line-height: 1.1;
+}
+
+.bottomHeader {
+  margin-top: auto;
+}
+
+.lock {
+  flex: 0 0 auto;
+  color: #111;
+  font-size: 11px;
+}
+
+.subtitle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.glyph {
+  width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  color: #efe2a7;
+  font-size: 20px;
+}
+
+.body {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 9px 12px;
+  color: #ededed;
+  font-size: 13px;
+  line-height: 1.45;
+  scrollbar-width: thin;
+}
+
+.body p {
+  margin: 0 0 8px;
+}
+
+.body p:last-child {
+  margin-bottom: 0;
+}
+
+.body ul,
+.body ol {
+  margin: 6px 0 10px;
+  padding-left: 20px;
+}
+
+.body ul {
+  list-style: disc;
+}
+
+.body ol {
+  list-style: decimal;
+}
+
+.body li {
+  margin-bottom: 4px;
+}
+
+.learningHeading {
+  margin: 11px 0 5px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.note {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.header > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

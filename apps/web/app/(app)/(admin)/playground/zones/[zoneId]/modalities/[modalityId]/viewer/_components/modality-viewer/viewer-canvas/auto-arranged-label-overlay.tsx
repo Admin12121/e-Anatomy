@@ -7,36 +7,21 @@ import {
   DEFAULT_ANNOTATION_COLOR,
   type AnnotationFormState,
 } from "../../modality-viewer.types";
-import {
-  type ArrangedLabel,
-  type ViewerLayout,
-  getAnnotationFocusOpacity,
-} from "./helpers";
+import type { PlacedAnnotationLabel } from "./annotation-layout";
 
 type ViewerCanvasAutoArrangedLabelOverlayProps = {
   annotationForm: AnnotationFormState;
-  clampTextXForLabelBox: (
-    textX: number,
-    textAnchor: "start" | "end",
-    labelRectWidth: number,
-    viewportWidth: number,
-  ) => number;
-  draggingLabelId: string | null;
   editLockEnabled: boolean;
+  editorMode: boolean;
   fitLabelText: (
     text: string,
     fontSize: number,
     fontWeight: 500 | 700,
+    maxWidth?: number,
   ) => string;
-  hoveredAnnotationId: string | null;
   labelLayout: {
-    labels: Map<string, ArrangedLabel>;
+    labels: Map<string, PlacedAnnotationLabel>;
   };
-  measureLabelRectWidth: (
-    text: string,
-    fontSize: number,
-    fontWeight: 500 | 700,
-  ) => number;
   onAnnotationHover: (annotationId: string | null) => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   selectedAnnotationId: string | null;
@@ -46,28 +31,27 @@ type ViewerCanvasAutoArrangedLabelOverlayProps = {
     height: number;
   };
   structuresById: Map<string, ViewerStructure>;
-  viewerLayout: ViewerLayout;
   visibleAnnotations: ViewerAnnotation[];
 };
 
 export function ViewerCanvasAutoArrangedLabelOverlay({
   annotationForm,
-  clampTextXForLabelBox,
-  draggingLabelId,
   editLockEnabled,
+  editorMode,
   fitLabelText,
-  hoveredAnnotationId,
   labelLayout,
-  measureLabelRectWidth,
   onAnnotationHover,
   onAnnotationSelect,
   selectedAnnotationId,
   showLabels,
   stageSizePx,
   structuresById,
-  viewerLayout,
   visibleAnnotations,
 }: ViewerCanvasAutoArrangedLabelOverlayProps) {
+  if (!showLabels) {
+    return null;
+  }
+
   return (
     <svg
       className="pointer-events-none absolute inset-0 z-30 h-full w-full"
@@ -75,137 +59,176 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
     >
       {visibleAnnotations.map((annotation) => {
         const structure = structuresById.get(annotation.structureId);
-        const arrangedLabel = labelLayout.labels.get(annotation.id);
+        const placed = labelLayout.labels.get(annotation.id);
+
+        if (!structure || !placed) {
+          return null;
+        }
+
         const isSelected = annotation.id === selectedAnnotationId;
-        const isInteractionBlocked = editLockEnabled
+        const isEditorSelected = editorMode && isSelected;
+        // Hover only opens the information card. It must not recolor the
+        // anatomical leader or turn the anchor red; those are click/selection
+        // affordances so the underlying label remains visually stable.
+        const isEmphasized = !editorMode && isSelected;
+        const interactionBlocked = editLockEnabled
           ? selectedAnnotationId
             ? !isSelected
             : true
           : false;
 
-        if (!structure || !arrangedLabel || isInteractionBlocked) {
-          return null;
-        }
-
-        const isHovered = annotation.id === hoveredAnnotationId;
-        const focusOpacity = getAnnotationFocusOpacity({
-          annotationId: annotation.id,
-          hoveredId: hoveredAnnotationId,
-          selectedId: selectedAnnotationId,
-        });
-        const preferredAnnotationColor = isSelected
-          ? annotationForm.colorHex.trim() || structure.colorHex
-          : structure.colorHex;
-        const color = preferredAnnotationColor || DEFAULT_ANNOTATION_COLOR;
-        const leaderColor = isSelected
-          ? annotationForm.leaderColorHex || color
-          : color;
+        const isRegion =
+          (isSelected
+            ? annotationForm.polygonPoints
+            : annotation.polygonPoints
+          ).length >= 3;
+        const selectedColor = isRegion
+          ? annotationForm.overlayColorHex.trim() ||
+            annotationForm.colorHex.trim() ||
+            annotation.overlayColorHex ||
+            annotation.colorHex ||
+            structure.colorHex
+          : annotationForm.colorHex.trim() ||
+            annotation.colorHex ||
+            structure.colorHex;
+        const color =
+          (isSelected
+            ? selectedColor
+            : isRegion
+              ? annotation.overlayColorHex ||
+                annotation.colorHex ||
+                structure.colorHex
+              : annotation.colorHex || structure.colorHex) ||
+          DEFAULT_ANNOTATION_COLOR;
+        const configuredLeaderColor = isRegion
+          ? color
+          : isSelected
+            ? annotationForm.leaderColorHex.trim() ||
+              annotation.leaderColorHex ||
+              color
+            : annotation.leaderColorHex || color;
+        const leaderColor =
+          isEmphasized && !isRegion ? "#f4f7f8" : configuredLeaderColor;
         const label = annotation.titleOverride || structure.title;
-        const textVisible = showLabels;
-        const fontSize = viewerLayout.fontSize;
-        const labelFontWeight: 500 | 700 = isSelected ? 700 : 500;
-        const displayLabel = fitLabelText(label, fontSize, labelFontWeight);
-        const highlightLabel =
-          isSelected || isHovered || draggingLabelId === annotation.id;
-        const leaderStrokeWidth = isSelected ? 3.5 : isHovered ? 3 : 2;
-        const labelRectWidth = measureLabelRectWidth(
-          displayLabel,
-          fontSize,
-          labelFontWeight,
+        const displayLabel = fitLabelText(
+          label,
+          placed.fontSize,
+          isSelected ? 700 : 500,
+          placed.textMaxWidth,
         );
-        const labelRectHeight =
-          fontSize + viewerLayout.labelBoxHeightPadding;
-        const resolvedLabelTextX = clampTextXForLabelBox(
-          arrangedLabel.textX,
-          arrangedLabel.textAnchor,
-          labelRectWidth,
-          Math.max(stageSizePx.width, 1),
-        );
-        const labelRectX =
-          arrangedLabel.textAnchor === "start"
-            ? resolvedLabelTextX - viewerLayout.labelBoxPaddingX
-            : resolvedLabelTextX -
-              labelRectWidth +
-              viewerLayout.labelBoxPaddingX;
-        const labelRectY = arrangedLabel.y - labelRectHeight / 2;
-        const labelTickX =
-          arrangedLabel.textAnchor === "start"
-            ? resolvedLabelTextX - 6
-            : resolvedLabelTextX + 6;
-        const leaderStartX = arrangedLabel.anchorX;
-        const leaderStartY = arrangedLabel.anchorY;
-        const leaderEndX = labelTickX;
-        const leaderEndY = arrangedLabel.y;
+        const lineY = placed.y + placed.height / 2;
+        const textColor =
+          isEmphasized && !isRegion ? "#f5f7f8" : color;
+        const markerFill = isEditorSelected
+          ? color
+          : isEmphasized
+            ? isRegion
+              ? color
+              : "#ff3232"
+            : "#4f5a5d";
+        const markerStroke = isEditorSelected
+          ? "rgba(255,255,255,0.92)"
+          : isEmphasized
+            ? isRegion
+              ? color
+              : "#ff0000"
+            : color;
+        const leaderWidth = isEditorSelected
+          ? 1.8
+          : isEmphasized
+            ? 2.5
+            : 1.5;
 
         return (
           <g
-            key={`main-label-${annotation.id}`}
+            key={`rail-label-${annotation.id}`}
             className="pointer-events-auto"
             style={{
-              opacity: focusOpacity,
+              opacity: interactionBlocked ? 0.35 : 1,
+              pointerEvents: interactionBlocked ? "none" : undefined,
               transition: "opacity 140ms ease",
             }}
-            onMouseEnter={() => {
-              onAnnotationHover(annotation.id);
-            }}
-            onMouseLeave={() => {
-              onAnnotationHover(null);
-            }}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-            }}
+            onMouseEnter={() => onAnnotationHover(annotation.id)}
+            onMouseLeave={() => onAnnotationHover(null)}
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
               onAnnotationSelect(annotation.id, annotation.structureId);
             }}
           >
+            {!isEmphasized ? (
+              <line
+                stroke={leaderColor}
+                strokeWidth={1.5}
+                style={{ transition: "stroke 160ms ease, opacity 160ms ease" }}
+                x1={placed.tickX}
+                x2={placed.tickX}
+                y1={placed.y}
+                y2={placed.y + placed.height}
+              />
+            ) : null}
+
             <line
               stroke={leaderColor}
-              strokeLinecap="round"
-              strokeOpacity={highlightLabel ? 1 : 0.86}
-              strokeWidth={leaderStrokeWidth}
-              x1={leaderStartX}
-              x2={leaderEndX}
-              y1={leaderStartY}
-              y2={leaderEndY}
+              strokeWidth={leaderWidth}
+              style={{
+                transition:
+                  "stroke 160ms ease, stroke-width 180ms cubic-bezier(0.16, 1, 0.3, 1)",
+              }}
+              x1={placed.tickX}
+              x2={placed.thresholdX}
+              y1={lineY}
+              y2={lineY}
             />
+            <line
+              stroke={leaderColor}
+              strokeWidth={leaderWidth}
+              style={{
+                transition:
+                  "stroke 160ms ease, stroke-width 180ms cubic-bezier(0.16, 1, 0.3, 1)",
+              }}
+              x1={placed.thresholdX}
+              x2={placed.anchorX}
+              y1={lineY}
+              y2={placed.anchorY}
+            />
+
             <line
               pointerEvents="stroke"
               stroke="transparent"
-              strokeWidth={Math.max(leaderStrokeWidth + 8, 11)}
-              x1={leaderStartX}
-              x2={leaderEndX}
-              y1={leaderStartY}
-              y2={leaderEndY}
+              strokeWidth={12}
+              x1={placed.tickX}
+              x2={placed.anchorX}
+              y1={lineY}
+              y2={placed.anchorY}
             />
 
-            {textVisible ? (
-              <g>
-                {highlightLabel ? (
-                  <rect
-                    fill={color}
-                    height={labelRectHeight}
-                    opacity={0.95}
-                    rx={6}
-                    width={labelRectWidth}
-                    x={labelRectX}
-                    y={labelRectY}
-                  />
-                ) : null}
-                <text
-                  dominantBaseline="middle"
-                  fill={highlightLabel ? "#ffffff" : color}
-                  fontFamily="system-ui"
-                  fontSize={fontSize}
-                  fontWeight={labelFontWeight}
-                  textAnchor={arrangedLabel.textAnchor}
-                  x={resolvedLabelTextX}
-                  y={arrangedLabel.y}
-                >
-                  {displayLabel}
-                </text>
-              </g>
-            ) : null}
+            <circle
+              cx={placed.anchorX}
+              cy={placed.anchorY}
+              fill={markerFill}
+              r={isEditorSelected ? 3 : isEmphasized ? 4 : 2.1}
+              stroke={markerStroke}
+              strokeWidth={isEditorSelected ? 1.2 : isEmphasized ? 1.4 : 1}
+              style={{
+                transition:
+                  "fill 160ms ease, stroke 160ms ease, r 180ms cubic-bezier(0.16, 1, 0.3, 1)",
+              }}
+            />
+
+            <text
+              dominantBaseline="middle"
+              fill={textColor}
+              fontFamily="'Helvetica Neue', Helvetica, Arial, Verdana, sans-serif"
+              fontSize={placed.fontSize}
+              fontWeight={isSelected ? 700 : 400}
+              textAnchor={placed.textAnchor}
+              style={{ transition: "fill 160ms ease" }}
+              x={placed.textX}
+              y={lineY}
+            >
+              {displayLabel}
+            </text>
           </g>
         );
       })}

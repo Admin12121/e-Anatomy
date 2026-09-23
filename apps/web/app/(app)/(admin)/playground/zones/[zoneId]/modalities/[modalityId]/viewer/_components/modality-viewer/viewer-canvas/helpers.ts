@@ -61,6 +61,7 @@ export type ViewerLayout = {
 };
 
 export type ViewerLayoutInput = {
+  fitScaleCap?: number | null;
   imageHeight: number;
   imageWidth: number;
   reserveLabelSpace: boolean;
@@ -110,6 +111,7 @@ export function getAnnotationFocusOpacity({
 }
 
 export function calculateViewerLayout({
+  fitScaleCap,
   imageHeight,
   imageWidth,
   reserveLabelSpace,
@@ -156,10 +158,13 @@ export function calculateViewerLayout({
   const effectiveHeight = rotatedByQuarterTurn
     ? safeImageWidth
     : safeImageHeight;
-  const fitScale = Math.min(
+  const uncappedFitScale = Math.min(
     availableWidth / effectiveWidth,
     availableHeight / effectiveHeight,
   );
+  const fitScale = isValidDimension(fitScaleCap)
+    ? Math.min(uncappedFitScale, fitScaleCap)
+    : uncappedFitScale;
   const surfaceWidth = safeImageWidth * fitScale;
   const surfaceHeight = safeImageHeight * fitScale;
   const boundsWidth = rotatedByQuarterTurn ? surfaceHeight : surfaceWidth;

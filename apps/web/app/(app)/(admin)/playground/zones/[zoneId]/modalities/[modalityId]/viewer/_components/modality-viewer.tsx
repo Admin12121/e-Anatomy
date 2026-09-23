@@ -5,6 +5,7 @@ import {
   startTransition,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -275,6 +276,7 @@ function ModalityViewerShell({
   const [annotationForm, setAnnotationForm] = useState<AnnotationFormState>(
     EMPTY_ANNOTATION_FORM,
   );
+  const [draftPointerPlaced, setDraftPointerPlaced] = useState(false);
   const [visibleGroupIds, setVisibleGroupIds] = useState<string[]>([]);
   const [readyAssetIds, setReadyAssetIds] = useState<Set<string>>(
     () => new Set(),
@@ -310,7 +312,7 @@ function ModalityViewerShell({
   );
   const [isApplyingSliceChanges, setIsApplyingSliceChanges] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -1170,7 +1172,10 @@ function ModalityViewerShell({
   const resetAnnotationDraftToBaseline = useCallback(() => {
     setDraftDisconnectedPolygons([]);
     setAnnotationForm(annotationBaselineForm);
-  }, [annotationBaselineForm]);
+    setDraftPointerPlaced(
+      Boolean(editableAnnotation && editableAnnotation.polygonPoints.length < 3),
+    );
+  }, [annotationBaselineForm, editableAnnotation]);
 
   const searchHits = useMemo(() => {
     return buildStructureSearchHits({
@@ -1311,7 +1316,10 @@ function ModalityViewerShell({
     setDraftDisconnectedPolygons((current) =>
       current.length === 0 ? current : [],
     );
-  }, [annotationBaselineForm]);
+    setDraftPointerPlaced(
+      Boolean(editableAnnotation && editableAnnotation.polygonPoints.length < 3),
+    );
+  }, [annotationBaselineForm, editableAnnotation]);
 
   useEffect(() => {
     if (
@@ -1936,6 +1944,8 @@ function ModalityViewerShell({
 
   async function handleSaveStructure(options?: {
     groupId?: string | null;
+    preserveAnnotationDraft?: boolean;
+    silentSuccess?: boolean;
   }): Promise<ViewerStructure | null> {
     if (readOnly) {
       return null;
@@ -1978,11 +1988,15 @@ function ModalityViewerShell({
           }).unwrap()
         : await createStructure({ input, modalityId, zoneId }).unwrap();
 
-      toast.success(
-        selectedStructure ? "Structure updated." : "Structure created.",
-      );
-      setSelectedStructureId(structure.id);
-      setSelectedGroupId(structure.groupId ?? null);
+      if (!options?.silentSuccess) {
+        toast.success(
+          selectedStructure ? "Structure updated." : "Structure created.",
+        );
+      }
+      if (!options?.preserveAnnotationDraft) {
+        setSelectedStructureId(structure.id);
+        setSelectedGroupId(structure.groupId ?? null);
+      }
       return structure;
     } catch (mutationError) {
       toast.error(
@@ -2023,15 +2037,28 @@ function ModalityViewerShell({
       anchorX: annotationForm.anchorX,
       anchorY: annotationForm.anchorY,
       assetId: currentAsset.id,
-      colorHex: null,
+      colorHex: toColorInputValue(
+        annotationForm.colorHex,
+        selectedStructure?.colorHex ?? DEFAULT_ANNOTATION_COLOR,
+      ),
       isPracticeHidden: annotationDefaults.isPracticeHidden,
       isTargetedDefault: annotationDefaults.isTargetedDefault,
       isVisibleDefault: annotationDefaults.isVisibleDefault,
       labelX: annotationForm.labelX,
       labelY: annotationForm.labelY,
-      leaderColorHex: null,
+      leaderColorHex: toColorInputValue(
+        annotationForm.leaderColorHex,
+        annotationForm.colorHex ||
+          selectedStructure?.colorHex ||
+          DEFAULT_ANNOTATION_COLOR,
+      ),
       note: annotationDefaults.note,
-      overlayColorHex: null,
+      overlayColorHex: toColorInputValue(
+        annotationForm.overlayColorHex,
+        annotationForm.colorHex ||
+          selectedStructure?.colorHex ||
+          DEFAULT_ANNOTATION_COLOR,
+      ),
       overlayOpacity: annotationForm.overlayOpacity,
       polygonPoints: annotationForm.polygonPoints,
       structureId: activeStructureId,
@@ -2058,15 +2085,28 @@ function ModalityViewerShell({
         anchorX,
         anchorY,
         assetId: currentAsset.id,
-        colorHex: null,
+        colorHex: toColorInputValue(
+          annotationForm.colorHex,
+          selectedStructure?.colorHex ?? DEFAULT_ANNOTATION_COLOR,
+        ),
         isPracticeHidden: annotationDefaults.isPracticeHidden,
         isTargetedDefault: annotationDefaults.isTargetedDefault,
         isVisibleDefault: annotationDefaults.isVisibleDefault,
         labelX: createDefaultLabelX(anchorX),
         labelY: clamp(anchorY, 0.08, 0.92),
-        leaderColorHex: null,
+        leaderColorHex: toColorInputValue(
+          annotationForm.leaderColorHex,
+          annotationForm.colorHex ||
+            selectedStructure?.colorHex ||
+            DEFAULT_ANNOTATION_COLOR,
+        ),
         note: annotationDefaults.note,
-        overlayColorHex: null,
+        overlayColorHex: toColorInputValue(
+          annotationForm.overlayColorHex,
+          annotationForm.colorHex ||
+            selectedStructure?.colorHex ||
+            DEFAULT_ANNOTATION_COLOR,
+        ),
         overlayOpacity: annotationForm.overlayOpacity,
         polygonPoints,
         structureId: activeStructureId,
@@ -2115,7 +2155,9 @@ function ModalityViewerShell({
       }
 
       setDraftDisconnectedPolygons([]);
+      setSelectedStructureId(activeStructureId);
       setSelectedAnnotationId(annotation.id);
+      setDraftPointerPlaced(annotation.polygonPoints.length < 3);
       setCanvasMode("browse");
     } catch (mutationError) {
       toast.error(
@@ -2124,7 +2166,9 @@ function ModalityViewerShell({
     }
   }
 
-  async function handleSaveGroup(): Promise<ViewerStructureGroup | null> {
+  async function handleSaveGroup(options?: {
+    forceCreate?: boolean;
+  }): Promise<ViewerStructureGroup | null> {
     if (readOnly) {
       return null;
     }
@@ -2139,28 +2183,29 @@ function ModalityViewerShell({
       return null;
     }
 
+    const groupBeingEdited = options?.forceCreate ? null : selectedGroup;
     const input:
       | CreateViewerStructureGroupInput
       | UpdateViewerStructureGroupInput = {
-      description: selectedGroup?.description ?? null,
-      iconName: selectedGroup?.iconName ?? null,
+      description: groupBeingEdited?.description ?? null,
+      iconName: groupBeingEdited?.iconName ?? null,
       thumbnailUrl: groupForm.thumbnailUrl.trim(),
-      isDefaultVisible: selectedGroup?.isDefaultVisible ?? true,
-      sortOrder: selectedGroup?.sortOrder ?? 0,
+      isDefaultVisible: groupBeingEdited?.isDefaultVisible ?? true,
+      sortOrder: groupBeingEdited?.sortOrder ?? 0,
       title: groupForm.title.trim(),
     };
 
     try {
-      const group = selectedGroup
+      const group = groupBeingEdited
         ? await updateGroup({
-            groupId: selectedGroup.id,
+            groupId: groupBeingEdited.id,
             input,
             modalityId,
             zoneId,
           }).unwrap()
         : await createGroup({ input, modalityId, zoneId }).unwrap();
 
-      toast.success(selectedGroup ? "Group updated." : "Group created.");
+      toast.success(groupBeingEdited ? "Group updated." : "Group created.");
       setSelectedGroupId(group.id);
       setVisibleGroupIds((current) =>
         group.isDefaultVisible
@@ -2413,37 +2458,40 @@ function ModalityViewerShell({
       return;
     }
 
-    const activeStructureId = selectedStructure?.id ?? selectedStructureId;
-
     if (canvasMode === "create-label") {
       const nextLabelX = createDefaultLabelX(point.x);
-      const nextLabelY = clamp(point.y - 0.08, 0.08, 0.92);
+      const nextLabelY = clamp(point.y, 0.08, 0.92);
 
       updateAnnotationForm("anchorX", point.x);
       updateAnnotationForm("anchorY", point.y);
       updateAnnotationForm("labelX", nextLabelX);
       updateAnnotationForm("labelY", nextLabelY);
       updateAnnotationForm("polygonPoints", []);
-      setCanvasMode("browse");
+      setDraftPointerPlaced(true);
+      // Once the first point is placed, stay in anchor-edit mode so the user
+      // can immediately click elsewhere or drag the point to refine it.
+      setCanvasMode("set-anchor");
       return;
     }
 
+    // Area geometry is painted from pointer down/move/up in ViewerCanvas. A
+    // normal click is intentionally ignored here so it cannot append a second,
+    // incompatible polygon representation.
     if (canvasMode === "draw-region") {
-      setAnnotationForm((current) => ({
-        ...current,
-        polygonPoints: [...current.polygonPoints, point],
-      }));
       return;
     }
 
-    if (!activeStructureId) {
-      return;
-    }
-
+    // IMPORTANT: draft structures do not have a persisted structure id yet.
+    // Pointer placement must therefore work before a structure is saved. The
+    // previous guard returned early when selectedStructureId was null, making
+    // every click on a brand-new pointer draft a no-op.
     if (canvasMode === "set-anchor") {
       updateAnnotationForm("anchorX", point.x);
       updateAnnotationForm("anchorY", point.y);
-      setCanvasMode("browse");
+      updateAnnotationForm("labelX", createDefaultLabelX(point.x));
+      updateAnnotationForm("labelY", clamp(point.y, 0.08, 0.92));
+      updateAnnotationForm("polygonPoints", []);
+      setDraftPointerPlaced(true);
       return;
     }
 
@@ -2452,23 +2500,6 @@ function ModalityViewerShell({
       updateAnnotationForm("labelY", point.y);
       setCanvasMode("browse");
     }
-  }
-
-  function handleDraftLabelMove(point: ViewerAnnotationPoint) {
-    if (readOnly) {
-      return;
-    }
-
-    if (
-      !selectedAnnotationId ||
-      canvasMode === "browse" ||
-      canvasMode === "create-label"
-    ) {
-      return;
-    }
-
-    updateAnnotationForm("labelX", point.x);
-    updateAnnotationForm("labelY", point.y);
   }
 
   function handleDraftAnchorMove(point: ViewerAnnotationPoint) {
@@ -2482,6 +2513,10 @@ function ModalityViewerShell({
 
     updateAnnotationForm("anchorX", point.x);
     updateAnnotationForm("anchorY", point.y);
+    updateAnnotationForm("labelX", createDefaultLabelX(point.x));
+    updateAnnotationForm("labelY", clamp(point.y, 0.08, 0.92));
+    updateAnnotationForm("polygonPoints", []);
+    setDraftPointerPlaced(true);
   }
 
   function handleDraftPolygonPointMove(
@@ -2627,6 +2662,10 @@ function ModalityViewerShell({
   function handleResetStructureDraft() {
     setSelectedStructureId(null);
     setSelectedAnnotationId(null);
+    setAnnotationForm(EMPTY_ANNOTATION_FORM);
+    setDraftDisconnectedPolygons([]);
+    setDraftPointerPlaced(false);
+    setCanvasMode("browse");
     setStructureForm({
       ...EMPTY_STRUCTURE_FORM,
       groupId: selectedGroupId ?? groups[0]?.id ?? "",
@@ -2645,6 +2684,8 @@ function ModalityViewerShell({
     setSelectedStructureId(structureId);
     setSelectedGroupId(groupId);
     setSelectedAnnotationId(null);
+    setDraftPointerPlaced(false);
+    setCanvasMode("browse");
   }
 
   function commitSliceTimeline(nextOrder: string[]) {
@@ -3027,6 +3068,8 @@ function ModalityViewerShell({
           overlayRef={overlayRef}
           selectedAnnotationId={selectedAnnotationId}
           draftStructureTitle={selectedStructure?.title ?? structureForm.title}
+          draftPointerPlaced={draftPointerPlaced}
+          editorMode={!readOnly}
           showCrossReferences={showCrossReferences}
           showOrientation={showOrientation}
           showLabels={showLabels}
@@ -3051,7 +3094,6 @@ function ModalityViewerShell({
           onDraftDisconnectedPolygonsChange={
             handleDraftDisconnectedPolygonsChange
           }
-          onDraftLabelMove={handleDraftLabelMove}
           onDraftPolygonPointMove={handleDraftPolygonPointMove}
           onDraftPolygonReplace={handleDraftPolygonReplace}
           onLayerScrubNavigate={handleLayerScrubNavigate}
@@ -3222,6 +3264,7 @@ function ModalityViewerShell({
           readOnly={readOnly}
           selectedAnnotationId={selectedAnnotationId}
           selectedStructureId={selectedStructureId}
+          draftPointerPlaced={draftPointerPlaced}
           overlayOpacity={overlayOpacity}
           showOrientation={showOrientation}
           showLabels={showLabels}

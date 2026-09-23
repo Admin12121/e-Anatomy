@@ -21,31 +21,34 @@ import { cn } from "@/lib/utils";
 
 import {
   DEFAULT_ANNOTATION_COLOR,
-  EMPTY_ANNOTATION_FORM,
   type AnnotationFormState,
   type ViewerCanvasMode,
 } from "../modality-viewer.types";
 import { clamp } from "./utils";
+import {
+  findRegionInteriorAnchor,
+  getAnnotationDisplayAnchor,
+  layoutAnnotationLabels,
+  type AnnotationLabelCandidate,
+  type PlacedAnnotationLabel,
+} from "./viewer-canvas/annotation-layout";
+import { AnnotationNoteCard } from "./viewer-canvas/annotation-note-card";
 import { ViewerCanvasAutoArrangedLabelOverlay } from "./viewer-canvas/auto-arranged-label-overlay";
+import { DraftAutoArrangedLabelOverlay } from "./viewer-canvas/draft-auto-arranged-label-overlay";
 import {
   AREA_MASK_RESOLUTION,
-  type ArrangedLabel,
-  LABEL_SAFE_MAX_Y,
-  LABEL_SAFE_MIN_Y,
-  MAIN_LABEL_BAND_MIN_GAP_PX,
   MAX_AREA_RADIUS,
   MAX_AREA_STROKE_STEP,
   MAX_ZOOM_SCALE,
   MIN_AREA_RADIUS,
   MIN_AREA_STROKE_STEP,
   MIN_ZOOM_SCALE,
-  type LabelSide,
   calculateViewerLayout,
-  distributeLabelRows,
   extractPolygonsFromMask,
   resolveViewerImageDimensions,
 } from "./viewer-canvas/helpers";
 import { ViewerCanvasMainOverlay } from "./viewer-canvas/main-overlay";
+import { ViewerRegionOverlayCanvas } from "./viewer-canvas/region-overlay-canvas";
 
 export type MainInteractionTool = "layers" | "pan" | "zoom";
 export type AreaEditTool = "brush" | "erase";
@@ -71,6 +74,8 @@ type ViewerCanvasProps = {
   currentAtlasFrame: ZoneModalityAtlasFrame | null;
   currentImageElement: HTMLImageElement | null;
   draftStructureTitle: string;
+  draftPointerPlaced: boolean;
+  editorMode: boolean;
   hoveredAnnotationId: string | null;
   ingestFailureMessage: string | null;
   isIngesting: boolean;
@@ -83,7 +88,6 @@ type ViewerCanvasProps = {
   onDraftDisconnectedPolygonsChange: (
     polygons: ViewerAnnotationPoint[][],
   ) => void;
-  onDraftLabelMove: (point: ViewerAnnotationPoint) => void;
   onDraftPolygonPointMove: (
     index: number,
     point: ViewerAnnotationPoint,
@@ -120,6 +124,8 @@ export function ViewerCanvas({
   currentAtlasFrame,
   currentImageElement,
   draftStructureTitle,
+  draftPointerPlaced,
+  editorMode,
   hoveredAnnotationId,
   ingestFailureMessage,
   isIngesting,
@@ -130,7 +136,6 @@ export function ViewerCanvas({
   onCanvasClick,
   onDraftAnchorMove,
   onDraftDisconnectedPolygonsChange,
-  onDraftLabelMove,
   onDraftPolygonPointMove,
   onDraftPolygonReplace,
   onLayerScrubNavigate,
@@ -156,7 +161,6 @@ export function ViewerCanvas({
     annotationId: string;
     pointerId: number;
   } | null>(null);
-  const draggingLabelRef = useRef<string | null>(null);
   const draggingPolygonPointRef = useRef<{
     annotationId: string;
     pointIndex: number;
@@ -181,7 +185,6 @@ export function ViewerCanvas({
     startScale: number;
     startY: number;
   } | null>(null);
-  const [draggingLabelId, setDraggingLabelId] = useState<string | null>(null);
   const [areaToolCursorPoint, setAreaToolCursorPoint] =
     useState<ViewerAnnotationPoint | null>(null);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
@@ -191,17 +194,20 @@ export function ViewerCanvas({
   const pendingMaskPreviewFrameRef = useRef<number | null>(null);
   const skipMaskSyncRef = useRef(false);
   const [isAreaBrushActive, setIsAreaBrushActive] = useState(false);
-  const [mainStageAnchors, setMainStageAnchors] = useState<
-    Map<string, ViewerAnnotationPoint>
-  >(() => new Map());
-  const [stageSizePx, setStageSizePx] = useState({ width: 1, height: 1 });
+  const hoverClearTimerRef = useRef<number | null>(null);
+  const popupHideTimerRef = useRef<number | null>(null);
+  const popupShowFrameRef = useRef<number | null>(null);
+  const [popupRenderId, setPopupRenderId] = useState<string | null>(null);
+  const [popupVisible, setPopupVisible] = useState(false);
+  const [stageSizePx, setStageSizePx] = useState({ width: 0, height: 0 });
+  const initialFitScaleCapRef = useRef<number | null>(null);
   const [measureLabelTextWidth, setMeasureLabelTextWidth] =
     useState<LabelTextWidthMeasurer>(
       () => (text: string, fontSize: number) =>
         Math.ceil(text.length * fontSize * 0.6),
     );
   const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
-  const shouldAutoArrangeLabels = showLabels && canvasMode === "browse";
+  const shouldAutoArrangeLabels = showLabels;
   const sourceDimensions = resolveViewerImageDimensions([
     {
       height: currentAtlasFrame?.height,
@@ -222,15 +228,15 @@ export function ViewerCanvas({
   ]) ?? { height: 1, width: 1 };
   const sourceImageHeight = sourceDimensions.height;
   const sourceImageWidth = sourceDimensions.width;
-  const viewerLayout = useMemo(
+  const uncappedViewerLayout = useMemo(
     () =>
       calculateViewerLayout({
         imageHeight: sourceImageHeight,
         imageWidth: sourceImageWidth,
         reserveLabelSpace: shouldAutoArrangeLabels,
         rotationQuarterTurns: normalizedCanvasRotation,
-        stageHeight: stageSizePx.height,
-        stageWidth: stageSizePx.width,
+        stageHeight: Math.max(stageSizePx.height, 1),
+        stageWidth: Math.max(stageSizePx.width, 1),
       }),
     [
       normalizedCanvasRotation,
@@ -241,6 +247,51 @@ export function ViewerCanvas({
       stageSizePx.width,
     ],
   );
+
+  const viewerLayout = useMemo(
+    () =>
+      calculateViewerLayout({
+        fitScaleCap: initialFitScaleCapRef.current,
+        imageHeight: sourceImageHeight,
+        imageWidth: sourceImageWidth,
+        reserveLabelSpace: shouldAutoArrangeLabels,
+        rotationQuarterTurns: normalizedCanvasRotation,
+        stageHeight: Math.max(stageSizePx.height, 1),
+        stageWidth: Math.max(stageSizePx.width, 1),
+      }),
+    [
+      normalizedCanvasRotation,
+      shouldAutoArrangeLabels,
+      sourceImageHeight,
+      sourceImageWidth,
+      stageSizePx.height,
+      stageSizePx.width,
+    ],
+  );
+
+  // Lock the first settled desktop/mobile fit as the maximum automatic image
+  // scale. This runs after the parent has applied its responsive side-panel
+  // defaults, so later opening/closing those panels does not look like zooming.
+  useEffect(() => {
+    if (
+      initialFitScaleCapRef.current !== null ||
+      stageSizePx.width < 240 ||
+      stageSizePx.height < 240 ||
+      sourceImageWidth <= 1 ||
+      sourceImageHeight <= 1
+    ) {
+      return;
+    }
+
+    initialFitScaleCapRef.current =
+      uncappedViewerLayout.surfaceWidth / sourceImageWidth;
+  }, [
+    sourceImageHeight,
+    sourceImageWidth,
+    stageSizePx.height,
+    stageSizePx.width,
+    uncappedViewerLayout.surfaceWidth,
+  ]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -259,26 +310,12 @@ export function ViewerCanvas({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMeasureLabelTextWidth(
       () => (text: string, fontSize: number, fontWeight: 500 | 700) => {
-        measurementContext.font = `${fontWeight} ${fontSize}px system-ui`;
+        measurementContext.font = `${fontWeight} ${fontSize}px 'Helvetica Neue', Helvetica, Arial, sans-serif`;
 
         return Math.ceil(measurementContext.measureText(text).width);
       },
     );
   }, []);
-
-  const measureLabelRectWidth = useCallback(
-    (text: string, fontSize: number, fontWeight: 500 | 700) => {
-      return clamp(
-        viewerLayout.labelBoxMinWidth,
-        Math.ceil(
-          measureLabelTextWidth(text, fontSize, fontWeight) +
-            viewerLayout.labelBoxPaddingX * 2,
-        ),
-        viewerLayout.labelBoxMaxWidth,
-      );
-    },
-    [measureLabelTextWidth, viewerLayout],
-  );
 
   useEffect(() => {
     return () => {
@@ -292,9 +329,17 @@ export function ViewerCanvas({
   }, []);
 
   const fitLabelText = useCallback(
-    (text: string, fontSize: number, fontWeight: 500 | 700) => {
-      const maxTextWidth =
-        viewerLayout.labelBoxMaxWidth - viewerLayout.labelBoxPaddingX * 2;
+    (
+      text: string,
+      fontSize: number,
+      fontWeight: 500 | 700,
+      requestedMaxWidth?: number,
+    ) => {
+      const maxTextWidth = Math.max(
+        24,
+        requestedMaxWidth ??
+          viewerLayout.labelBoxMaxWidth - viewerLayout.labelBoxPaddingX * 2,
+      );
       const normalized = text.trim();
 
       if (!normalized) {
@@ -343,31 +388,6 @@ export function ViewerCanvas({
     [measureLabelTextWidth, viewerLayout],
   );
 
-  const clampTextXForLabelBox = useCallback(
-    (
-      textX: number,
-      textAnchor: "start" | "end",
-      labelRectWidth: number,
-      viewportWidth: number,
-    ) => {
-      if (textAnchor === "start") {
-        return clamp(
-          textX,
-          viewerLayout.labelBoxPaddingX,
-          viewportWidth -
-            (labelRectWidth - viewerLayout.labelBoxPaddingX),
-        );
-      }
-
-      return clamp(
-        textX,
-        labelRectWidth - viewerLayout.labelBoxPaddingX,
-        viewportWidth - viewerLayout.labelBoxPaddingX,
-      );
-    },
-    [viewerLayout.labelBoxPaddingX],
-  );
-
   const activeAreaToolSize =
     areaEditTool === "erase" ? areaEraserSize : areaBrushSize;
   const activeAreaStrokeStep = clamp(
@@ -383,21 +403,40 @@ export function ViewerCanvas({
   const isAreaPaintMode = canvasMode === "draw-region";
   const editLockEnabled = canvasMode !== "browse";
 
-  const draftPointerMovedFromDefault =
-    Math.abs(annotationForm.anchorX - EMPTY_ANNOTATION_FORM.anchorX) > 0.0005 ||
-    Math.abs(annotationForm.anchorY - EMPTY_ANNOTATION_FORM.anchorY) > 0.0005 ||
-    Math.abs(annotationForm.labelX - EMPTY_ANNOTATION_FORM.labelX) > 0.0005 ||
-    Math.abs(annotationForm.labelY - EMPTY_ANNOTATION_FORM.labelY) > 0.0005;
   const showDraftPointer =
     annotationEditingEnabled &&
     !selectedAnnotationId &&
     !isAreaPaintMode &&
-    (draftPointerMovedFromDefault ||
-      canvasMode === "set-anchor" ||
-      canvasMode === "set-label");
+    draftPointerPlaced;
+  const draftDisplayAnchor = useMemo<ViewerAnnotationPoint | null>(() => {
+    if (!annotationEditingEnabled || selectedAnnotationId) {
+      return null;
+    }
+
+    if (annotationForm.polygonPoints.length >= 3) {
+      return findRegionInteriorAnchor(annotationForm.polygonPoints);
+    }
+
+    if (draftPointerPlaced) {
+      return { x: annotationForm.anchorX, y: annotationForm.anchorY };
+    }
+
+    return null;
+  }, [
+    annotationEditingEnabled,
+    annotationForm.anchorX,
+    annotationForm.anchorY,
+    annotationForm.polygonPoints,
+    draftPointerPlaced,
+    selectedAnnotationId,
+  ]);
   const draftPointerColor =
     annotationForm.colorHex.trim() || DEFAULT_ANNOTATION_COLOR;
-  const draftPointerLabel = draftStructureTitle.trim() || "Draft";
+  const draftLabelColor =
+    (annotationForm.polygonPoints.length >= 3
+      ? annotationForm.overlayColorHex.trim() || annotationForm.colorHex.trim()
+      : annotationForm.colorHex.trim()) || DEFAULT_ANNOTATION_COLOR;
+  const draftLabelText = draftStructureTitle.trim() || "Draft";
   const canvasSurfaceTransform = `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale}) rotate(${normalizedCanvasRotation * 90}deg) scaleX(${canvasFlipHorizontal ? -1 : 1}) scaleY(${canvasFlipVertical ? -1 : 1})`;
 
   const resolvePointerPoint = useCallback(
@@ -625,101 +664,81 @@ export function ViewerCanvas({
     ],
   );
 
-  const refreshMainStageAnchors = useCallback(() => {
-    const stageElement = stageRef.current;
-    const overlayElement = overlayRef.current;
-
-    if (!stageElement || !overlayElement) {
-      setMainStageAnchors((previous) =>
-        previous.size === 0 ? previous : new Map(),
-      );
-      return;
-    }
-
-    const stageRect = stageElement.getBoundingClientRect();
-    const stageWidth = Math.max(stageRect.width, 1);
-    const stageHeight = Math.max(stageRect.height, 1);
-
-    setStageSizePx((previous) =>
-      previous.width === stageWidth && previous.height === stageHeight
-        ? previous
-        : {
-            width: stageWidth,
-            height: stageHeight,
-          },
-    );
-
-    if (visibleAnnotations.length === 0) {
-      setMainStageAnchors((previous) =>
-        previous.size === 0 ? previous : new Map(),
-      );
-      return;
-    }
-
-    const screenMatrix = overlayElement.getScreenCTM();
-
-    if (!screenMatrix || stageRect.width <= 0 || stageRect.height <= 0) {
-      return;
-    }
-
-    const svgPoint = overlayElement.createSVGPoint();
-    const projectedAnchors = new Map<string, ViewerAnnotationPoint>();
+  const annotationDisplayAnchors = useMemo(() => {
+    const anchors = new Map<string, ViewerAnnotationPoint>();
 
     for (const annotation of visibleAnnotations) {
       const isSelected = annotation.id === selectedAnnotationId;
-      const anchorX = isSelected ? annotationForm.anchorX : annotation.anchorX;
-      const anchorY = isSelected ? annotationForm.anchorY : annotation.anchorY;
+      const polygonPoints = isSelected
+        ? annotationForm.polygonPoints
+        : annotation.polygonPoints;
+      const anchorOverride = isSelected
+        ? { x: annotationForm.anchorX, y: annotationForm.anchorY }
+        : { x: annotation.anchorX, y: annotation.anchorY };
 
-      svgPoint.x = anchorX * viewerLayout.coordinateWidth;
-      svgPoint.y = anchorY * viewerLayout.coordinateHeight;
-
-      const projectedPoint = svgPoint.matrixTransform(screenMatrix);
-
-      projectedAnchors.set(annotation.id, {
-        x: clamp(
-          projectedPoint.x - stageRect.left,
-          -stageWidth * 0.5,
-          stageWidth * 1.5,
-        ),
-        y: clamp(
-          projectedPoint.y - stageRect.top,
-          -stageHeight * 0.5,
-          stageHeight * 1.5,
-        ),
-      });
+      anchors.set(
+        annotation.id,
+        getAnnotationDisplayAnchor(annotation, polygonPoints, anchorOverride),
+      );
     }
 
-    setMainStageAnchors(projectedAnchors);
+    return anchors;
   }, [
     annotationForm.anchorX,
     annotationForm.anchorY,
-    overlayRef,
+    annotationForm.polygonPoints,
     selectedAnnotationId,
-    stageRef,
-    viewerLayout.coordinateHeight,
-    viewerLayout.coordinateWidth,
     visibleAnnotations,
   ]);
 
-  useLayoutEffect(() => {
-    const frameHandle = window.requestAnimationFrame(() => {
-      refreshMainStageAnchors();
-    });
+  const projectDisplayAnchorToStage = useCallback(
+    (displayAnchor: ViewerAnnotationPoint): ViewerAnnotationPoint => {
+      const stageWidth = Math.max(stageSizePx.width, 1);
+      const stageHeight = Math.max(stageSizePx.height, 1);
+      let deltaX =
+        (displayAnchor.x - 0.5) * viewerLayout.surfaceWidth *
+        (canvasFlipHorizontal ? -1 : 1);
+      let deltaY =
+        (displayAnchor.y - 0.5) * viewerLayout.surfaceHeight *
+        (canvasFlipVertical ? -1 : 1);
 
-    return () => {
-      window.cancelAnimationFrame(frameHandle);
-    };
-  }, [
-    canvasFlipHorizontal,
-    canvasFlipVertical,
-    currentAsset?.id,
-    normalizedCanvasRotation,
-    panOffset.x,
-    panOffset.y,
-    refreshMainStageAnchors,
-    zoomScale,
-  ]);
+      switch (normalizedCanvasRotation) {
+        case 1:
+          [deltaX, deltaY] = [-deltaY, deltaX];
+          break;
+        case 2:
+          [deltaX, deltaY] = [-deltaX, -deltaY];
+          break;
+        case 3:
+          [deltaX, deltaY] = [deltaY, -deltaX];
+          break;
+        default:
+          break;
+      }
 
+      return {
+        x: stageWidth / 2 + panOffset.x + deltaX * zoomScale,
+        y: stageHeight / 2 + panOffset.y + deltaY * zoomScale,
+      };
+    },
+    [
+      canvasFlipHorizontal,
+      canvasFlipVertical,
+      normalizedCanvasRotation,
+      panOffset.x,
+      panOffset.y,
+      stageSizePx.height,
+      stageSizePx.width,
+      viewerLayout.surfaceHeight,
+      viewerLayout.surfaceWidth,
+      zoomScale,
+    ],
+  );
+
+  // Measure synchronously in a layout effect. The previous implementation
+  // deferred this work to requestAnimationFrame, which allowed one browser
+  // paint with a 1x1 stage and caused the scan/labels to visibly jump from the
+  // center to their real positions.
   useLayoutEffect(() => {
     const stageElement = stageRef.current;
 
@@ -727,16 +746,34 @@ export function ViewerCanvas({
       return;
     }
 
-    const resizeObserver = new ResizeObserver(() => {
-      refreshMainStageAnchors();
-    });
+    const measure = () => {
+      const rect = stageElement.getBoundingClientRect();
+      const width = Math.max(rect.width, 0);
+      const height = Math.max(rect.height, 0);
 
+      setStageSizePx((previous) =>
+        Math.abs(previous.width - width) < 0.5 &&
+        Math.abs(previous.height - height) < 0.5
+          ? previous
+          : { width, height },
+      );
+    };
+
+    measure();
+    const resizeObserver = new ResizeObserver(measure);
     resizeObserver.observe(stageElement);
 
     return () => {
       resizeObserver.disconnect();
     };
-  }, [refreshMainStageAnchors, stageRef]);
+    // The stage element is not rendered while there is no current asset. The
+    // first version of the synchronous measurement change only depended on the
+    // ref object, so the effect ran once while stageRef.current was null and
+    // never ran again when the first slice became available. That left
+    // stageSizePx at 0x0 and the image surface permanently hidden. Re-run when
+    // the active asset changes so a newly mounted stage is measured before
+    // paint, while ResizeObserver continues to cover panel/layout changes.
+  }, [currentAsset?.id, stageRef]);
 
   useLayoutEffect(() => {
     if (canvasMode !== "draw-region") {
@@ -903,123 +940,227 @@ export function ViewerCanvas({
   ]);
 
   const labelLayout = useMemo(() => {
-    const labels = new Map<string, ArrangedLabel>();
+    const labels = new Map<string, PlacedAnnotationLabel>();
 
-    if (!shouldAutoArrangeLabels || visibleAnnotations.length === 0) {
-      return {
-        labels,
-      };
+    if (
+      !shouldAutoArrangeLabels ||
+      stageSizePx.width < 2 ||
+      stageSizePx.height < 2 ||
+      (visibleAnnotations.length === 0 && !draftDisplayAnchor)
+    ) {
+      return { labels };
     }
 
     const stageWidth = Math.max(stageSizePx.width, 1);
     const stageHeight = Math.max(stageSizePx.height, 1);
-    const minRowGap = viewerLayout.labelRowGap;
-    const safeMinY = stageHeight * LABEL_SAFE_MIN_Y;
-    const safeMaxY = stageHeight * LABEL_SAFE_MAX_Y;
-    const labelBandGap = MAIN_LABEL_BAND_MIN_GAP_PX * viewerLayout.labelScale;
-    const bySide: Record<
-      LabelSide,
-      Array<{ anchorX: number; anchorY: number; id: string }>
-    > = {
-      left: [],
-      right: [],
-    };
+    const candidates: AnnotationLabelCandidate[] = [];
 
     for (const annotation of visibleAnnotations) {
-      const projectedAnchor = mainStageAnchors.get(annotation.id);
-      if (!projectedAnchor) {
+      const structure = structuresById.get(annotation.structureId);
+      const displayAnchor = annotationDisplayAnchors.get(annotation.id);
+
+      if (!structure || !displayAnchor) {
         continue;
       }
 
-      const anchorX = clamp(projectedAnchor.x, 0, stageWidth);
-      const anchorY = clamp(projectedAnchor.y, 0, stageHeight);
+      const projectedAnchor = projectDisplayAnchorToStage(displayAnchor);
 
-      const isVisibleOnStage =
-        projectedAnchor.x >= 0 &&
-        projectedAnchor.x <= stageWidth &&
-        projectedAnchor.y >= 0 &&
-        projectedAnchor.y <= stageHeight;
-
-      if (!isVisibleOnStage) {
+      if (
+        projectedAnchor.x < 0 ||
+        projectedAnchor.x > stageWidth ||
+        projectedAnchor.y < 0 ||
+        projectedAnchor.y > stageHeight
+      ) {
         continue;
       }
 
-      const side: LabelSide = anchorX >= stageWidth / 2 ? "right" : "left";
+      const isSelected = annotation.id === selectedAnnotationId;
+      const isRegion = (
+        isSelected ? annotationForm.polygonPoints : annotation.polygonPoints
+      ).length >= 3;
+      const color =
+        (isSelected
+          ? isRegion
+            ? annotationForm.overlayColorHex.trim() ||
+              annotationForm.colorHex.trim() ||
+              annotation.overlayColorHex ||
+              annotation.colorHex ||
+              structure.colorHex
+            : annotationForm.colorHex.trim() ||
+              annotation.colorHex ||
+              structure.colorHex
+          : isRegion
+            ? annotation.overlayColorHex ||
+              annotation.colorHex ||
+              structure.colorHex
+            : annotation.colorHex || structure.colorHex) ||
+        DEFAULT_ANNOTATION_COLOR;
 
-      bySide[side].push({
-        anchorX,
-        anchorY,
+      candidates.push({
+        anchorX: projectedAnchor.x,
+        anchorY: projectedAnchor.y,
+        color,
         id: annotation.id,
+        label: annotation.titleOverride || structure.title,
+        priority:
+          (isSelected ? 1_000_000 : 0) +
+          (isRegion ? 10_000 : 0) +
+          Math.max(0, 5_000 - annotation.sortOrder),
+        side: "auto",
       });
     }
 
-    for (const side of ["left", "right"] as const) {
-      const sideItems = bySide[side].sort(
-        (left, right) => left.anchorY - right.anchorY,
-      );
-
-      if (sideItems.length === 0) {
-        continue;
-      }
-
-      const textAnchor = side === "right" ? "start" : "end";
-      const availableBand = Math.max(safeMaxY - safeMinY, minRowGap);
-      const effectiveGap =
-        sideItems.length > 1
-          ? Math.min(minRowGap, availableBand / (sideItems.length - 1))
-          : minRowGap;
-      const distributedRows = distributeLabelRows(
-        sideItems.map((item) => item.anchorY),
-        safeMinY,
-        safeMaxY,
-        effectiveGap,
-      );
-
-      sideItems.forEach((item, index) => {
-        const rowY = distributedRows[index] ?? item.anchorY;
-        const labelOffset = clamp(
-          viewerLayout.labelBaseOffset +
-            Math.abs(item.anchorX - stageWidth / 2) * 0.12,
-          viewerLayout.labelOffsetMin,
-          viewerLayout.labelOffsetMax,
-        );
-        const textX =
-          side === "right"
-            ? clamp(
-                item.anchorX + labelOffset,
-                viewerLayout.boundsRight + labelBandGap,
-                stageWidth -
-                  viewerLayout.stagePadding -
-                  viewerLayout.labelBoxPaddingX,
-              )
-            : clamp(
-                item.anchorX - labelOffset,
-                viewerLayout.stagePadding + viewerLayout.labelBoxPaddingX,
-                viewerLayout.boundsLeft - labelBandGap,
-              );
-
-        labels.set(item.id, {
-          anchorX: item.anchorX,
-          anchorY: item.anchorY,
-          side,
-          textAnchor,
-          textX,
-          y: rowY,
-        });
+    const projectedDraftAnchor = draftDisplayAnchor
+      ? projectDisplayAnchorToStage(draftDisplayAnchor)
+      : null;
+    if (draftDisplayAnchor && projectedDraftAnchor) {
+      candidates.push({
+        anchorX: projectedDraftAnchor.x,
+        anchorY: projectedDraftAnchor.y,
+        color: draftLabelColor,
+        id: "__draft__",
+        label: draftLabelText,
+        priority: 2_000_000,
+        side: "auto",
       });
     }
 
-    return {
-      labels,
-    };
+    for (const placed of layoutAnnotationLabels(
+      candidates,
+      stageWidth,
+      stageHeight,
+    )) {
+      labels.set(placed.id, placed);
+    }
+
+    return { labels };
   }, [
+    annotationForm.colorHex,
+    annotationForm.overlayColorHex,
+    annotationForm.polygonPoints,
+    draftDisplayAnchor,
+    draftLabelColor,
+    draftLabelText,
+    annotationDisplayAnchors,
+    projectDisplayAnchorToStage,
+    selectedAnnotationId,
+    shouldAutoArrangeLabels,
     stageSizePx.height,
     stageSizePx.width,
-    shouldAutoArrangeLabels,
-    mainStageAnchors,
-    viewerLayout,
+    structuresById,
     visibleAnnotations,
   ]);
+
+  const draftPlacedLabel = labelLayout.labels.get("__draft__") ?? null;
+
+  const handleAnnotationHover = useCallback(
+    (annotationId: string | null) => {
+      if (typeof window !== "undefined" && hoverClearTimerRef.current !== null) {
+        window.clearTimeout(hoverClearTimerRef.current);
+        hoverClearTimerRef.current = null;
+      }
+
+      if (annotationId) {
+        onAnnotationHover(annotationId);
+        return;
+      }
+
+      if (typeof window === "undefined") {
+        onAnnotationHover(null);
+        return;
+      }
+
+      hoverClearTimerRef.current = window.setTimeout(() => {
+        hoverClearTimerRef.current = null;
+        onAnnotationHover(null);
+      }, 260);
+    },
+    [onAnnotationHover],
+  );
+
+  const popupTargetId = editorMode
+    ? null
+    : selectedAnnotationId ?? hoveredAnnotationId;
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (editorMode) {
+      if (popupHideTimerRef.current !== null) {
+        window.clearTimeout(popupHideTimerRef.current);
+        popupHideTimerRef.current = null;
+      }
+      if (popupShowFrameRef.current !== null) {
+        window.cancelAnimationFrame(popupShowFrameRef.current);
+        popupShowFrameRef.current = null;
+      }
+      setPopupVisible(false);
+      setPopupRenderId(null);
+      return;
+    }
+
+    if (popupHideTimerRef.current !== null) {
+      window.clearTimeout(popupHideTimerRef.current);
+      popupHideTimerRef.current = null;
+    }
+    if (popupShowFrameRef.current !== null) {
+      window.cancelAnimationFrame(popupShowFrameRef.current);
+      popupShowFrameRef.current = null;
+    }
+
+    if (popupTargetId && labelLayout.labels.has(popupTargetId)) {
+      // A clicked label/card acts as a pin, matching the mature demo: once
+      // selected, incidental hover on another leader cannot steal the card.
+      // With no pinned selection, hover still previews normally.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPopupRenderId(popupTargetId);
+      popupShowFrameRef.current = window.requestAnimationFrame(() => {
+        popupShowFrameRef.current = null;
+        setPopupVisible(true);
+      });
+      return;
+    }
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPopupVisible(false);
+    popupHideTimerRef.current = window.setTimeout(() => {
+      popupHideTimerRef.current = null;
+      setPopupRenderId(null);
+    }, 220);
+  }, [editorMode, labelLayout, popupTargetId]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window === "undefined") {
+        return;
+      }
+      if (hoverClearTimerRef.current !== null) {
+        window.clearTimeout(hoverClearTimerRef.current);
+      }
+      if (popupHideTimerRef.current !== null) {
+        window.clearTimeout(popupHideTimerRef.current);
+      }
+      if (popupShowFrameRef.current !== null) {
+        window.cancelAnimationFrame(popupShowFrameRef.current);
+      }
+    };
+  }, []);
+
+  const popupAnnotation = useMemo(
+    () =>
+      visibleAnnotations.find(
+        (annotation) => annotation.id === popupRenderId,
+      ) ?? null,
+    [popupRenderId, visibleAnnotations],
+  );
+  const popupStructure = popupAnnotation
+    ? structuresById.get(popupAnnotation.structureId) ?? null
+    : null;
+  const popupLabel = popupRenderId
+    ? labelLayout.labels.get(popupRenderId) ?? null
+    : null;
 
   if (!currentAsset) {
     if (isPreparingInitialAsset || isIngesting) {
@@ -1248,6 +1389,10 @@ export function ViewerCanvas({
             height: viewerLayout.surfaceHeight,
             transform: canvasSurfaceTransform,
             transformOrigin: "center center",
+            visibility:
+              stageSizePx.width >= 2 && stageSizePx.height >= 2
+                ? "visible"
+                : "hidden",
             width: viewerLayout.surfaceWidth,
           }}
         >
@@ -1256,6 +1401,16 @@ export function ViewerCanvas({
             aria-label={currentAsset.label}
             className="block h-full w-full"
             draggable={false}
+          />
+          <ViewerRegionOverlayCanvas
+            annotationForm={annotationForm}
+            canvasMode={canvasMode}
+            editorMode={editorMode}
+            overlayOpacity={overlayOpacity}
+            selectedAnnotationId={selectedAnnotationId}
+            structuresById={structuresById}
+            viewerLayout={viewerLayout}
+            visibleAnnotations={visibleAnnotations}
           />
           <canvas
             ref={areaMaskPreviewCanvasRef}
@@ -1272,6 +1427,7 @@ export function ViewerCanvas({
             className={cn(
               "absolute inset-0 h-full w-full touch-none",
               isAreaPaintMode ? "cursor-none" : null,
+              canvasMode === "set-anchor" ? "cursor-crosshair" : null,
             )}
             style={{ touchAction: "none" }}
             viewBox={`0 0 ${viewerLayout.coordinateWidth} ${viewerLayout.coordinateHeight}`}
@@ -1313,11 +1469,6 @@ export function ViewerCanvas({
             onPointerMove={(event) => {
               const pointerPoint = resolvePointerPoint(event);
 
-              if (draggingLabelRef.current) {
-                onDraftLabelMove(pointerPoint);
-                return;
-              }
-
               const draggingAnchor = draggingAnchorRef.current;
               if (
                 draggingAnchor &&
@@ -1354,17 +1505,6 @@ export function ViewerCanvas({
               commitBrushPoint(pointerPoint);
             }}
             onPointerUp={(event) => {
-              if (draggingLabelRef.current) {
-                draggingLabelRef.current = null;
-                setDraggingLabelId(null);
-
-                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                }
-
-                return;
-              }
-
               const draggingAnchor = draggingAnchorRef.current;
               if (
                 draggingAnchor &&
@@ -1421,8 +1561,6 @@ export function ViewerCanvas({
               setIsAreaBrushActive(false);
               draggingAnchorRef.current = null;
               draggingPolygonPointRef.current = null;
-              draggingLabelRef.current = null;
-              setDraggingLabelId(null);
               setAreaToolCursorPoint(null);
               if (isAreaPaintMode && wasBrushing) {
                 event.preventDefault();
@@ -1437,10 +1575,8 @@ export function ViewerCanvas({
 
               const wasBrushing = brushingRef.current;
 
-              draggingLabelRef.current = null;
               draggingAnchorRef.current = null;
               draggingPolygonPointRef.current = null;
-              setDraggingLabelId(null);
 
               if (isAreaPaintMode && wasBrushing) {
                 brushingRef.current = false;
@@ -1462,28 +1598,18 @@ export function ViewerCanvas({
               disconnectedOverlayColor={disconnectedOverlayColor}
               draftDisconnectedPolygons={draftDisconnectedPolygons}
               draftPointerColor={draftPointerColor}
-              draftPointerLabel={draftPointerLabel}
               draggingAnchorRef={draggingAnchorRef}
-              draggingLabelId={draggingLabelId}
-              draggingLabelRef={draggingLabelRef}
               editLockEnabled={editLockEnabled}
-              fitLabelText={fitLabelText}
-              hoveredAnnotationId={hoveredAnnotationId}
               areaPaintPreviewActive={isAreaBrushActive}
               isAreaPaintMode={isAreaPaintMode}
-              measureLabelRectWidth={measureLabelRectWidth}
-              onAnnotationHover={onAnnotationHover}
+              onAnnotationHover={handleAnnotationHover}
               onAnnotationSelect={onAnnotationSelect}
               onDraftAnchorMove={onDraftAnchorMove}
-              onDraftLabelMove={onDraftLabelMove}
               overlayOpacity={overlayOpacity}
               resolvePointerPoint={resolvePointerPoint}
               selectedAnnotationId={selectedAnnotationId}
-              setDraggingLabelId={setDraggingLabelId}
-              shouldAutoArrangeLabels={shouldAutoArrangeLabels}
               showCrossReferences={showCrossReferences}
               showDraftPointer={showDraftPointer}
-              showLabels={showLabels}
               structuresById={structuresById}
               viewerLayout={viewerLayout}
               visibleAnnotations={visibleAnnotations}
@@ -1494,21 +1620,48 @@ export function ViewerCanvas({
         {shouldAutoArrangeLabels ? (
           <ViewerCanvasAutoArrangedLabelOverlay
             annotationForm={annotationForm}
-            clampTextXForLabelBox={clampTextXForLabelBox}
-            draggingLabelId={draggingLabelId}
             editLockEnabled={editLockEnabled}
+            editorMode={editorMode}
             fitLabelText={fitLabelText}
-            hoveredAnnotationId={hoveredAnnotationId}
             labelLayout={labelLayout}
-            measureLabelRectWidth={measureLabelRectWidth}
-            onAnnotationHover={onAnnotationHover}
+            onAnnotationHover={handleAnnotationHover}
             onAnnotationSelect={onAnnotationSelect}
             selectedAnnotationId={selectedAnnotationId}
             showLabels={showLabels}
             stageSizePx={stageSizePx}
             structuresById={structuresById}
-            viewerLayout={viewerLayout}
             visibleAnnotations={visibleAnnotations}
+          />
+        ) : null}
+
+        {showLabels ? (
+          <DraftAutoArrangedLabelOverlay
+            color={draftLabelColor}
+            fitLabelText={fitLabelText}
+            label={draftLabelText}
+            placed={draftPlacedLabel}
+            stageSizePx={stageSizePx}
+          />
+        ) : null}
+
+        {!editorMode && popupAnnotation && popupStructure && popupLabel ? (
+          <AnnotationNoteCard
+            key={popupAnnotation.id}
+            annotation={popupAnnotation}
+            label={popupLabel}
+            onHoverChange={(hovered) =>
+              handleAnnotationHover(hovered ? popupAnnotation.id : null)
+            }
+            onSelect={() =>
+              onAnnotationSelect(
+                popupAnnotation.id,
+                popupAnnotation.structureId,
+              )
+            }
+            stageHeight={Math.max(stageSizePx.height, 1)}
+            stageWidth={Math.max(stageSizePx.width, 1)}
+            structure={popupStructure}
+            visible={popupVisible}
           />
         ) : null}
       </div>

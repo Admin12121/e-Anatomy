@@ -1,4 +1,4 @@
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { MutableRefObject } from "react";
 
 import type {
   ViewerAnnotation,
@@ -11,8 +11,7 @@ import {
   type AnnotationFormState,
   type ViewerCanvasMode,
 } from "../../modality-viewer.types";
-import { clamp } from "../utils";
-import { getAnnotationFocusOpacity, type ViewerLayout } from "./helpers";
+import type { ViewerLayout } from "./helpers";
 
 type AnchorDragState = {
   annotationId: string;
@@ -36,43 +35,25 @@ type ViewerCanvasMainOverlayProps = {
   disconnectedOverlayColor: string;
   draftDisconnectedPolygons: ViewerAnnotationPoint[][];
   draftPointerColor: string;
-  draftPointerLabel: string;
   draggingAnchorRef: MutableRefObject<AnchorDragState | null>;
-  draggingLabelId: string | null;
-  draggingLabelRef: MutableRefObject<string | null>;
   editLockEnabled: boolean;
-  fitLabelText: (
-    text: string,
-    fontSize: number,
-    fontWeight: 500 | 700,
-  ) => string;
-  hoveredAnnotationId: string | null;
   isAreaPaintMode: boolean;
-  measureLabelRectWidth: (
-    text: string,
-    fontSize: number,
-    fontWeight: 500 | 700,
-  ) => number;
   onAnnotationHover: (annotationId: string | null) => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   onDraftAnchorMove: (point: ViewerAnnotationPoint) => void;
-  onDraftLabelMove: (point: ViewerAnnotationPoint) => void;
   overlayOpacity: number;
   resolvePointerPoint: (
     event: ResolvePointerPointInput,
   ) => ViewerAnnotationPoint;
   selectedAnnotationId: string | null;
-  setDraggingLabelId: Dispatch<SetStateAction<string | null>>;
-  shouldAutoArrangeLabels: boolean;
   showCrossReferences: boolean;
   showDraftPointer: boolean;
-  showLabels: boolean;
   structuresById: Map<string, ViewerStructure>;
   viewerLayout: ViewerLayout;
   visibleAnnotations: ViewerAnnotation[];
 };
 
-function pointsToSmoothClosedPath(
+export function pointsToSmoothClosedPath(
   points: ViewerAnnotationPoint[],
   coordinateWidth: number,
   coordinateHeight: number,
@@ -107,7 +88,6 @@ function pointsToSmoothClosedPath(
   }
 
   commands.push("Z");
-
   return commands.join(" ");
 }
 
@@ -122,27 +102,17 @@ export function ViewerCanvasMainOverlay({
   disconnectedOverlayColor,
   draftDisconnectedPolygons,
   draftPointerColor,
-  draftPointerLabel,
   draggingAnchorRef,
-  draggingLabelId,
-  draggingLabelRef,
   editLockEnabled,
-  fitLabelText,
-  hoveredAnnotationId,
   isAreaPaintMode,
-  measureLabelRectWidth,
   onAnnotationHover,
   onAnnotationSelect,
   onDraftAnchorMove,
-  onDraftLabelMove,
   overlayOpacity,
   resolvePointerPoint,
   selectedAnnotationId,
-  setDraggingLabelId,
-  shouldAutoArrangeLabels,
   showCrossReferences,
   showDraftPointer,
-  showLabels,
   structuresById,
   viewerLayout,
   visibleAnnotations,
@@ -168,148 +138,50 @@ export function ViewerCanvasMainOverlay({
         }
 
         const isSelected = annotation.id === selectedAnnotationId;
-        const isHovered = annotation.id === hoveredAnnotationId;
-        const focusOpacity = getAnnotationFocusOpacity({
-          annotationId: annotation.id,
-          hoveredId: hoveredAnnotationId,
-          selectedId: selectedAnnotationId,
-        });
-        const isInteractionBlocked = editLockEnabled
+        const interactionBlocked = editLockEnabled
           ? selectedAnnotationId
             ? !isSelected
             : true
           : false;
-        const preferredAnnotationColor = isSelected
-          ? annotationForm.colorHex.trim() || structure.colorHex
-          : structure.colorHex;
-        const color = preferredAnnotationColor || DEFAULT_ANNOTATION_COLOR;
+        const polygonPoints = isSelected
+          ? annotationForm.polygonPoints
+          : annotation.polygonPoints;
+        const isRegion = polygonPoints.length >= 3;
         const anchorX = isSelected
           ? annotationForm.anchorX
           : annotation.anchorX;
         const anchorY = isSelected
           ? annotationForm.anchorY
           : annotation.anchorY;
-        const labelX = isSelected ? annotationForm.labelX : annotation.labelX;
-        const labelY = isSelected ? annotationForm.labelY : annotation.labelY;
-        const rawLabelTextAnchor: "start" | "end" =
-          labelX >= 0.5 ? "start" : "end";
-        const polygonPoints = isSelected
-          ? annotationForm.polygonPoints
-          : annotation.polygonPoints;
-        const overlayColor = isSelected
-          ? annotationForm.overlayColorHex || color
-          : color;
-        const leaderColor = isSelected
-          ? annotationForm.leaderColorHex || color
-          : color;
-        const polygonOpacity = isSelected
-          ? annotationForm.overlayOpacity
-          : annotation.overlayOpacity;
-        const emphasizedOpacity = clamp(
-          polygonOpacity *
-            overlayOpacity *
-            (isInteractionBlocked
-              ? 0.65
-              : isSelected
-                ? 1.2
-                : isHovered
-                  ? 1.35
-                  : 1),
-          0,
-          0.92,
-        );
-        const label = annotation.titleOverride || structure.title;
-        const markerVisible = showLabels && !isInteractionBlocked;
-        const textVisible = showLabels && !isInteractionBlocked;
-        const screenFontSize = viewerLayout.fontSize;
-        const fontSize = screenFontSize * canvasUnitsPerScreenPixel;
-        const annotationPositionEditingActive =
-          canvasMode === "set-anchor" || canvasMode === "set-label";
+        const color =
+          (isSelected
+            ? annotationForm.colorHex.trim() || structure.colorHex
+            : structure.colorHex) || DEFAULT_ANNOTATION_COLOR;
         const canDragAnchor =
           annotationEditingEnabled &&
           isSelected &&
-          !isInteractionBlocked &&
-          annotationPositionEditingActive;
-        const canDragLabel =
-          annotationEditingEnabled &&
-          isSelected &&
-          !shouldAutoArrangeLabels &&
-          !isInteractionBlocked &&
-          annotationPositionEditingActive;
-        const highlightLabel =
-          isSelected || isHovered || draggingLabelId === annotation.id;
-        const leaderStrokeWidth =
-          (isSelected ? 3.5 : isHovered ? 3 : 2) *
-          viewerLayout.labelScale *
-          canvasUnitsPerScreenPixel;
-        const markerRadius =
-          (isSelected ? 8 : isHovered ? 7 : 6) *
-          viewerLayout.labelScale *
-          canvasUnitsPerScreenPixel;
-        const labelFontWeight: 500 | 700 = isSelected ? 700 : 500;
-        const displayLabel = fitLabelText(
-          label,
-          screenFontSize,
-          labelFontWeight,
-        );
-        const shouldRenderCanvasLeaders =
-          markerVisible && !shouldAutoArrangeLabels && !isInteractionBlocked;
-        const shouldRenderCanvasLabel =
-          textVisible && !shouldAutoArrangeLabels && !isInteractionBlocked;
-        const labelRectWidth =
-          measureLabelRectWidth(
-            displayLabel,
-            screenFontSize,
-            labelFontWeight,
-          ) * canvasUnitsPerScreenPixel;
-        const labelRectHeight =
-          (screenFontSize + viewerLayout.labelBoxHeightPadding) *
-          canvasUnitsPerScreenPixel;
-        const labelBoxPaddingX =
-          viewerLayout.labelBoxPaddingX * canvasUnitsPerScreenPixel;
-        const rawLabelTextX = labelX * viewerLayout.coordinateWidth;
-        const resolvedLabelTextX =
-          rawLabelTextAnchor === "start"
-            ? clamp(
-                rawLabelTextX,
-                labelBoxPaddingX,
-                viewerLayout.coordinateWidth -
-                  (labelRectWidth - labelBoxPaddingX),
-              )
-            : clamp(
-                rawLabelTextX,
-                labelRectWidth - labelBoxPaddingX,
-                viewerLayout.coordinateWidth - labelBoxPaddingX,
-              );
-        const resolvedLabelRectX =
-          rawLabelTextAnchor === "start"
-            ? resolvedLabelTextX - labelBoxPaddingX
-            : resolvedLabelTextX - labelRectWidth + labelBoxPaddingX;
+          !isRegion &&
+          !interactionBlocked &&
+          canvasMode === "set-anchor";
 
         return (
           <g
             key={annotation.id}
             style={{
-              opacity: focusOpacity,
-              pointerEvents: isInteractionBlocked ? "none" : undefined,
-              transition: "opacity 140ms ease",
+              pointerEvents: interactionBlocked ? "none" : undefined,
             }}
             onMouseEnter={() => {
-              if (isInteractionBlocked) {
-                return;
+              if (!interactionBlocked) {
+                onAnnotationHover(annotation.id);
               }
-
-              onAnnotationHover(annotation.id);
             }}
             onMouseLeave={() => {
-              if (isInteractionBlocked) {
-                return;
+              if (!interactionBlocked) {
+                onAnnotationHover(null);
               }
-
-              onAnnotationHover(null);
             }}
             onClick={(event) => {
-              if (isInteractionBlocked) {
+              if (interactionBlocked) {
                 return;
               }
 
@@ -317,196 +189,113 @@ export function ViewerCanvasMainOverlay({
               onAnnotationSelect(annotation.id, annotation.structureId);
             }}
           >
-            {polygonPoints.length >= 3 &&
-            !(areaPaintPreviewActive && isAreaPaintMode && isSelected) ? (
+            {isRegion ? (
               <path
                 d={pointsToSmoothClosedPath(
                   polygonPoints,
                   viewerLayout.coordinateWidth,
                   viewerLayout.coordinateHeight,
                 )}
-                fill={overlayColor}
-                fillOpacity={emphasizedOpacity}
+                fill="rgba(0,0,0,0.001)"
+                pointerEvents="all"
               />
-            ) : null}
-            {markerVisible ? (
-              <>
-                {shouldRenderCanvasLeaders ? (
-                  <line
-                    stroke={leaderColor}
-                    strokeLinecap="round"
-                    strokeOpacity={highlightLabel ? 1 : 0.86}
-                    strokeWidth={leaderStrokeWidth}
-                    x1={anchorX * viewerLayout.coordinateWidth}
-                    x2={resolvedLabelTextX}
-                    y1={anchorY * viewerLayout.coordinateHeight}
-                    y2={labelY * viewerLayout.coordinateHeight}
-                  />
-                ) : null}
-                <circle
-                  className={canDragAnchor ? "cursor-move" : undefined}
-                  cx={anchorX * viewerLayout.coordinateWidth}
-                  cy={anchorY * viewerLayout.coordinateHeight}
-                  fill={color}
-                  opacity={highlightLabel ? 1 : 0.88}
-                  r={markerRadius}
-                  stroke={isSelected ? "rgba(255,255,255,0.78)" : "transparent"}
-                  strokeWidth={isSelected ? 1.4 : 0}
-                  onPointerDown={(event) => {
-                    if (!canDragAnchor) {
-                      return;
-                    }
+            ) : (
+              <circle
+                cx={anchorX * viewerLayout.coordinateWidth}
+                cy={anchorY * viewerLayout.coordinateHeight}
+                fill="rgba(0,0,0,0.001)"
+                pointerEvents="all"
+                r={Math.max(10, 10 * canvasUnitsPerScreenPixel)}
+              />
+            )}
 
-                    const svg = event.currentTarget.ownerSVGElement;
-                    if (!svg) {
-                      return;
-                    }
-
-                    event.stopPropagation();
-                    draggingAnchorRef.current = {
-                      annotationId: annotation.id,
-                      pointerId: event.pointerId,
-                    };
-                    svg.setPointerCapture(event.pointerId);
-                    onDraftAnchorMove(
-                      resolvePointerPoint({
-                        clientX: event.clientX,
-                        clientY: event.clientY,
-                        currentTarget: svg,
-                      }),
-                    );
-                  }}
-                />
-              </>
-            ) : null}
-            {shouldRenderCanvasLabel ? (
-              <g>
-                {highlightLabel ? (
-                  <rect
-                    fill={color}
-                    height={labelRectHeight}
-                    opacity={0.95}
-                    rx={6}
-                    width={labelRectWidth}
-                    x={resolvedLabelRectX}
-                    y={
-                      labelY * viewerLayout.coordinateHeight -
-                      labelRectHeight / 2
-                    }
-                  />
-                ) : null}
-                <text
-                  className={
-                    canDragLabel ? "cursor-pointer select-none" : undefined
+            {canDragAnchor ? (
+              <circle
+                className="cursor-move"
+                cx={anchorX * viewerLayout.coordinateWidth}
+                cy={anchorY * viewerLayout.coordinateHeight}
+                fill={color}
+                r={7 * canvasUnitsPerScreenPixel}
+                stroke="rgba(255,255,255,0.82)"
+                strokeWidth={1.4 * canvasUnitsPerScreenPixel}
+                onPointerDown={(event) => {
+                  const svg = event.currentTarget.ownerSVGElement;
+                  if (!svg) {
+                    return;
                   }
-                  dominantBaseline="middle"
-                  fill={highlightLabel ? "#ffffff" : color}
-                  fontFamily="system-ui"
-                  fontSize={fontSize}
-                  fontWeight={labelFontWeight}
-                  textAnchor={rawLabelTextAnchor}
-                  x={resolvedLabelTextX}
-                  y={labelY * viewerLayout.coordinateHeight}
-                  onPointerDown={(event) => {
-                    if (!canDragLabel) {
-                      return;
-                    }
 
-                    const svg = event.currentTarget.ownerSVGElement;
-                    if (!svg) {
-                      return;
-                    }
-
-                    event.stopPropagation();
-                    draggingLabelRef.current = annotation.id;
-                    setDraggingLabelId(annotation.id);
-                    svg.setPointerCapture(event.pointerId);
-                    onDraftLabelMove(
-                      resolvePointerPoint({
-                        clientX: event.clientX,
-                        clientY: event.clientY,
-                        currentTarget: svg,
-                      }),
-                    );
-                  }}
-                >
-                  {displayLabel}
-                </text>
-              </g>
+                  event.stopPropagation();
+                  draggingAnchorRef.current = {
+                    annotationId: annotation.id,
+                    pointerId: event.pointerId,
+                  };
+                  svg.setPointerCapture(event.pointerId);
+                  onDraftAnchorMove(
+                    resolvePointerPoint({
+                      clientX: event.clientX,
+                      clientY: event.clientY,
+                      currentTarget: svg,
+                    }),
+                  );
+                }}
+              />
             ) : null}
           </g>
         );
       })}
+
       {showDraftPointer ? (
-        <g>
-          <line
-            stroke={annotationForm.leaderColorHex || draftPointerColor}
-            strokeWidth={2}
-            x1={annotationForm.anchorX * viewerLayout.coordinateWidth}
-            x2={annotationForm.labelX * viewerLayout.coordinateWidth}
-            y1={annotationForm.anchorY * viewerLayout.coordinateHeight}
-            y2={annotationForm.labelY * viewerLayout.coordinateHeight}
-          />
-          <circle
-            className={
-              annotationEditingEnabled &&
-              (canvasMode === "set-anchor" || canvasMode === "set-label")
-                ? "cursor-move"
-                : undefined
+        <circle
+          className={
+            annotationEditingEnabled && canvasMode === "set-anchor"
+              ? "cursor-move"
+              : undefined
+          }
+          cx={annotationForm.anchorX * viewerLayout.coordinateWidth}
+          cy={annotationForm.anchorY * viewerLayout.coordinateHeight}
+          fill={draftPointerColor}
+          r={7 * canvasUnitsPerScreenPixel}
+          stroke="rgba(255,255,255,0.92)"
+          strokeWidth={1.4 * canvasUnitsPerScreenPixel}
+          onPointerDown={(event) => {
+            if (!annotationEditingEnabled || canvasMode !== "set-anchor") {
+              return;
             }
-            cx={annotationForm.anchorX * viewerLayout.coordinateWidth}
-            cy={annotationForm.anchorY * viewerLayout.coordinateHeight}
-            fill={draftPointerColor}
-            r={7}
-            onPointerDown={(event) => {
-              if (
-                !annotationEditingEnabled ||
-                (canvasMode !== "set-anchor" && canvasMode !== "set-label")
-              ) {
-                return;
-              }
 
-              const svg = event.currentTarget.ownerSVGElement;
-              if (!svg) {
-                return;
-              }
+            const svg = event.currentTarget.ownerSVGElement;
+            if (!svg) {
+              return;
+            }
 
-              event.stopPropagation();
-              draggingAnchorRef.current = {
-                annotationId: "__draft__",
-                pointerId: event.pointerId,
-              };
-              svg.setPointerCapture(event.pointerId);
-              onDraftAnchorMove(
-                resolvePointerPoint({
-                  clientX: event.clientX,
-                  clientY: event.clientY,
-                  currentTarget: svg,
-                }),
-              );
-            }}
-          />
-          {showLabels ? (
-            <text
-              fill={draftPointerColor}
-              fontFamily="system-ui"
-              fontSize={viewerLayout.fontSize * canvasUnitsPerScreenPixel}
-              fontWeight={600}
-              x={annotationForm.labelX * viewerLayout.coordinateWidth}
-              y={annotationForm.labelY * viewerLayout.coordinateHeight}
-            >
-              {draftPointerLabel}
-            </text>
-          ) : null}
-        </g>
+            event.stopPropagation();
+            draggingAnchorRef.current = {
+              annotationId: "__draft__",
+              pointerId: event.pointerId,
+            };
+            svg.setPointerCapture(event.pointerId);
+            onDraftAnchorMove(
+              resolvePointerPoint({
+                clientX: event.clientX,
+                clientY: event.clientY,
+                currentTarget: svg,
+              }),
+            );
+          }}
+        />
       ) : null}
+
       {overlayPreview ? (
         <path
           d={overlayPreview}
-          fill={annotationForm.overlayColorHex}
+          fill={
+            annotationForm.overlayColorHex.trim() ||
+            annotationForm.colorHex.trim() ||
+            DEFAULT_ANNOTATION_COLOR
+          }
           fillOpacity={annotationForm.overlayOpacity * overlayOpacity}
         />
       ) : null}
+
       {canvasMode === "draw-region" && !areaPaintPreviewActive
         ? draftDisconnectedPolygons.map((polygonPoints, polygonIndex) => {
             if (polygonPoints.length < 3) {
@@ -527,6 +316,7 @@ export function ViewerCanvasMainOverlay({
             );
           })
         : null}
+
       {isAreaPaintMode && areaToolCursorPoint ? (
         <circle
           cx={areaToolCursorPoint.x * viewerLayout.coordinateWidth}
@@ -540,6 +330,7 @@ export function ViewerCanvasMainOverlay({
           r={activeAreaCursorRadius * viewerLayout.coordinateHeight}
         />
       ) : null}
+
       {showCrossReferences ? (
         <>
           <line
