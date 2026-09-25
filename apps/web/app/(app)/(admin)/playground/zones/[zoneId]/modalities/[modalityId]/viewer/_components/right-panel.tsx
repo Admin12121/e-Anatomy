@@ -1063,7 +1063,7 @@ export function ModalityViewerRightPanel({
                     </div>
                     {partInteractionMode === "pointer" && pointerPlacementEditingActive ? (
                       <p className="text-[11px] leading-4 text-white/45">
-                        Click anywhere on the scan to place the pointer. Drag the point to refine it; the label rail is arranged automatically.
+                        Click to place. Drag to adjust.
                       </p>
                     ) : null}
                     {partInteractionMode === "area" && areaEditingActive ? (

@@ -16,7 +16,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type CSSProperties,
   type MutableRefObject,
   type MouseEvent as ReactMouseEvent,
@@ -47,18 +46,8 @@ type SliceItem = {
   thumbnailSrc: string;
 };
 
-type VirtualSliceWindow = {
-  leftPadPx: number;
-  rightPadPx: number;
-  visibleItems: SliceItem[];
-};
-
 const COMPACT_ITEM_WIDTH_PX = 36;
-const COMPACT_GAP_PX = 4;
-const COMPACT_OVERSCAN = 14;
 const EDITOR_ITEM_WIDTH_PX = 128;
-const EDITOR_GAP_PX = 8;
-const EDITOR_OVERSCAN = 8;
 
 function buildAtlasThumbnailStyle(
   atlasPage: ZoneModalityAtlasPage,
@@ -96,72 +85,10 @@ function buildAtlasThumbnailStyle(
   };
 }
 
-function buildVirtualSliceWindow({
-  activeIndex,
-  gapPx,
-  itemWidthPx,
-  overscan,
-  scrollLeft,
-  sliceItems,
-  viewportWidth,
-}: {
-  activeIndex: number;
-  gapPx: number;
-  itemWidthPx: number;
-  overscan: number;
-  scrollLeft: number;
-  sliceItems: SliceItem[];
-  viewportWidth: number;
-}): VirtualSliceWindow {
-  if (sliceItems.length === 0) {
-    return {
-      leftPadPx: 0,
-      rightPadPx: 0,
-      visibleItems: [],
-    };
-  }
-
-  const itemSpanPx = itemWidthPx + gapPx;
-  const clampedActiveIndex =
-    activeIndex >= 0 ? Math.min(activeIndex, sliceItems.length - 1) : 0;
-
-  let startIndex = 0;
-  let endIndex = sliceItems.length;
-
-  if (viewportWidth > 0) {
-    const visibleCount = Math.max(1, Math.ceil(viewportWidth / itemSpanPx));
-    startIndex = Math.max(0, Math.floor(scrollLeft / itemSpanPx) - overscan);
-    endIndex = Math.min(
-      sliceItems.length,
-      startIndex + visibleCount + overscan * 2,
-    );
-  } else {
-    startIndex = Math.max(0, clampedActiveIndex - overscan);
-    endIndex = Math.min(sliceItems.length, clampedActiveIndex + overscan + 1);
-  }
-
-  if (clampedActiveIndex < startIndex || clampedActiveIndex >= endIndex) {
-    const targetVisibleCount = Math.max(1, endIndex - startIndex);
-    startIndex = Math.max(
-      0,
-      clampedActiveIndex - Math.floor(targetVisibleCount / 2),
-    );
-    endIndex = Math.min(sliceItems.length, startIndex + targetVisibleCount);
-  }
-
-  const leftPadPx = startIndex * itemSpanPx;
-  const rightPadPx = (sliceItems.length - endIndex) * itemSpanPx;
-
-  return {
-    leftPadPx,
-    rightPadPx,
-    visibleItems: sliceItems.slice(startIndex, endIndex),
-  };
-}
-
 type SliceFilmstripProps = {
   activeAssetId: string | null;
   allowEditing: boolean;
+  allowTimelineChanges?: boolean;
   canDeleteLeftSlices: boolean;
   canDeleteEvenSlices: boolean;
   canDeleteMultiSelectedSlices: boolean;
@@ -211,6 +138,7 @@ type SliceFilmstripProps = {
 export function SliceFilmstrip({
   activeAssetId,
   allowEditing,
+  allowTimelineChanges = true,
   canDeleteLeftSlices,
   canDeleteEvenSlices,
   canDeleteMultiSelectedSlices,
@@ -254,14 +182,6 @@ export function SliceFilmstrip({
   onRedo,
 }: SliceFilmstripProps) {
   const onSelectAssetRef = useRef(onSelectAsset);
-  const [compactViewport, setCompactViewport] = useState({
-    scrollLeft: 0,
-    width: 0,
-  });
-  const [editorViewport, setEditorViewport] = useState({
-    scrollLeft: 0,
-    width: 0,
-  });
   const multiSelectedSliceIdSet = useMemo(
     () => new Set(multiSelectedSliceIds),
     [multiSelectedSliceIds],
@@ -294,172 +214,6 @@ export function SliceFilmstrip({
       onToggleMultiSelectedAsset(assetId);
     },
     [onToggleMultiSelectedAsset],
-  );
-
-  const activeSliceIndex = useMemo(
-    () =>
-      activeAssetId
-        ? sliceItems.findIndex(
-            (sliceItem) => sliceItem.assetId === activeAssetId,
-          )
-        : -1,
-    [activeAssetId, sliceItems],
-  );
-
-  useEffect(() => {
-    const scroller = filmstripScrollerRef.current;
-
-    if (!scroller) {
-      return;
-    }
-
-    let rafId: number | null = null;
-
-    const updateViewport = () => {
-      rafId = null;
-
-      const nextState = {
-        // Round sub-pixel scroll values to avoid feedback loops from tiny tween deltas.
-        scrollLeft: Math.round(scroller.scrollLeft),
-        width: scroller.clientWidth,
-      };
-
-      setCompactViewport((current) =>
-        current.scrollLeft === nextState.scrollLeft &&
-        current.width === nextState.width
-          ? current
-          : nextState,
-      );
-    };
-
-    const scheduleViewportUpdate = () => {
-      if (rafId !== null) {
-        return;
-      }
-
-      rafId = window.requestAnimationFrame(updateViewport);
-    };
-
-    scheduleViewportUpdate();
-    scroller.addEventListener("scroll", scheduleViewportUpdate, {
-      passive: true,
-    });
-
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => {
-        scheduleViewportUpdate();
-      });
-      resizeObserver.observe(scroller);
-    }
-
-    return () => {
-      scroller.removeEventListener("scroll", scheduleViewportUpdate);
-      resizeObserver?.disconnect();
-
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-      }
-    };
-  }, [filmstripScrollerRef, sliceItems.length]);
-
-  useEffect(() => {
-    if (!showSliceEditorPanel) {
-      return;
-    }
-
-    const scroller = sliceEditorScrollerRef.current;
-
-    if (!scroller) {
-      return;
-    }
-
-    let rafId: number | null = null;
-
-    const updateViewport = () => {
-      rafId = null;
-
-      const nextState = {
-        // Round sub-pixel scroll values to avoid feedback loops from tiny tween deltas.
-        scrollLeft: Math.round(scroller.scrollLeft),
-        width: scroller.clientWidth,
-      };
-
-      setEditorViewport((current) =>
-        current.scrollLeft === nextState.scrollLeft &&
-        current.width === nextState.width
-          ? current
-          : nextState,
-      );
-    };
-
-    const scheduleViewportUpdate = () => {
-      if (rafId !== null) {
-        return;
-      }
-
-      rafId = window.requestAnimationFrame(updateViewport);
-    };
-
-    scheduleViewportUpdate();
-    scroller.addEventListener("scroll", scheduleViewportUpdate, {
-      passive: true,
-    });
-
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => {
-        scheduleViewportUpdate();
-      });
-      resizeObserver.observe(scroller);
-    }
-
-    return () => {
-      scroller.removeEventListener("scroll", scheduleViewportUpdate);
-      resizeObserver?.disconnect();
-
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-      }
-    };
-  }, [showSliceEditorPanel, sliceEditorScrollerRef, sliceItems.length]);
-
-  const compactWindow = useMemo(
-    () =>
-      buildVirtualSliceWindow({
-        activeIndex: activeSliceIndex,
-        gapPx: COMPACT_GAP_PX,
-        itemWidthPx: COMPACT_ITEM_WIDTH_PX,
-        overscan: COMPACT_OVERSCAN,
-        scrollLeft: compactViewport.scrollLeft,
-        sliceItems,
-        viewportWidth: compactViewport.width,
-      }),
-    [
-      activeSliceIndex,
-      compactViewport.scrollLeft,
-      compactViewport.width,
-      sliceItems,
-    ],
-  );
-
-  const editorWindow = useMemo(
-    () =>
-      buildVirtualSliceWindow({
-        activeIndex: activeSliceIndex,
-        gapPx: EDITOR_GAP_PX,
-        itemWidthPx: EDITOR_ITEM_WIDTH_PX,
-        overscan: EDITOR_OVERSCAN,
-        scrollLeft: editorViewport.scrollLeft,
-        sliceItems,
-        viewportWidth: editorViewport.width,
-      }),
-    [
-      activeSliceIndex,
-      editorViewport.scrollLeft,
-      editorViewport.width,
-      sliceItems,
-    ],
   );
 
   const navigationLabel =
@@ -510,7 +264,7 @@ export function SliceFilmstrip({
           )}
           disabled={navigationDisabled}
           onClick={
-            variant === "editor" && multiSelectEnabled
+            variant === "editor" && allowTimelineChanges && multiSelectEnabled
               ? handleToggleMultiSelectedAsset
               : handleSelectAsset
           }
@@ -553,7 +307,7 @@ export function SliceFilmstrip({
           className="relative w-32 shrink-0 overflow-hidden rounded-md"
         >
           {button}
-          {multiSelectEnabled ? (
+          {allowTimelineChanges && multiSelectEnabled ? (
             <Checkbox
               aria-label={`Select ${asset.label}`}
               checked={isMultiSelected}
@@ -569,6 +323,7 @@ export function SliceFilmstrip({
     },
     [
       activeAssetId,
+      allowTimelineChanges,
       handleSelectAsset,
       handleToggleMultiSelectedAsset,
       multiSelectEnabled,
@@ -579,19 +334,13 @@ export function SliceFilmstrip({
   );
 
   const filmstripButtons = useMemo(
-    () =>
-      compactWindow.visibleItems.map((sliceItem) =>
-        createSliceButton(sliceItem, "compact"),
-      ),
-    [compactWindow.visibleItems, createSliceButton],
+    () => sliceItems.map((sliceItem) => createSliceButton(sliceItem, "compact")),
+    [createSliceButton, sliceItems],
   );
 
   const editorButtons = useMemo(
-    () =>
-      editorWindow.visibleItems.map((sliceItem) =>
-        createSliceButton(sliceItem, "editor"),
-      ),
-    [createSliceButton, editorWindow.visibleItems],
+    () => sliceItems.map((sliceItem) => createSliceButton(sliceItem, "editor")),
+    [createSliceButton, sliceItems],
   );
 
   return (
@@ -634,16 +383,10 @@ export function SliceFilmstrip({
             <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-primary" />
             <div
               ref={filmstripScrollerRef}
-              className="no-scrollbar mx-auto max-w-full overflow-x-auto rounded-sm bg-[#f4f4f5] p-1 dark:bg-[#121212] h-11"
+              className="no-scrollbar mx-auto h-11 max-w-full overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-sm bg-[#f4f4f5] p-1 dark:bg-[#121212]"
               onWheel={onWheel}
             >
-              <div
-                className="flex w-max items-end gap-1"
-                style={{
-                  paddingLeft: `${compactWindow.leftPadPx}px`,
-                  paddingRight: `${compactWindow.rightPadPx}px`,
-                }}
-              >
+              <div className="flex w-max items-end gap-1">
                 {filmstripButtons}
               </div>
             </div>
@@ -692,7 +435,7 @@ export function SliceFilmstrip({
                     ? "Disable multi-select"
                     : "Enable multi-select"
                 }
-                disabled={navigationDisabled}
+                disabled={navigationDisabled || !allowTimelineChanges}
                 onClick={onToggleMultiSelect}
               >
                 <MousePointerClick className="size-4" />
@@ -703,7 +446,7 @@ export function SliceFilmstrip({
                   size="sm"
                   variant="ghost"
                   title={`Delete ${multiSelectedSliceIds.length} selected slices`}
-                  disabled={navigationDisabled || !canDeleteMultiSelectedSlices}
+                  disabled={navigationDisabled || !allowTimelineChanges || !canDeleteMultiSelectedSlices}
                   onClick={onDeleteMultiSelected}
                 >
                   <Trash className="size-4" />
@@ -714,7 +457,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Undo"
-                disabled={navigationDisabled || !canUndoSliceTimeline}
+                disabled={navigationDisabled || !allowTimelineChanges || !canUndoSliceTimeline}
                 onClick={onUndo}
               >
                 <Undo2 className="size-4" />
@@ -724,7 +467,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Redo"
-                disabled={navigationDisabled || !canRedoSliceTimeline}
+                disabled={navigationDisabled || !allowTimelineChanges || !canRedoSliceTimeline}
                 onClick={onRedo}
               >
                 <Redo2 className="size-4" />
@@ -734,7 +477,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete all left from selected"
-                disabled={navigationDisabled || !canDeleteLeftSlices}
+                disabled={navigationDisabled || !allowTimelineChanges || !canDeleteLeftSlices}
                 onClick={onDeleteLeft}
               >
                 <DeleteAllLeftIcon className="size-4" />
@@ -744,7 +487,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete all right from selected"
-                disabled={navigationDisabled || !canDeleteRightSlices}
+                disabled={navigationDisabled || !allowTimelineChanges || !canDeleteRightSlices}
                 onClick={onDeleteRight}
               >
                 <DeleteAllRightIcon className="size-4" />
@@ -754,7 +497,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete odd-numbered slices"
-                disabled={navigationDisabled || !canDeleteOddSlices}
+                disabled={navigationDisabled || !allowTimelineChanges || !canDeleteOddSlices}
                 onClick={onDeleteOdd}
               >
                 <TicketMinus className="size-4" />
@@ -764,7 +507,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete even-numbered slices"
-                disabled={navigationDisabled || !canDeleteEvenSlices}
+                disabled={navigationDisabled || !allowTimelineChanges || !canDeleteEvenSlices}
                 onClick={onDeleteEven}
               >
                 <Tickets className="size-4" />
@@ -774,7 +517,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Delete selected slice"
-                disabled={navigationDisabled || !canDeleteSelectedSlice}
+                disabled={navigationDisabled || !allowTimelineChanges || !canDeleteSelectedSlice}
                 onClick={onDeleteSelected}
               >
                 <Trash className="size-4" />
@@ -784,7 +527,7 @@ export function SliceFilmstrip({
                 size="sm"
                 variant="ghost"
                 title="Flip slice order"
-                disabled={navigationDisabled || !canFlipSliceTimeline}
+                disabled={navigationDisabled || !allowTimelineChanges || !canFlipSliceTimeline}
                 onClick={onFlipOrder}
               >
                 <FlipSliceOrderIcon className="size-4" />
@@ -802,6 +545,7 @@ export function SliceFilmstrip({
                 variant="default"
                 disabled={
                   navigationDisabled ||
+                  !allowTimelineChanges ||
                   !hasPendingSliceTimelineChanges ||
                   isApplyingSliceChanges
                 }
@@ -813,16 +557,10 @@ export function SliceFilmstrip({
 
             <div
               ref={sliceEditorScrollerRef}
-              className="no-scrollbar h-36.25 overflow-x-auto rounded-md bg-black/35 p-2"
+              className="no-scrollbar h-36.25 overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-md bg-black/35 p-2"
               onWheel={navigationDisabled ? undefined : onWheel}
             >
-              <div
-                className="flex w-max items-start gap-2"
-                style={{
-                  paddingLeft: `${editorWindow.leftPadPx}px`,
-                  paddingRight: `${editorWindow.rightPadPx}px`,
-                }}
-              >
+              <div className="flex w-max items-start gap-2">
                 {editorButtons}
               </div>
             </div>

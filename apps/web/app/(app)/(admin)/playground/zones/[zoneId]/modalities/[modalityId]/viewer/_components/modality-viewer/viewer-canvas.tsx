@@ -71,6 +71,10 @@ type ViewerCanvasProps = {
   canvasRotationQuarterTurns: number;
   currentAsset: ZoneModalityAsset | null;
   currentAssetIndex: number;
+  compact?: boolean;
+  lockInitialFitScale?: boolean;
+  crosshairPoint?: ViewerAnnotationPoint | null;
+  crosshairStroke?: string;
   currentAtlasFrame: ZoneModalityAtlasFrame | null;
   currentImageElement: HTMLImageElement | null;
   draftStructureTitle: string;
@@ -82,6 +86,7 @@ type ViewerCanvasProps = {
   isPreparingInitialAsset: boolean;
   mainInteractionTool: MainInteractionTool;
   onAnnotationHover: (annotationId: string | null) => void;
+  onViewportDoubleClick?: () => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   onCanvasClick: (point: ViewerAnnotationPoint) => void;
   onDraftAnchorMove: (point: ViewerAnnotationPoint) => void;
@@ -121,6 +126,10 @@ export function ViewerCanvas({
   canvasRotationQuarterTurns,
   currentAsset,
   currentAssetIndex,
+  compact = false,
+  lockInitialFitScale = true,
+  crosshairPoint = null,
+  crosshairStroke = "rgba(56, 189, 248, 0.9)",
   currentAtlasFrame,
   currentImageElement,
   draftStructureTitle,
@@ -132,6 +141,7 @@ export function ViewerCanvas({
   isPreparingInitialAsset,
   mainInteractionTool,
   onAnnotationHover,
+  onViewportDoubleClick,
   onAnnotationSelect,
   onCanvasClick,
   onDraftAnchorMove,
@@ -207,7 +217,8 @@ export function ViewerCanvas({
         Math.ceil(text.length * fontSize * 0.6),
     );
   const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
-  const shouldAutoArrangeLabels = showLabels;
+  const shouldAutoArrangeLabels =
+    showLabels && (!compact || visibleAnnotations.length > 0);
   const sourceDimensions = resolveViewerImageDimensions([
     {
       height: currentAtlasFrame?.height,
@@ -251,7 +262,7 @@ export function ViewerCanvas({
   const viewerLayout = useMemo(
     () =>
       calculateViewerLayout({
-        fitScaleCap: initialFitScaleCapRef.current,
+        fitScaleCap: lockInitialFitScale ? initialFitScaleCapRef.current : null,
         imageHeight: sourceImageHeight,
         imageWidth: sourceImageWidth,
         reserveLabelSpace: shouldAutoArrangeLabels,
@@ -260,6 +271,7 @@ export function ViewerCanvas({
         stageWidth: Math.max(stageSizePx.width, 1),
       }),
     [
+      lockInitialFitScale,
       normalizedCanvasRotation,
       shouldAutoArrangeLabels,
       sourceImageHeight,
@@ -274,6 +286,7 @@ export function ViewerCanvas({
   // defaults, so later opening/closing those panels does not look like zooming.
   useEffect(() => {
     if (
+      !lockInitialFitScale ||
       initialFitScaleCapRef.current !== null ||
       stageSizePx.width < 240 ||
       stageSizePx.height < 240 ||
@@ -286,6 +299,7 @@ export function ViewerCanvas({
     initialFitScaleCapRef.current =
       uncappedViewerLayout.surfaceWidth / sourceImageWidth;
   }, [
+    lockInitialFitScale,
     sourceImageHeight,
     sourceImageWidth,
     stageSizePx.height,
@@ -1082,22 +1096,12 @@ export function ViewerCanvas({
     ? null
     : selectedAnnotationId ?? hoveredAnnotationId;
 
+  const popupTargetHasLabel = Boolean(
+    popupTargetId && labelLayout.labels.has(popupTargetId),
+  );
+
   useEffect(() => {
     if (typeof window === "undefined") {
-      return;
-    }
-
-    if (editorMode) {
-      if (popupHideTimerRef.current !== null) {
-        window.clearTimeout(popupHideTimerRef.current);
-        popupHideTimerRef.current = null;
-      }
-      if (popupShowFrameRef.current !== null) {
-        window.cancelAnimationFrame(popupShowFrameRef.current);
-        popupShowFrameRef.current = null;
-      }
-      setPopupVisible(false);
-      setPopupRenderId(null);
       return;
     }
 
@@ -1110,26 +1114,33 @@ export function ViewerCanvas({
       popupShowFrameRef.current = null;
     }
 
-    if (popupTargetId && labelLayout.labels.has(popupTargetId)) {
-      // A clicked label/card acts as a pin, matching the mature demo: once
-      // selected, incidental hover on another leader cannot steal the card.
-      // With no pinned selection, hover still previews normally.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPopupRenderId(popupTargetId);
+    if (editorMode) {
+      // Keep editor canvases popup-free without writing the same state on
+      // every render. MPR renders three canvases simultaneously, so an
+      // identity-changing label map must never be able to create an effect
+      // -> setState -> render loop.
+      setPopupVisible((current) => (current ? false : current));
+      setPopupRenderId((current) => (current === null ? current : null));
+      return;
+    }
+
+    if (popupTargetId && popupTargetHasLabel) {
+      setPopupRenderId((current) =>
+        current === popupTargetId ? current : popupTargetId,
+      );
       popupShowFrameRef.current = window.requestAnimationFrame(() => {
         popupShowFrameRef.current = null;
-        setPopupVisible(true);
+        setPopupVisible((current) => (current ? current : true));
       });
       return;
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPopupVisible(false);
+    setPopupVisible((current) => (current ? false : current));
     popupHideTimerRef.current = window.setTimeout(() => {
       popupHideTimerRef.current = null;
-      setPopupRenderId(null);
+      setPopupRenderId((current) => (current === null ? current : null));
     }, 220);
-  }, [editorMode, labelLayout, popupTargetId]);
+  }, [editorMode, popupTargetHasLabel, popupTargetId]);
 
   useEffect(() => {
     return () => {
@@ -1355,6 +1366,7 @@ export function ViewerCanvas({
     <div
       className={cn(
         "relative overflow-hidden overscroll-none bg-black",
+        compact && "h-full min-h-0",
       )}
     >
       <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center px-6 py-4 text-sm">
@@ -1364,19 +1376,21 @@ export function ViewerCanvas({
       <div
         ref={stageRef}
         className={cn(
-          "relative flex h-full min-h-160 touch-none select-none items-center justify-center overscroll-none",
+          "relative flex h-full touch-none select-none items-center justify-center overscroll-none",
+          compact ? "min-h-0" : "min-h-160",
           isAreaPaintMode ? "cursor-crosshair" : null,
         )}
         style={{ touchAction: "none" }}
         onDoubleClick={(event) => {
-          if (!isAreaPaintMode) {
+          if (isAreaPaintMode) {
+            // Painting saves only from the explicit Save button. Double-clicks
+            // are too easy to trigger while brushing and interrupt the stroke.
+            event.preventDefault();
+            event.stopPropagation();
             return;
           }
 
-          // Painting saves only from the explicit Save button. Double-clicks
-          // are too easy to trigger while brushing and interrupt the stroke.
-          event.preventDefault();
-          event.stopPropagation();
+          onViewportDoubleClick?.();
         }}
         onPointerDown={handleStagePointerDown}
         onPointerMove={handleStagePointerMove}
@@ -1588,6 +1602,29 @@ export function ViewerCanvas({
               setAreaToolCursorPoint(null);
             }}
           >
+            {crosshairPoint ? (
+              <g aria-hidden="true" className="pointer-events-none">
+                <line
+                  x1={crosshairPoint.x * viewerLayout.coordinateWidth}
+                  x2={crosshairPoint.x * viewerLayout.coordinateWidth}
+                  y1={0}
+                  y2={viewerLayout.coordinateHeight}
+                  stroke={crosshairStroke}
+                  strokeWidth={1}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <line
+                  x1={0}
+                  x2={viewerLayout.coordinateWidth}
+                  y1={crosshairPoint.y * viewerLayout.coordinateHeight}
+                  y2={crosshairPoint.y * viewerLayout.coordinateHeight}
+                  stroke={crosshairStroke}
+                  strokeWidth={1}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            ) : null}
+
             <ViewerCanvasMainOverlay
               activeAreaCursorRadius={activeAreaCursorRadius}
               annotationEditingEnabled={annotationEditingEnabled}

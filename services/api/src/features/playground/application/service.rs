@@ -3,19 +3,30 @@ use std::{
     ffi::OsStr,
     io::Cursor,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use anyhow::Context;
 use dicom::{object::open_file, pixeldata::PixelDecoder};
 use image::{
-    ExtendedColorType, ImageBuffer, ImageEncoder, Rgba, RgbaImage, codecs::avif::AvifEncoder,
+    ExtendedColorType, ImageBuffer, ImageEncoder, Rgba, RgbaImage,
+    codecs::{
+        avif::AvifEncoder,
+        png::{CompressionType, FilterType, PngEncoder},
+    },
     imageops::overlay,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use tokio::{fs, sync::broadcast, task::JoinSet};
+use tokio::{
+    fs,
+    sync::{Semaphore, broadcast, mpsc},
+    task::JoinSet,
+};
 use tracing::error;
 use uuid::Uuid;
 
@@ -43,6 +54,7 @@ pub struct PlaygroundService {
     repo: PlaygroundRepository,
     storage_root: PathBuf,
     events: Arc<PlaygroundEventHub>,
+    ingest_gate: Arc<Semaphore>,
 }
 
 #[derive(Debug)]
@@ -116,7 +128,49 @@ struct DerivedSliceCandidate {
 #[derive(Debug, Clone)]
 struct DerivedSliceBuild {
     candidate: DerivedSliceCandidate,
-    atlas_source_image: RgbaImage,
+    atlas_source_image: Option<RgbaImage>,
+}
+
+#[derive(Debug, Clone)]
+struct MprSourceSlice {
+    file_path: PathBuf,
+    series_uid: String,
+    frame_of_reference_uid: Option<String>,
+    rows: usize,
+    columns: usize,
+    image_position: [f64; 3],
+    row_direction: [f64; 3],
+    column_direction: [f64; 3],
+    row_spacing: f64,
+    column_spacing: f64,
+    slice_projection: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MprVolumeGeometry {
+    dimensions: [usize; 3],
+    spacing: [f64; 3],
+    origin: [f64; 3],
+    frame_of_reference_uid: Option<String>,
+    source_series_uid: String,
+    source_slice_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct MprDerivationResult {
+    slice_builds: Vec<DerivedSliceBuild>,
+    geometry: MprVolumeGeometry,
+    plane_asset_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct MprProgressUpdate {
+    phase: String,
+    message: String,
+    progress_percent: u8,
+    completed: usize,
+    total: usize,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -157,6 +211,7 @@ pub enum DerivedAssetBinaryVariant {
 }
 
 const MAX_ACTIVE_MODALITY_INGESTS: i64 = 2;
+const MAX_CONCURRENT_MODALITY_INGEST_PIPELINES: usize = 1;
 const MAX_CONCURRENT_DICOM_DERIVATIONS: usize = 8;
 const AVIF_ENCODER_SPEED: u8 = 8;
 const AVIF_ENCODER_QUALITY: u8 = 80;
@@ -164,6 +219,7 @@ const AVIF_ENCODER_THREADS_PER_IMAGE: usize = 1;
 const MAX_ATLAS_PAGE_EDGE: u32 = 4096;
 const MAX_ATLAS_PAGE_COLUMNS: usize = 8;
 const MAX_ATLAS_SLICES_PER_PAGE: usize = 40;
+const MAX_MPR_VOXELS: usize = 48_000_000;
 
 impl PlaygroundService {
     pub fn new(pool: PgPool, storage_root: impl Into<String>) -> Self {
@@ -172,6 +228,7 @@ impl PlaygroundService {
             repo: PlaygroundRepository,
             storage_root: PathBuf::from(storage_root.into()),
             events: Arc::new(PlaygroundEventHub::new()),
+            ingest_gate: Arc::new(Semaphore::new(MAX_CONCURRENT_MODALITY_INGEST_PIPELINES)),
         }
     }
 
@@ -179,6 +236,45 @@ impl PlaygroundService {
         &self,
     ) -> broadcast::Receiver<ZoneModalityListChangedEvent> {
         self.events.zone_modality_events.subscribe()
+    }
+
+    /// Background ingest work is process-local. If the API is restarted, any
+    /// job left in an active database state no longer has a task that can
+    /// complete it. Mark those jobs interrupted at startup so they never sit
+    /// at a stale percentage forever or consume ingest capacity indefinitely.
+    pub async fn fail_interrupted_ingests_from_previous_runtime(&self) -> Result<u64, AppError> {
+        let result = sqlx::query(
+            r#"
+            WITH interrupted AS (
+                UPDATE anatomy_modality_ingest_jobs
+                SET
+                    status = 'failed',
+                    summary_json = jsonb_build_object(
+                        'phase', 'interrupted',
+                        'message', 'Processing interrupted by API restart. Re-upload the source study.'
+                    ),
+                    error_message = 'Processing interrupted by API restart.',
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE
+                    completed_at IS NULL
+                    AND status IN ('queued', 'uploaded', 'validating', 'deriving')
+                RETURNING id, modality_id
+            )
+            UPDATE anatomy_zone_modalities AS modality
+            SET
+                processing_status = 'failed',
+                updated_at = NOW()
+            FROM interrupted
+            WHERE
+                modality.id = interrupted.modality_id
+                AND modality.latest_ingest_job_id = interrupted.id
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 
     pub async fn list_zones_for_account(
@@ -324,6 +420,30 @@ impl PlaygroundService {
                 account_id,
                 zone_id,
             });
+    }
+
+    async fn publish_ingest_progress(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        ingest_job_id: Uuid,
+        user_id: &str,
+        status: &str,
+        summary: serde_json::Value,
+    ) -> Result<(), AppError> {
+        self.repo
+            .update_modality_ingest_job(
+                &self.pool,
+                ingest_job_id,
+                user_id,
+                status,
+                &summary,
+                None,
+                false,
+            )
+            .await?;
+        self.notify_zone_modality_list_changed(account_id, zone_id);
+        Ok(())
     }
 
     pub async fn create_zone_modality(
@@ -480,6 +600,8 @@ impl PlaygroundService {
                 "queued",
                 &json!({
                     "phase": "queued",
+                    "message": "Waiting for processing slot.",
+                    "progressPercent": 0,
                     "sourceFileCount": source_file_count,
                 }),
             )
@@ -505,6 +627,7 @@ impl PlaygroundService {
         let background_zone_id = zone_id;
         let background_user_id = user_id.to_string();
         let background_source_kind = source_kind.clone();
+        let background_modality_type = family.modality_type.clone();
         let background_files = input.files;
         tokio::spawn(async move {
             if let Err(pipeline_error) = background_service
@@ -515,6 +638,7 @@ impl PlaygroundService {
                     ingest_job_id,
                     background_user_id,
                     background_source_kind,
+                    background_modality_type,
                     background_files,
                 )
                 .await
@@ -554,48 +678,77 @@ impl PlaygroundService {
         ingest_job_id: Uuid,
         user_id: String,
         source_kind: String,
+        modality_type: String,
         files: Vec<UploadedSourceFile>,
     ) -> Result<(), AppError> {
+        // DICOM derivation, MPR resampling, PNG/AVIF encoding and atlas packing
+        // are CPU/disk intensive. Running two study pipelines at the same time
+        // made one study appear frozen while the other saturated local
+        // resources. Keep intake asynchronous, but execute heavy pipelines in
+        // a deterministic single-file queue.
+        let _ingest_permit = self
+            .ingest_gate
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| AppError::internal("Modality ingest scheduler is unavailable"))?;
+
         let uploaded_file_count = i32::try_from(files.len()).unwrap_or(i32::MAX);
 
         let pipeline_result = async {
-            self.repo
-                .update_modality_ingest_job(
-                    &self.pool,
-                    ingest_job_id,
-                    &user_id,
-                    "uploaded",
-                    &json!({
-                        "phase": "uploaded",
-                        "uploadedFileCount": uploaded_file_count,
-                    }),
-                    None,
-                    false,
-                )
-                .await?;
+            self.publish_ingest_progress(
+                account_id,
+                zone_id,
+                ingest_job_id,
+                &user_id,
+                "uploaded",
+                json!({
+                    "phase": "uploaded",
+                    "message": "Upload complete. Preparing source files.",
+                    "progressPercent": 3,
+                    "uploadedFileCount": uploaded_file_count,
+                }),
+            )
+            .await?;
 
             let (_source_assets, study_files) = self
                 .stage_study_files(modality_id, ingest_job_id, &user_id, &source_kind, files)
                 .await?;
 
-            self.repo
-                .update_modality_ingest_job(
-                    &self.pool,
-                    ingest_job_id,
-                    &user_id,
-                    "validating",
-                    &json!({
-                        "phase": "validating",
-                        "stagedFileCount": study_files.len(),
-                    }),
-                    None,
-                    false,
-                )
-                .await?;
+            self.publish_ingest_progress(
+                account_id,
+                zone_id,
+                ingest_job_id,
+                &user_id,
+                "validating",
+                json!({
+                    "phase": "validating",
+                    "message": "Validating DICOM study geometry.",
+                    "progressPercent": 8,
+                    "stagedFileCount": study_files.len(),
+                }),
+            )
+            .await?;
 
-            let derived_slice_builds = self
-                .derive_study_slices(ingest_job_id, &study_files)
-                .await?;
+            let (derived_slice_builds, mpr_geometry, mpr_plane_counts) =
+                if modality_type == "mpr" {
+                    let mpr = self
+                        .derive_mpr_slices(
+                            account_id,
+                            zone_id,
+                            ingest_job_id,
+                            &user_id,
+                            &study_files,
+                        )
+                        .await?;
+                    (mpr.slice_builds, Some(mpr.geometry), Some(mpr.plane_asset_counts))
+                } else {
+                    (
+                        self.derive_study_slices(ingest_job_id, &study_files).await?,
+                        None,
+                        None,
+                    )
+                };
 
             if derived_slice_builds.is_empty() {
                 return Err(AppError::bad_request(
@@ -603,20 +756,20 @@ impl PlaygroundService {
                 ));
             }
 
-            self.repo
-                .update_modality_ingest_job(
-                    &self.pool,
-                    ingest_job_id,
-                    &user_id,
-                    "deriving",
-                    &json!({
-                        "phase": "deriving",
-                        "derivedSliceCount": derived_slice_builds.len(),
-                    }),
-                    None,
-                    false,
-                )
-                .await?;
+            self.publish_ingest_progress(
+                account_id,
+                zone_id,
+                ingest_job_id,
+                &user_id,
+                "deriving",
+                json!({
+                    "phase": "persisting_slices",
+                    "message": "Saving reconstructed slices.",
+                    "progressPercent": if modality_type == "mpr" { 82 } else { 70 },
+                    "derivedSliceCount": derived_slice_builds.len(),
+                }),
+            )
+            .await?;
 
             let mut persisted_assets = Vec::with_capacity(derived_slice_builds.len());
 
@@ -638,7 +791,7 @@ impl PlaygroundService {
                         ingest_job_id,
                         &user_id,
                         &label,
-                        "slice",
+                        if modality_type == "mpr" { "derived_slice" } else { "slice" },
                         derived_slice.weighting_code.as_deref(),
                         &image_url,
                         None,
@@ -647,7 +800,7 @@ impl PlaygroundService {
                         "local_disk",
                         &derived_slice.storage_key,
                         &derived_slice.checksum,
-                        "image/avif",
+                        infer_derived_mime_type(&derived_slice.storage_key),
                         derived_slice.size_bytes,
                         derived_slice.width,
                         derived_slice.height,
@@ -661,7 +814,48 @@ impl PlaygroundService {
                     .await?;
 
                 persisted_assets.push(asset);
+
+                if sort_order + 1 == derived_slice_builds.len()
+                    || (sort_order + 1) % 50 == 0
+                {
+                    let completed = sort_order + 1;
+                    let total = derived_slice_builds.len();
+                    let base = if modality_type == "mpr" { 82.0 } else { 70.0 };
+                    let span = if modality_type == "mpr" { 8.0 } else { 15.0 };
+                    let percent = base + span * (completed as f64 / total.max(1) as f64);
+                    self.publish_ingest_progress(
+                        account_id,
+                        zone_id,
+                        ingest_job_id,
+                        &user_id,
+                        "deriving",
+                        json!({
+                            "phase": "persisting_slices",
+                            "message": format!("Saving slices {completed}/{total}."),
+                            "progressPercent": percent.round() as u8,
+                            "completed": completed,
+                            "total": total,
+                            "derivedSliceCount": total,
+                        }),
+                    )
+                    .await?;
+                }
             }
+
+            self.publish_ingest_progress(
+                account_id,
+                zone_id,
+                ingest_job_id,
+                &user_id,
+                "deriving",
+                json!({
+                    "phase": "building_atlas",
+                    "message": "Building viewer atlas pages.",
+                    "progressPercent": if modality_type == "mpr" { 91 } else { 87 },
+                    "derivedSliceCount": derived_slice_builds.len(),
+                }),
+            )
+            .await?;
 
             let packed_pages = self
                 .build_atlas_pages_from_slice_builds(
@@ -674,25 +868,85 @@ impl PlaygroundService {
                 .persist_built_atlas_pages(modality_id, ingest_job_id, &user_id, packed_pages)
                 .await?;
 
-            let manifest_json =
-                build_viewer_manifest_json(&persisted_assets, &atlas_pages, &atlas_frames);
+            self.publish_ingest_progress(
+                account_id,
+                zone_id,
+                ingest_job_id,
+                &user_id,
+                "deriving",
+                json!({
+                    "phase": "finalizing",
+                    "message": "Finalizing viewer manifest.",
+                    "progressPercent": 98,
+                    "derivedSliceCount": persisted_assets.len(),
+                    "atlasPageCount": atlas_pages.len(),
+                }),
+            )
+            .await?;
+
+            let (manifest_schema_version, manifest_json) = if let Some(geometry) = mpr_geometry.as_ref() {
+                (
+                    "mpr-1",
+                    build_mpr_viewer_manifest_json(
+                        &persisted_assets,
+                        &atlas_pages,
+                        &atlas_frames,
+                        geometry,
+                        mpr_plane_counts.as_ref(),
+                    ),
+                )
+            } else {
+                (
+                    "draft-1",
+                    build_viewer_manifest_json(&persisted_assets, &atlas_pages, &atlas_frames),
+                )
+            };
 
             self.repo
                 .upsert_modality_viewer_manifest(
                     &self.pool,
                     modality_id,
                     ingest_job_id,
-                    "draft-1",
+                    manifest_schema_version,
                     &manifest_json,
                 )
                 .await?;
 
-            let cover_image_url = persisted_assets.first().and_then(|asset| {
+            let cover_asset = if modality_type == "mpr" {
+                mpr_geometry.as_ref().and_then(|geometry| {
+                    let middle = i32::try_from(geometry.dimensions[2] / 2).unwrap_or(i32::MAX);
+                    persisted_assets.iter().find(|asset| {
+                        asset.orientation_code.as_deref() == Some("axial")
+                            && asset.slice_index == Some(middle)
+                    })
+                })
+            } else {
+                persisted_assets.first()
+            };
+            let cover_image_url = cover_asset.and_then(|asset| {
                 asset
                     .thumbnail_url
                     .clone()
                     .or_else(|| Some(asset.image_url.clone()))
             });
+
+            self.repo
+                .update_modality_ingest_job(
+                    &self.pool,
+                    ingest_job_id,
+                    &user_id,
+                    "ready_for_edit",
+                    &json!({
+                        "phase": "ready_for_edit",
+                        "message": "Viewer ready.",
+                        "progressPercent": 100,
+                        "seriesCount": count_distinct_series(&persisted_assets),
+                        "derivedSliceCount": persisted_assets.len(),
+                    }),
+                    None,
+                    true,
+                )
+                .await?;
 
             self.repo
                 .attach_ingest_job_to_modality(
@@ -707,22 +961,6 @@ impl PlaygroundService {
 
             self.notify_zone_modality_list_changed(account_id, zone_id);
 
-            self.repo
-                .update_modality_ingest_job(
-                    &self.pool,
-                    ingest_job_id,
-                    &user_id,
-                    "ready_for_edit",
-                    &json!({
-                        "phase": "ready_for_edit",
-                        "seriesCount": count_distinct_series(&persisted_assets),
-                        "derivedSliceCount": persisted_assets.len(),
-                    }),
-                    None,
-                    true,
-                )
-                .await?;
-
             Ok(())
         }
         .await;
@@ -730,6 +968,21 @@ impl PlaygroundService {
         match pipeline_result {
             Ok(()) => Ok(()),
             Err(error) => {
+                let _ = self
+                    .repo
+                    .update_modality_ingest_job(
+                        &self.pool,
+                        ingest_job_id,
+                        &user_id,
+                        "failed",
+                        &json!({
+                            "phase": "failed",
+                            "message": error.to_string(),
+                        }),
+                        Some(&error.to_string()),
+                        true,
+                    )
+                    .await;
                 let _ = self
                     .repo
                     .attach_ingest_job_to_modality(
@@ -742,20 +995,6 @@ impl PlaygroundService {
                     )
                     .await;
                 self.notify_zone_modality_list_changed(account_id, zone_id);
-                let _ = self
-                    .repo
-                    .update_modality_ingest_job(
-                        &self.pool,
-                        ingest_job_id,
-                        &user_id,
-                        "failed",
-                        &json!({
-                            "phase": "failed",
-                        }),
-                        Some(&error.to_string()),
-                        true,
-                    )
-                    .await;
 
                 Err(error)
             }
@@ -1273,6 +1512,13 @@ impl PlaygroundService {
             .list_zone_modality_atlas_assets(&self.pool, account_id, zone_id, modality_id)
             .await?;
         let (atlases, atlas_frames) = self.load_atlas_manifest(&atlas_assets)?;
+        let viewer_manifest_payload = self
+            .repo
+            .get_modality_viewer_manifest_payload(&self.pool, modality_id)
+            .await?;
+        let (viewer_schema_version, viewer_spec) = viewer_manifest_payload
+            .map(|(schema_version, spec)| (Some(schema_version), Some(spec)))
+            .unwrap_or((None, None));
         let structure_groups = self
             .repo
             .list_viewer_structure_groups(&self.pool, account_id, zone_id, modality_id)
@@ -1295,6 +1541,8 @@ impl PlaygroundService {
             assets,
             atlases,
             atlas_frames,
+            viewer_schema_version,
+            viewer_spec,
             structure_groups,
             structures,
             annotations,
@@ -1360,6 +1608,13 @@ impl PlaygroundService {
             )
             .await?;
         let (atlases, atlas_frames) = self.load_atlas_manifest(&atlas_assets)?;
+        let viewer_manifest_payload = self
+            .repo
+            .get_modality_viewer_manifest_payload(&self.pool, lookup.modality_id)
+            .await?;
+        let (viewer_schema_version, viewer_spec) = viewer_manifest_payload
+            .map(|(schema_version, spec)| (Some(schema_version), Some(spec)))
+            .unwrap_or((None, None));
         let structure_groups = self
             .repo
             .list_viewer_structure_groups(
@@ -1403,6 +1658,8 @@ impl PlaygroundService {
                 })
                 .collect(),
             atlas_frames,
+            viewer_schema_version,
+            viewer_spec,
             structure_groups,
             structures,
             annotations,
@@ -2190,6 +2447,80 @@ impl PlaygroundService {
         Ok(candidates)
     }
 
+    async fn derive_mpr_slices(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        ingest_job_id: Uuid,
+        user_id: &str,
+        study_files: &[PreparedStudyFile],
+    ) -> Result<MprDerivationResult, AppError> {
+        let derived_root = self
+            .storage_root
+            .join("playground")
+            .join("derived")
+            .join(ingest_job_id.to_string())
+            .join("mpr");
+        fs::create_dir_all(&derived_root).await.map_err(|error| {
+            AppError::internal(format!("Unable to create MPR derived directory: {error}"))
+        })?;
+
+        let storage_root = self.storage_root.clone();
+        let study_files = study_files.to_vec();
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<MprProgressUpdate>();
+        let progress_service = self.clone();
+        let progress_user_id = user_id.to_string();
+
+        let progress_task = tokio::spawn(async move {
+            let mut last_percent = 0u8;
+            while let Some(progress) = progress_rx.recv().await {
+                // Multiple CPU workers can finish at nearly the same time. Never
+                // let a delayed worker make the visible percentage move backwards.
+                if progress.progress_percent < last_percent {
+                    continue;
+                }
+                last_percent = progress.progress_percent;
+
+                let summary = json!({
+                    "phase": progress.phase,
+                    "message": progress.message,
+                    "progressPercent": progress.progress_percent,
+                    "completed": progress.completed,
+                    "total": progress.total,
+                });
+
+                if let Err(error) = progress_service
+                    .publish_ingest_progress(
+                        account_id,
+                        zone_id,
+                        ingest_job_id,
+                        &progress_user_id,
+                        "deriving",
+                        summary,
+                    )
+                    .await
+                {
+                    error!(%ingest_job_id, ?error, "unable to publish MPR progress");
+                }
+            }
+        });
+
+        let derivation = tokio::task::spawn_blocking(move || {
+            derive_mpr_volume_and_slices(
+                &storage_root,
+                &derived_root,
+                &study_files,
+                &progress_tx,
+            )
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("MPR derivation task failed: {error}")))?
+        .map_err(|error| AppError::bad_request(format!("Unable to reconstruct MPR volume: {error}")));
+
+        let _ = progress_task.await;
+        derivation
+    }
+
     async fn load_modality_family_for_update(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -2662,7 +2993,7 @@ fn normalize_modality_type(value: &str) -> Result<String, AppError> {
     let normalized = value.trim().to_ascii_lowercase();
 
     match normalized.as_str() {
-        "mri" | "ct" | "pet" | "ultrasound" | "xray" | "mra" | "mrv" | "angiography" | "cbct"
+        "mri" | "mpr" | "ct" | "pet" | "ultrasound" | "xray" | "mra" | "mrv" | "angiography" | "cbct"
         | "illustration" | "photography" | "endoscopy" | "other" => Ok(normalized),
         _ => Err(AppError::bad_request("Modality type is invalid")),
     }
@@ -3086,12 +3417,972 @@ async fn derive_slice_candidate(
                 weighting_code: None,
                 orientation_code,
             },
-            atlas_source_image,
+            atlas_source_image: Some(atlas_source_image),
         }))
     })
     .await
     .map_err(|error| anyhow::anyhow!("DICOM derivation task failed: {error}"))?
 }
+
+fn derive_mpr_volume_and_slices(
+    storage_root: &Path,
+    derived_root: &Path,
+    study_files: &[PreparedStudyFile],
+    progress: &mpsc::UnboundedSender<MprProgressUpdate>,
+) -> anyhow::Result<MprDerivationResult> {
+    report_mpr_progress(
+        progress,
+        "reading_metadata",
+        "Reading DICOM spatial metadata.",
+        8,
+        0,
+        study_files.len(),
+    );
+
+    let mut grouped: BTreeMap<String, Vec<MprSourceSlice>> = BTreeMap::new();
+    let metadata_report_every = (study_files.len() / 10).max(1);
+
+    for (file_index, study_file) in study_files.iter().enumerate() {
+        let object = match open_file(&study_file.file_path) {
+            Ok(object) => object,
+            Err(_) => continue,
+        };
+        let Some(source_slice) = read_mpr_source_slice(&object, study_file) else {
+            continue;
+        };
+        grouped
+            .entry(source_slice.series_uid.clone())
+            .or_default()
+            .push(source_slice);
+
+        let completed = file_index + 1;
+        if completed == study_files.len() || completed % metadata_report_every == 0 {
+            let percent = interpolate_progress(8, 12, completed, study_files.len());
+            report_mpr_progress(
+                progress,
+                "reading_metadata",
+                &format!("Reading DICOM metadata {completed}/{}.", study_files.len()),
+                percent,
+                completed,
+                study_files.len(),
+            );
+        }
+    }
+
+    if grouped.is_empty() {
+        anyhow::bail!(
+            "the upload does not contain a spatial DICOM series with ImagePositionPatient, ImageOrientationPatient, and PixelSpacing"
+        );
+    }
+
+    let mut candidate_groups = grouped.into_values().collect::<Vec<_>>();
+    candidate_groups.sort_by_key(|group| std::cmp::Reverse(group.len()));
+
+    let mut selected_series = None;
+    let mut last_validation_error = None;
+    for group in candidate_groups {
+        match validate_and_sort_mpr_series(group) {
+            Ok(series) => {
+                selected_series = Some(series);
+                break;
+            }
+            Err(error) => last_validation_error = Some(error),
+        }
+    }
+
+    let slices = selected_series.ok_or_else(|| {
+        last_validation_error.unwrap_or_else(|| anyhow::anyhow!("no reconstructable DICOM series was found"))
+    })?;
+
+    let first = &slices[0];
+    let slice_spacing = median_slice_spacing(&slices)?;
+    let slice_direction = normalize3(cross3(first.row_direction, first.column_direction))
+        .context("invalid DICOM orientation vectors")?;
+    let source_origin = first.image_position;
+    let column_axis = scale3(first.row_direction, first.column_spacing);
+    let row_axis = scale3(first.column_direction, first.row_spacing);
+    let slice_axis = scale3(slice_direction, slice_spacing);
+    let source_basis = matrix_from_columns(column_axis, row_axis, slice_axis);
+    let inverse_basis = invert3(source_basis).context("DICOM volume orientation matrix is singular")?;
+
+    let source_voxel_count = first
+        .columns
+        .checked_mul(first.rows)
+        .and_then(|value| value.checked_mul(slices.len()))
+        .context("source DICOM volume is too large")?;
+    let mut source_volume = Vec::<u16>::with_capacity(source_voxel_count);
+    let mut histogram = vec![0u64; 65_536];
+    let decode_report_every = (slices.len() / 12).max(1);
+
+    report_mpr_progress(
+        progress,
+        "decoding_volume",
+        "Decoding source DICOM slices.",
+        12,
+        0,
+        slices.len(),
+    );
+
+    for (slice_index, slice) in slices.iter().enumerate() {
+        let object = open_file(&slice.file_path).with_context(|| {
+            format!("unable to reopen source DICOM {}", slice.file_path.display())
+        })?;
+        let decoded = object.decode_pixel_data().with_context(|| {
+            format!("unable to decode source DICOM {}", slice.file_path.display())
+        })?;
+        let image = decoded.to_dynamic_image(0).with_context(|| {
+            format!("unable to render source DICOM {}", slice.file_path.display())
+        })?;
+        let image = image.to_luma16();
+        if image.width() as usize != first.columns || image.height() as usize != first.rows {
+            anyhow::bail!("DICOM series dimensions changed while decoding");
+        }
+        for value in image.into_raw() {
+            histogram[value as usize] += 1;
+            source_volume.push(value);
+        }
+
+        let completed = slice_index + 1;
+        if completed == slices.len() || completed % decode_report_every == 0 {
+            let percent = interpolate_progress(12, 25, completed, slices.len());
+            report_mpr_progress(
+                progress,
+                "decoding_volume",
+                &format!("Decoded source slices {completed}/{}.", slices.len()),
+                percent,
+                completed,
+                slices.len(),
+            );
+        }
+    }
+
+    let input_dimensions = [first.columns, first.rows, slices.len()];
+    let corners = volume_world_corners(source_origin, source_basis, input_dimensions);
+    let mut world_min = [f64::INFINITY; 3];
+    let mut world_max = [f64::NEG_INFINITY; 3];
+    for corner in corners {
+        for axis in 0..3 {
+            world_min[axis] = world_min[axis].min(corner[axis]);
+            world_max[axis] = world_max[axis].max(corner[axis]);
+        }
+    }
+
+    let source_spacings = [first.column_spacing, first.row_spacing, slice_spacing];
+    let source_directions = [first.row_direction, first.column_direction, slice_direction];
+
+    let (target_volume, target_dimensions, target_spacing, target_origin) =
+        if let Some(axis_mapping) = canonical_source_axis_mapping(source_directions) {
+            report_mpr_progress(
+                progress,
+                "reconstructing_volume",
+                "Reorienting axis-aligned volume without interpolation.",
+                26,
+                0,
+                input_dimensions[2],
+            );
+
+            let (volume, dimensions, spacing) = reorient_axis_aligned_volume(
+                source_volume,
+                input_dimensions,
+                source_spacings,
+                axis_mapping,
+                progress,
+            )?;
+            (volume, dimensions, spacing, world_min)
+        } else {
+            let mut target_spacing = [
+                effective_patient_axis_spacing(0, source_directions, source_spacings),
+                effective_patient_axis_spacing(1, source_directions, source_spacings),
+                effective_patient_axis_spacing(2, source_directions, source_spacings),
+            ];
+            let mut target_dimensions =
+                target_dimensions_from_bounds(world_min, world_max, target_spacing);
+
+            let mut target_voxel_count = checked_volume_len(target_dimensions)?;
+            if target_voxel_count > MAX_MPR_VOXELS {
+                let scale = (target_voxel_count as f64 / MAX_MPR_VOXELS as f64).cbrt();
+                for spacing in &mut target_spacing {
+                    *spacing *= scale;
+                }
+                target_dimensions =
+                    target_dimensions_from_bounds(world_min, world_max, target_spacing);
+                target_voxel_count = checked_volume_len(target_dimensions)?;
+            }
+
+            if target_voxel_count > MAX_MPR_VOXELS {
+                anyhow::bail!("reconstructed volume exceeds the configured MPR voxel limit");
+            }
+
+            let target_origin = world_min;
+            let mut target_volume = vec![0u16; target_voxel_count];
+            let base_source = matrix_mul_vec(inverse_basis, sub3(target_origin, source_origin));
+            let step_x = matrix_mul_vec(inverse_basis, [target_spacing[0], 0.0, 0.0]);
+            let step_y = matrix_mul_vec(inverse_basis, [0.0, target_spacing[1], 0.0]);
+            let step_z = matrix_mul_vec(inverse_basis, [0.0, 0.0, target_spacing[2]]);
+
+            let [nx, ny, nz] = target_dimensions;
+            let plane_len = nx
+                .checked_mul(ny)
+                .context("reconstructed MPR plane dimensions overflow")?;
+            let worker_count = recommended_mpr_worker_count(nz);
+            let planes_per_worker = nz.div_ceil(worker_count.max(1)).max(1);
+            let completed_planes = Arc::new(AtomicUsize::new(0));
+            let resample_report_every = (nz / 20).max(1);
+            report_mpr_progress(
+                progress,
+                "reconstructing_volume",
+                &format!(
+                    "Resampling oblique DICOM volume into patient space on {worker_count} workers."
+                ),
+                25,
+                0,
+                nz,
+            );
+
+            std::thread::scope(|scope| {
+                for (worker_index, volume_chunk) in target_volume
+                    .chunks_mut(plane_len * planes_per_worker)
+                    .enumerate()
+                {
+                    let z_start = worker_index * planes_per_worker;
+                    let source_volume = &source_volume;
+                    let completed_planes = Arc::clone(&completed_planes);
+                    let progress = progress.clone();
+
+                    scope.spawn(move || {
+                        let local_plane_count = volume_chunk.len() / plane_len;
+                        for local_z in 0..local_plane_count {
+                            let z = z_start + local_z;
+                            let z_base = add3(base_source, scale3(step_z, z as f64));
+                            let plane = &mut volume_chunk
+                                [local_z * plane_len..(local_z + 1) * plane_len];
+
+                            for y in 0..ny {
+                                let mut source_index =
+                                    add3(z_base, scale3(step_y, y as f64));
+                                let row_offset = y * nx;
+                                for x in 0..nx {
+                                    plane[row_offset + x] = trilinear_sample_u16(
+                                        source_volume,
+                                        input_dimensions,
+                                        source_index,
+                                    );
+                                    source_index = add3(source_index, step_x);
+                                }
+                            }
+
+                            let completed =
+                                completed_planes.fetch_add(1, Ordering::Relaxed) + 1;
+                            if completed == nz || completed % resample_report_every == 0 {
+                                let percent = interpolate_progress(25, 55, completed, nz);
+                                report_mpr_progress(
+                                    &progress,
+                                    "reconstructing_volume",
+                                    &format!(
+                                        "Reconstructed volume section {completed}/{nz}."
+                                    ),
+                                    percent,
+                                    completed,
+                                    nz,
+                                );
+                            }
+                        }
+                    });
+                }
+            });
+
+            (target_volume, target_dimensions, target_spacing, target_origin)
+        };
+
+    let (window_low, window_high) = histogram_window(&histogram);
+    let [nx, ny, nz] = target_dimensions;
+    let total_plane_slices = nx + ny + nz;
+    let render_report_every = (total_plane_slices / 24).max(1);
+    let mut plane_asset_counts = BTreeMap::new();
+    let planes = [("axial", nz), ("coronal", ny), ("sagittal", nx)];
+    let mut render_tasks = Vec::with_capacity(total_plane_slices);
+
+    for (plane, count) in planes {
+        std::fs::create_dir_all(derived_root.join(plane))?;
+        plane_asset_counts.insert(plane.to_string(), count);
+        for slice_index in 0..count {
+            render_tasks.push((plane, slice_index));
+        }
+    }
+
+    let render_worker_count = recommended_mpr_worker_count(render_tasks.len());
+    report_mpr_progress(
+        progress,
+        "rendering_planes",
+        &format!(
+            "Rendering axial, coronal, and sagittal MPR stacks on {render_worker_count} workers."
+        ),
+        55,
+        0,
+        total_plane_slices,
+    );
+
+    let completed_renders = Arc::new(AtomicUsize::new(0));
+    let tasks_per_worker = render_tasks
+        .len()
+        .div_ceil(render_worker_count.max(1))
+        .max(1);
+    let source_series_uid = first.series_uid.clone();
+
+    let rendered_chunks = std::thread::scope(|scope| -> anyhow::Result<Vec<Vec<(usize, DerivedSliceBuild)>>> {
+        let mut handles = Vec::new();
+
+        for (worker_index, task_chunk) in render_tasks.chunks(tasks_per_worker).enumerate() {
+            let task_chunk = task_chunk.to_vec();
+            let target_volume = &target_volume;
+            let completed_renders = Arc::clone(&completed_renders);
+            let progress = progress.clone();
+            let source_series_uid = source_series_uid.clone();
+
+            handles.push(scope.spawn(move || -> anyhow::Result<Vec<(usize, DerivedSliceBuild)>> {
+                let mut builds = Vec::with_capacity(task_chunk.len());
+                for (local_index, (plane, slice_index)) in task_chunk.into_iter().enumerate() {
+                    let image = render_mpr_plane(
+                        target_volume,
+                        target_dimensions,
+                        plane,
+                        slice_index,
+                        window_low,
+                        window_high,
+                    )?;
+                    let file_name = format!("{plane}-{:04}.png", slice_index + 1);
+                    let image_path = derived_root.join(plane).join(file_name);
+                    let png_bytes = encode_png(&image)?;
+                    std::fs::write(&image_path, &png_bytes)?;
+                    let label = format!("MPR {}", capitalize_ascii(plane));
+                    let task_index = worker_index * tasks_per_worker + local_index;
+
+                    builds.push((
+                        task_index,
+                        DerivedSliceBuild {
+                            candidate: DerivedSliceCandidate {
+                                source_relative_path: None,
+                                storage_key: storage_key_from_absolute(storage_root, &image_path)
+                                    .map_err(anyhow::Error::from)?,
+                                checksum: sha256_hex(&png_bytes),
+                                size_bytes: png_bytes.len() as i64,
+                                width: i32::try_from(image.width()).unwrap_or(i32::MAX),
+                                height: i32::try_from(image.height()).unwrap_or(i32::MAX),
+                                series_uid: Some(format!("{source_series_uid}:mpr:{plane}")),
+                                series_label: Some(label),
+                                instance_uid: None,
+                                slice_index: i32::try_from(slice_index).unwrap_or(i32::MAX),
+                                weighting_code: None,
+                                orientation_code: Some(plane.to_string()),
+                            },
+                            atlas_source_image: None,
+                        },
+                    ));
+
+                    let completed = completed_renders.fetch_add(1, Ordering::Relaxed) + 1;
+                    if completed == total_plane_slices
+                        || completed % render_report_every == 0
+                    {
+                        let percent =
+                            interpolate_progress(55, 82, completed, total_plane_slices);
+                        report_mpr_progress(
+                            &progress,
+                            "rendering_planes",
+                            &format!(
+                                "Rendered MPR slices {completed}/{total_plane_slices}."
+                            ),
+                            percent,
+                            completed,
+                            total_plane_slices,
+                        );
+                    }
+                }
+                Ok(builds)
+            }));
+        }
+
+        let mut chunks = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let builds = handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("MPR render worker panicked"))??;
+            chunks.push(builds);
+        }
+        Ok(chunks)
+    })?;
+
+    let mut indexed_builds = rendered_chunks
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    indexed_builds.sort_by_key(|(task_index, _)| *task_index);
+    let mut slice_builds = indexed_builds
+        .into_iter()
+        .map(|(_, build)| build)
+        .collect::<Vec<_>>();
+
+    let axial_middle = i32::try_from(nz / 2).unwrap_or(i32::MAX);
+    if let Some(index) = slice_builds.iter().position(|build| {
+        build.candidate.orientation_code.as_deref() == Some("axial")
+            && build.candidate.slice_index == axial_middle
+    }) {
+        let middle_build = slice_builds.remove(index);
+        slice_builds.insert(0, middle_build);
+    }
+
+    Ok(MprDerivationResult {
+        slice_builds,
+        geometry: MprVolumeGeometry {
+            dimensions: target_dimensions,
+            spacing: target_spacing,
+            origin: target_origin,
+            frame_of_reference_uid: first.frame_of_reference_uid.clone(),
+            source_series_uid: first.series_uid.clone(),
+            source_slice_count: slices.len(),
+        },
+        plane_asset_counts,
+    })
+}
+
+fn read_mpr_source_slice(
+    object: &dicom::object::DefaultDicomObject,
+    study_file: &PreparedStudyFile,
+) -> Option<MprSourceSlice> {
+    let series_uid = dicom_text(object, "SeriesInstanceUID")?;
+    let rows = dicom_usize(object, "Rows")?;
+    let columns = dicom_usize(object, "Columns")?;
+    let image_position = dicom_f64_array::<3>(object, "ImagePositionPatient")?;
+    let orientation = dicom_f64_array::<6>(object, "ImageOrientationPatient")?;
+    let pixel_spacing = dicom_f64_array::<2>(object, "PixelSpacing")?;
+    let row_direction = normalize3([orientation[0], orientation[1], orientation[2]])?;
+    let column_direction = normalize3([orientation[3], orientation[4], orientation[5]])?;
+    let normal = normalize3(cross3(row_direction, column_direction))?;
+    let row_spacing = pixel_spacing[0].abs();
+    let column_spacing = pixel_spacing[1].abs();
+    if rows == 0
+        || columns == 0
+        || !row_spacing.is_finite()
+        || !column_spacing.is_finite()
+        || row_spacing <= 0.0
+        || column_spacing <= 0.0
+        || image_position.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    Some(MprSourceSlice {
+        file_path: study_file.file_path.clone(),
+        series_uid,
+        frame_of_reference_uid: dicom_text(object, "FrameOfReferenceUID"),
+        rows,
+        columns,
+        image_position,
+        row_direction,
+        column_direction,
+        row_spacing,
+        column_spacing,
+        slice_projection: dot3(image_position, normal),
+    })
+}
+
+fn validate_and_sort_mpr_series(mut slices: Vec<MprSourceSlice>) -> anyhow::Result<Vec<MprSourceSlice>> {
+    if slices.len() < 3 {
+        anyhow::bail!("MPR requires at least three spatial slices from the same DICOM series");
+    }
+
+    let first = slices[0].clone();
+    slices.retain(|slice| {
+        slice.rows == first.rows
+            && slice.columns == first.columns
+            && approx_equal(slice.row_spacing, first.row_spacing, 0.001)
+            && approx_equal(slice.column_spacing, first.column_spacing, 0.001)
+            && dot3(slice.row_direction, first.row_direction) >= 0.999
+            && dot3(slice.column_direction, first.column_direction) >= 0.999
+            && match (&first.frame_of_reference_uid, &slice.frame_of_reference_uid) {
+                (Some(left), Some(right)) => left == right,
+                _ => true,
+            }
+    });
+
+    if slices.len() < 3 {
+        anyhow::bail!("the DICOM series does not have consistent dimensions, orientation, and spacing");
+    }
+
+    let reference_normal = normalize3(cross3(first.row_direction, first.column_direction))
+        .context("invalid DICOM orientation vectors")?;
+    for slice in &mut slices {
+        slice.slice_projection = dot3(slice.image_position, reference_normal);
+    }
+    slices.sort_by(|left, right| {
+        left.slice_projection
+            .partial_cmp(&right.slice_projection)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    slices.dedup_by(|left, right| (left.slice_projection - right.slice_projection).abs() < 0.0001);
+
+    if slices.len() < 3 {
+        anyhow::bail!("the DICOM series does not contain enough unique slice positions");
+    }
+
+    let spacing = median_slice_spacing(&slices)?;
+    let tolerance = (spacing * 0.2).max(0.1);
+    for pair in slices.windows(2) {
+        let delta = (pair[1].slice_projection - pair[0].slice_projection).abs();
+        if (delta - spacing).abs() > tolerance {
+            anyhow::bail!(
+                "the DICOM series has irregular slice spacing ({delta:.3} mm versus median {spacing:.3} mm)"
+            );
+        }
+    }
+
+    Ok(slices)
+}
+
+fn median_slice_spacing(slices: &[MprSourceSlice]) -> anyhow::Result<f64> {
+    let mut diffs = slices
+        .windows(2)
+        .map(|pair| (pair[1].slice_projection - pair[0].slice_projection).abs())
+        .filter(|value| *value > 0.0001 && value.is_finite())
+        .collect::<Vec<_>>();
+    if diffs.is_empty() {
+        anyhow::bail!("unable to determine slice spacing from ImagePositionPatient");
+    }
+    diffs.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(diffs[diffs.len() / 2])
+}
+
+fn interpolate_progress(start: u8, end: u8, completed: usize, total: usize) -> u8 {
+    if total == 0 || end <= start {
+        return end;
+    }
+
+    let fraction = (completed.min(total) as f64 / total as f64).clamp(0.0, 1.0);
+    (start as f64 + (end - start) as f64 * fraction)
+        .round()
+        .clamp(start as f64, end as f64) as u8
+}
+
+fn report_mpr_progress(
+    sender: &mpsc::UnboundedSender<MprProgressUpdate>,
+    phase: &str,
+    message: &str,
+    progress_percent: u8,
+    completed: usize,
+    total: usize,
+) {
+    let _ = sender.send(MprProgressUpdate {
+        phase: phase.to_string(),
+        message: message.to_string(),
+        progress_percent,
+        completed,
+        total,
+    });
+}
+
+fn canonical_source_axis_mapping(
+    directions: [[f64; 3]; 3],
+) -> Option<[(usize, bool); 3]> {
+    let mut mapping = [(0usize, false); 3];
+    let mut used_patient_axes = [false; 3];
+
+    for (source_axis, direction) in directions.into_iter().enumerate() {
+        let mut patient_axis = 0usize;
+        let mut dominant_component = direction[0];
+        for axis in 1..3 {
+            if direction[axis].abs() > dominant_component.abs() {
+                patient_axis = axis;
+                dominant_component = direction[axis];
+            }
+        }
+
+        if dominant_component.abs() < 0.999 || used_patient_axes[patient_axis] {
+            return None;
+        }
+
+        let off_axis_energy = direction
+            .iter()
+            .enumerate()
+            .filter(|(axis, _)| *axis != patient_axis)
+            .map(|(_, value)| value * value)
+            .sum::<f64>();
+        if off_axis_energy > 1e-4 {
+            return None;
+        }
+
+        used_patient_axes[patient_axis] = true;
+        mapping[source_axis] = (patient_axis, dominant_component < 0.0);
+    }
+
+    Some(mapping)
+}
+
+fn reorient_axis_aligned_volume(
+    source_volume: Vec<u16>,
+    source_dimensions: [usize; 3],
+    source_spacings: [f64; 3],
+    axis_mapping: [(usize, bool); 3],
+    progress: &mpsc::UnboundedSender<MprProgressUpdate>,
+) -> anyhow::Result<(Vec<u16>, [usize; 3], [f64; 3])> {
+    let mut target_dimensions = [0usize; 3];
+    let mut target_spacing = [0.0f64; 3];
+    for source_axis in 0..3 {
+        let (patient_axis, _) = axis_mapping[source_axis];
+        target_dimensions[patient_axis] = source_dimensions[source_axis];
+        target_spacing[patient_axis] = source_spacings[source_axis];
+    }
+
+    let identity_mapping = axis_mapping == [(0, false), (1, false), (2, false)];
+    if identity_mapping {
+        report_mpr_progress(
+            progress,
+            "reconstructing_volume",
+            "Volume is already aligned to patient axes.",
+            55,
+            source_dimensions[2],
+            source_dimensions[2],
+        );
+        return Ok((source_volume, target_dimensions, target_spacing));
+    }
+
+    let target_len = checked_volume_len(target_dimensions)?;
+    if target_len != source_volume.len() {
+        anyhow::bail!("axis-aligned MPR reorientation changed voxel count unexpectedly");
+    }
+
+    let mut target_volume = vec![0u16; target_len];
+    let [source_nx, source_ny, source_nz] = source_dimensions;
+    let [target_nx, target_ny, _target_nz] = target_dimensions;
+    let report_every = (source_nz / 12).max(1);
+
+    for source_z in 0..source_nz {
+        for source_y in 0..source_ny {
+            for source_x in 0..source_nx {
+                let source_indices = [source_x, source_y, source_z];
+                let mut target_indices = [0usize; 3];
+
+                for source_axis in 0..3 {
+                    let (patient_axis, reversed) = axis_mapping[source_axis];
+                    let source_index = source_indices[source_axis];
+                    let source_count = source_dimensions[source_axis];
+                    target_indices[patient_axis] = if reversed {
+                        source_count - 1 - source_index
+                    } else {
+                        source_index
+                    };
+                }
+
+                let source_index = (source_z * source_ny + source_y) * source_nx + source_x;
+                let target_index =
+                    (target_indices[2] * target_ny + target_indices[1]) * target_nx
+                        + target_indices[0];
+                target_volume[target_index] = source_volume[source_index];
+            }
+        }
+
+        let completed = source_z + 1;
+        if completed == source_nz || completed % report_every == 0 {
+            let percent = interpolate_progress(26, 55, completed, source_nz);
+            report_mpr_progress(
+                progress,
+                "reconstructing_volume",
+                &format!("Reoriented volume section {completed}/{source_nz}."),
+                percent,
+                completed,
+                source_nz,
+            );
+        }
+    }
+
+    Ok((target_volume, target_dimensions, target_spacing))
+}
+
+fn dicom_usize(object: &dicom::object::DefaultDicomObject, name: &str) -> Option<usize> {
+    object
+        .element_by_name(name)
+        .ok()?
+        .to_int::<u32>()
+        .ok()
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+fn dicom_f64_array<const N: usize>(
+    object: &dicom::object::DefaultDicomObject,
+    name: &str,
+) -> Option<[f64; N]> {
+    object
+        .element_by_name(name)
+        .ok()?
+        .to_multi_float64()
+        .ok()?
+        .try_into()
+        .ok()
+}
+
+fn matrix_from_columns(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [[f64; 3]; 3] {
+    [
+        [a[0], b[0], c[0]],
+        [a[1], b[1], c[1]],
+        [a[2], b[2], c[2]],
+    ]
+}
+
+fn invert3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let [[a, b, c], [d, e, f], [g, h, i]] = matrix;
+    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if determinant.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / determinant;
+    Some([
+        [(e * i - f * h) * inv, (c * h - b * i) * inv, (b * f - c * e) * inv],
+        [(f * g - d * i) * inv, (a * i - c * g) * inv, (c * d - a * f) * inv],
+        [(d * h - e * g) * inv, (b * g - a * h) * inv, (a * e - b * d) * inv],
+    ])
+}
+
+fn matrix_mul_vec(matrix: [[f64; 3]; 3], value: [f64; 3]) -> [f64; 3] {
+    [
+        dot3(matrix[0], value),
+        dot3(matrix[1], value),
+        dot3(matrix[2], value),
+    ]
+}
+
+fn volume_world_corners(
+    origin: [f64; 3],
+    basis: [[f64; 3]; 3],
+    dimensions: [usize; 3],
+) -> [[f64; 3]; 8] {
+    let max_index = [
+        dimensions[0].saturating_sub(1) as f64,
+        dimensions[1].saturating_sub(1) as f64,
+        dimensions[2].saturating_sub(1) as f64,
+    ];
+    let mut corners = [[0.0; 3]; 8];
+    let mut cursor = 0;
+    for z in [0.0, max_index[2]] {
+        for y in [0.0, max_index[1]] {
+            for x in [0.0, max_index[0]] {
+                corners[cursor] = add3(origin, matrix_mul_vec(basis, [x, y, z]));
+                cursor += 1;
+            }
+        }
+    }
+    corners
+}
+
+fn effective_patient_axis_spacing(
+    patient_axis: usize,
+    directions: [[f64; 3]; 3],
+    spacings: [f64; 3],
+) -> f64 {
+    let reciprocal_squared = directions
+        .iter()
+        .zip(spacings)
+        .map(|(direction, spacing)| {
+            let component = direction[patient_axis] / spacing.max(1e-6);
+            component * component
+        })
+        .sum::<f64>();
+    if reciprocal_squared <= 1e-12 {
+        spacings.into_iter().fold(f64::INFINITY, f64::min)
+    } else {
+        1.0 / reciprocal_squared.sqrt()
+    }
+}
+
+fn target_dimensions_from_bounds(
+    min: [f64; 3],
+    max: [f64; 3],
+    spacing: [f64; 3],
+) -> [usize; 3] {
+    [0, 1, 2].map(|axis| {
+        (((max[axis] - min[axis]).max(0.0) / spacing[axis].max(1e-6)).ceil() as usize + 1)
+            .max(1)
+    })
+}
+
+fn checked_volume_len(dimensions: [usize; 3]) -> anyhow::Result<usize> {
+    dimensions[0]
+        .checked_mul(dimensions[1])
+        .and_then(|value| value.checked_mul(dimensions[2]))
+        .context("reconstructed volume dimensions overflow")
+}
+
+fn trilinear_sample_u16(
+    volume: &[u16],
+    dimensions: [usize; 3],
+    point: [f64; 3],
+) -> u16 {
+    let [nx, ny, nz] = dimensions;
+    let [x, y, z] = point;
+    if x < 0.0
+        || y < 0.0
+        || z < 0.0
+        || x > (nx.saturating_sub(1)) as f64
+        || y > (ny.saturating_sub(1)) as f64
+        || z > (nz.saturating_sub(1)) as f64
+    {
+        return 0;
+    }
+
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let z0 = z.floor() as usize;
+    let x1 = (x0 + 1).min(nx - 1);
+    let y1 = (y0 + 1).min(ny - 1);
+    let z1 = (z0 + 1).min(nz - 1);
+    let tx = x - x0 as f64;
+    let ty = y - y0 as f64;
+    let tz = z - z0 as f64;
+    let index = |xi: usize, yi: usize, zi: usize| -> usize { (zi * ny + yi) * nx + xi };
+    let sample = |xi: usize, yi: usize, zi: usize| -> f64 { volume[index(xi, yi, zi)] as f64 };
+
+    let c00 = sample(x0, y0, z0) * (1.0 - tx) + sample(x1, y0, z0) * tx;
+    let c10 = sample(x0, y1, z0) * (1.0 - tx) + sample(x1, y1, z0) * tx;
+    let c01 = sample(x0, y0, z1) * (1.0 - tx) + sample(x1, y0, z1) * tx;
+    let c11 = sample(x0, y1, z1) * (1.0 - tx) + sample(x1, y1, z1) * tx;
+    let c0 = c00 * (1.0 - ty) + c10 * ty;
+    let c1 = c01 * (1.0 - ty) + c11 * ty;
+    (c0 * (1.0 - tz) + c1 * tz).round().clamp(0.0, u16::MAX as f64) as u16
+}
+
+fn histogram_window(histogram: &[u64]) -> (u16, u16) {
+    let total = histogram.iter().sum::<u64>();
+    if total == 0 {
+        return (0, u16::MAX);
+    }
+    let low_target = ((total as f64) * 0.005) as u64;
+    let high_target = ((total as f64) * 0.995) as u64;
+    let mut cumulative = 0u64;
+    let mut low = 0u16;
+    let mut high = u16::MAX;
+    let mut low_found = false;
+    for (value, count) in histogram.iter().enumerate() {
+        cumulative += count;
+        if !low_found && cumulative >= low_target {
+            low = value as u16;
+            low_found = true;
+        }
+        if cumulative >= high_target {
+            high = value as u16;
+            break;
+        }
+    }
+    if high <= low {
+        (0, u16::MAX)
+    } else {
+        (low, high)
+    }
+}
+
+fn render_mpr_plane(
+    volume: &[u16],
+    dimensions: [usize; 3],
+    plane: &str,
+    slice_index: usize,
+    window_low: u16,
+    window_high: u16,
+) -> anyhow::Result<RgbaImage> {
+    let [nx, ny, nz] = dimensions;
+    let (width, height) = match plane {
+        "axial" => (nx, ny),
+        "coronal" => (nx, nz),
+        "sagittal" => (ny, nz),
+        _ => anyhow::bail!("unsupported MPR plane {plane}"),
+    };
+    let mut image = RgbaImage::new(width as u32, height as u32);
+    let index = |x: usize, y: usize, z: usize| -> usize { (z * ny + y) * nx + x };
+    let map_value = |value: u16| -> u8 {
+        let low = window_low as f64;
+        let high = window_high as f64;
+        (((value as f64 - low) / (high - low).max(1.0)) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+
+    for screen_y in 0..height {
+        for screen_x in 0..width {
+            let value = match plane {
+                "axial" => volume[index(screen_x, screen_y, slice_index)],
+                "coronal" => {
+                    let z = nz - 1 - screen_y;
+                    volume[index(screen_x, slice_index, z)]
+                }
+                "sagittal" => {
+                    let z = nz - 1 - screen_y;
+                    volume[index(slice_index, screen_x, z)]
+                }
+                _ => unreachable!(),
+            };
+            let grayscale = map_value(value);
+            image.put_pixel(
+                screen_x as u32,
+                screen_y as u32,
+                Rgba([grayscale, grayscale, grayscale, 255]),
+            );
+        }
+    }
+
+    Ok(image)
+}
+
+fn encode_png(image: &RgbaImage) -> anyhow::Result<Vec<u8>> {
+    let mut cursor = Cursor::new(Vec::new());
+    PngEncoder::new_with_quality(&mut cursor, CompressionType::Fast, FilterType::NoFilter)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            ExtendedColorType::Rgba8,
+        )?;
+    Ok(cursor.into_inner())
+}
+
+fn dot3(left: [f64; 3], right: [f64; 3]) -> f64 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+}
+
+fn cross3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+}
+
+fn normalize3(value: [f64; 3]) -> Option<[f64; 3]> {
+    let magnitude = dot3(value, value).sqrt();
+    if !magnitude.is_finite() || magnitude <= 1e-12 {
+        return None;
+    }
+    Some([value[0] / magnitude, value[1] / magnitude, value[2] / magnitude])
+}
+
+fn add3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
+}
+
+fn sub3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
+
+fn scale3(value: [f64; 3], scale: f64) -> [f64; 3] {
+    [value[0] * scale, value[1] * scale, value[2] * scale]
+}
+
+fn approx_equal(left: f64, right: f64, tolerance: f64) -> bool {
+    (left - right).abs() <= tolerance
+}
+
+fn capitalize_ascii(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+    }
+}
+
 
 #[derive(Debug, Clone)]
 struct BuiltAtlasPage {
@@ -3189,7 +4480,7 @@ impl PlaygroundService {
                     "local_disk",
                     &packed_page.storage_key,
                     &packed_page.checksum,
-                    "image/avif",
+                    infer_derived_mime_type(&packed_page.storage_key),
                     packed_page.size_bytes,
                     packed_page.width,
                     packed_page.height,
@@ -3239,17 +4530,16 @@ impl PlaygroundService {
 
         let storage_root = self.storage_root.clone();
         let atlas_root = self.prepare_atlas_root(ingest_job_id).await?;
-        let slice_images = slice_assets
-            .iter()
-            .zip(slice_builds.iter())
-            .map(|(asset, build)| AtlasSourceSlice {
-                asset_id: asset.id.clone(),
-                image: build.atlas_source_image.clone(),
-            })
-            .collect::<Vec<_>>();
+        let slice_assets = slice_assets.to_vec();
+        let slice_builds = slice_builds.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            write_atlas_pages(&storage_root, &atlas_root, slice_images)
+            write_atlas_pages_from_slice_builds(
+                &storage_root,
+                &atlas_root,
+                &slice_assets,
+                &slice_builds,
+            )
         })
         .await
         .map_err(|error| AppError::internal(format!("Atlas build task failed: {error}")))?
@@ -3273,6 +4563,13 @@ impl PlaygroundService {
 
         let storage_root = self.storage_root.clone();
         let atlas_root = self.prepare_atlas_root(ingest_job_id).await?;
+        let lossless_atlas = slice_assets.iter().all(|asset| {
+            asset.asset_kind == "derived_slice"
+                && asset
+                    .storage_key
+                    .as_deref()
+                    .is_some_and(|storage_key| storage_key.ends_with(".png"))
+        });
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<BuiltAtlasPage>> {
             let mut slice_images = Vec::with_capacity(slice_assets.len());
@@ -3285,7 +4582,7 @@ impl PlaygroundService {
                 });
             }
 
-            write_atlas_pages(&storage_root, &atlas_root, slice_images)
+            write_atlas_pages(&storage_root, &atlas_root, slice_images, lossless_atlas)
         })
         .await
         .map_err(|error| AppError::internal(format!("Atlas build task failed: {error}")))?
@@ -3354,6 +4651,22 @@ fn recommended_dicom_derivation_concurrency() -> usize {
         .unwrap_or(4)
 }
 
+fn recommended_mpr_worker_count(work_items: usize) -> usize {
+    if work_items == 0 {
+        return 1;
+    }
+
+    std::thread::available_parallelism()
+        .map(|parallelism| {
+            parallelism
+                .get()
+                .min(MAX_CONCURRENT_DICOM_DERIVATIONS)
+                .min(work_items)
+                .max(1)
+        })
+        .unwrap_or(1)
+}
+
 fn encode_avif(image: &RgbaImage) -> anyhow::Result<Vec<u8>> {
     let mut cursor = Cursor::new(Vec::new());
     AvifEncoder::new_with_speed_quality(&mut cursor, AVIF_ENCODER_SPEED, AVIF_ENCODER_QUALITY)
@@ -3401,10 +4714,127 @@ fn resolve_slice_source_file_path(
     ))
 }
 
+fn write_atlas_pages_from_slice_builds(
+    storage_root: &Path,
+    atlas_root: &Path,
+    slice_assets: &[ZoneModalityAsset],
+    slice_builds: &[DerivedSliceBuild],
+) -> anyhow::Result<Vec<BuiltAtlasPage>> {
+    if slice_assets.is_empty() {
+        return Ok(Vec::new());
+    }
+    if slice_assets.len() != slice_builds.len() {
+        anyhow::bail!("slice assets and builds are misaligned");
+    }
+
+    let global_cell_width = slice_builds
+        .iter()
+        .map(|build| build.candidate.width.max(1) as u32)
+        .max()
+        .unwrap_or(1);
+    let global_cell_height = slice_builds
+        .iter()
+        .map(|build| build.candidate.height.max(1) as u32)
+        .max()
+        .unwrap_or(1);
+    let columns_by_width = (MAX_ATLAS_PAGE_EDGE / global_cell_width).max(1) as usize;
+    let rows_by_height = (MAX_ATLAS_PAGE_EDGE / global_cell_height).max(1) as usize;
+    let columns_per_page = columns_by_width.clamp(1, MAX_ATLAS_PAGE_COLUMNS);
+    let rows_per_page = rows_by_height.max(1);
+    let slices_per_page = (columns_per_page * rows_per_page).clamp(1, MAX_ATLAS_SLICES_PER_PAGE);
+    let mut pages = Vec::new();
+
+    for (page_index, start) in (0..slice_assets.len()).step_by(slices_per_page).enumerate() {
+        let end = (start + slices_per_page).min(slice_assets.len());
+        let page_builds = &slice_builds[start..end];
+        let cell_width = page_builds
+            .iter()
+            .map(|build| build.candidate.width.max(1))
+            .max()
+            .unwrap_or(1);
+        let cell_height = page_builds
+            .iter()
+            .map(|build| build.candidate.height.max(1))
+            .max()
+            .unwrap_or(1);
+        let columns = columns_per_page.min(end - start).max(1);
+        let rows = (end - start).div_ceil(columns);
+        let page_width = (cell_width as u32) * (columns as u32);
+        let page_height = (cell_height as u32) * (rows as u32);
+        let mut canvas: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(page_width, page_height, Rgba([0, 0, 0, 0]));
+        let mut frames = Vec::with_capacity(end - start);
+
+        for local_index in 0..(end - start) {
+            let asset = &slice_assets[start + local_index];
+            let build = &slice_builds[start + local_index];
+            let image = if let Some(image) = build.atlas_source_image.as_ref() {
+                image.clone()
+            } else {
+                let image_path = storage_root.join(&build.candidate.storage_key);
+                image::open(&image_path)
+                    .with_context(|| {
+                        format!("Unable to open derived MPR slice at {}", image_path.display())
+                    })?
+                    .to_rgba8()
+            };
+            let column = local_index % columns;
+            let row = local_index / columns;
+            let x = i64::try_from(column).unwrap_or(0) * i64::from(cell_width);
+            let y = i64::try_from(row).unwrap_or(0) * i64::from(cell_height);
+            overlay(&mut canvas, &image, x, y);
+            frames.push(AtlasFrameMetadata {
+                asset_id: asset.id.clone(),
+                x: i32::try_from(x).unwrap_or(i32::MAX),
+                y: i32::try_from(y).unwrap_or(i32::MAX),
+                width: i32::try_from(image.width()).unwrap_or(i32::MAX),
+                height: i32::try_from(image.height()).unwrap_or(i32::MAX),
+            });
+        }
+
+        let lossless_page = page_builds
+            .iter()
+            .all(|build| build.atlas_source_image.is_none());
+        let atlas_extension = if lossless_page { "png" } else { "avif" };
+        let atlas_file_name = format!("atlas-{:03}.{atlas_extension}", page_index + 1);
+        let atlas_path = atlas_root.join(&atlas_file_name);
+        let atlas_bytes = if lossless_page {
+            encode_png(&canvas)?
+        } else {
+            encode_avif(&canvas)?
+        };
+        std::fs::write(&atlas_path, &atlas_bytes)
+            .with_context(|| format!("Unable to write atlas image at {}", atlas_path.display()))?;
+        let metadata_path = atlas_path.with_extension("json");
+        std::fs::write(
+            &metadata_path,
+            serde_json::to_vec_pretty(&AtlasPageMetadata {
+                width: i32::try_from(page_width).unwrap_or(i32::MAX),
+                height: i32::try_from(page_height).unwrap_or(i32::MAX),
+                frames: frames.clone(),
+            })?,
+        )?;
+
+        pages.push(BuiltAtlasPage {
+            storage_key: storage_key_from_absolute(storage_root, &atlas_path)
+                .map_err(anyhow::Error::from)?,
+            checksum: sha256_hex(&atlas_bytes),
+            size_bytes: atlas_bytes.len() as i64,
+            width: i32::try_from(page_width).unwrap_or(i32::MAX),
+            height: i32::try_from(page_height).unwrap_or(i32::MAX),
+            frames,
+        });
+    }
+
+    Ok(pages)
+}
+
+
 fn write_atlas_pages(
     storage_root: &Path,
     atlas_root: &Path,
     slice_images: Vec<AtlasSourceSlice>,
+    lossless_atlas: bool,
 ) -> anyhow::Result<Vec<BuiltAtlasPage>> {
     if slice_images.is_empty() {
         return Ok(Vec::new());
@@ -3467,9 +4897,14 @@ fn write_atlas_pages(
             });
         }
 
-        let atlas_file_name = format!("atlas-{:03}.avif", page_index + 1);
+        let atlas_extension = if lossless_atlas { "png" } else { "avif" };
+        let atlas_file_name = format!("atlas-{:03}.{atlas_extension}", page_index + 1);
         let atlas_path = atlas_root.join(&atlas_file_name);
-        let atlas_bytes = encode_avif(&atlas_canvas)?;
+        let atlas_bytes = if lossless_atlas {
+            encode_png(&atlas_canvas)?
+        } else {
+            encode_avif(&atlas_canvas)?
+        };
         std::fs::write(&atlas_path, &atlas_bytes)
             .with_context(|| format!("Unable to write atlas image at {}", atlas_path.display()))?;
 
@@ -3617,6 +5052,45 @@ fn build_viewer_manifest_json(
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>(),
+    })
+}
+
+fn build_mpr_viewer_manifest_json(
+    assets: &[ZoneModalityAsset],
+    atlases: &[ZoneModalityAtlasPage],
+    atlas_frames: &[ZoneModalityAtlasFrame],
+    geometry: &MprVolumeGeometry,
+    plane_asset_counts: Option<&BTreeMap<String, usize>>,
+) -> serde_json::Value {
+    let mut planes = serde_json::Map::new();
+
+    for plane in ["axial", "coronal", "sagittal"] {
+        let mut plane_assets = assets
+            .iter()
+            .filter(|asset| asset.orientation_code.as_deref() == Some(plane))
+            .collect::<Vec<_>>();
+        plane_assets.sort_by_key(|asset| asset.slice_index.unwrap_or(i32::MAX));
+        planes.insert(
+            plane.to_string(),
+            json!({
+                "sliceCount": plane_asset_counts
+                    .and_then(|counts| counts.get(plane).copied())
+                    .unwrap_or(plane_assets.len()),
+                "assetIds": plane_assets
+                    .iter()
+                    .map(|asset| asset.id.clone())
+                    .collect::<Vec<_>>(),
+            }),
+        );
+    }
+
+    json!({
+        "schemaVersion": "mpr-1",
+        "coordinateSystem": "DICOM_LPS",
+        "volume": geometry,
+        "planes": planes,
+        "atlases": atlases,
+        "atlasFrames": atlas_frames,
     })
 }
 

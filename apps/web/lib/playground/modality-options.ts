@@ -8,6 +8,7 @@ export const MODALITY_TYPE_OPTIONS: Array<{
   value: ModalityType;
 }> = [
   { label: "MRI", value: "mri" },
+  { label: "MPR", value: "mpr" },
   { label: "CT", value: "ct" },
   { label: "PET", value: "pet" },
   { label: "Ultrasound", value: "ultrasound" },

@@ -5,7 +5,7 @@ use anyhow::Result;
 use axum::Router;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::features::{
     health::http::routes as health_routes,
@@ -38,6 +38,17 @@ async fn main() -> Result<()> {
     run_migrations(&pool).await?;
 
     let state = AppState::new(pool, config);
+
+    let interrupted_ingests = state
+        .playground_service
+        .fail_interrupted_ingests_from_previous_runtime()
+        .await?;
+    if interrupted_ingests > 0 {
+        warn!(
+            interrupted_ingests,
+            "marked modality ingest jobs interrupted by the previous API runtime as failed"
+        );
+    }
 
     let app = Router::new()
         .nest("/api/v1/health", health_routes())

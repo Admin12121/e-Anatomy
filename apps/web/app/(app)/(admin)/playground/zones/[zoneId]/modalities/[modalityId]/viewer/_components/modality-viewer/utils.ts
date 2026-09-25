@@ -41,6 +41,8 @@ export function formatModalityTypeLabel(value: string | null | undefined) {
   switch (value.toLowerCase()) {
     case "mri":
       return "MRI";
+    case "mpr":
+      return "MPR";
     case "ct":
       return "CT";
     case "pet":

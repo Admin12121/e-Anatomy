@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ProcessingProgress } from "@/components/processing-progress";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -227,12 +228,115 @@ function formatModalityVariantCount(count: number) {
   return `${count} variant${count === 1 ? "" : "s"}`;
 }
 
-function formatFamilyProcessingStatus(family: ZoneModalityFamily) {
-  if (family.totalVariantCount === 1) {
-    return family.variants[0]?.processingStatus.replaceAll("_", " ") ?? "draft";
+type ModalityIngestProgressView = {
+  message: string;
+  percent: number | null;
+  phase: string | null;
+};
+
+type ModalityFailureView = {
+  label: "Failed" | "Interrupted";
+  message: string;
+};
+
+function getModalityFailure(
+  modality: ZoneModality | null | undefined,
+): ModalityFailureView | null {
+  if (!modality || modality.processingStatus !== "failed") return null;
+
+  const summary = modality.ingestSummaryJson;
+  const phase = typeof summary?.phase === "string" ? summary.phase : null;
+  const message =
+    typeof summary?.message === "string" && summary.message.trim()
+      ? summary.message.trim()
+      : "Study processing failed.";
+
+  return {
+    label: phase === "interrupted" ? "Interrupted" : "Failed",
+    message,
+  };
+}
+
+function getFamilyFailure(family: ZoneModalityFamily) {
+  const failedVariant = family.variants.find(
+    (variant) => variant.processingStatus === "failed",
+  );
+
+  return failedVariant ? getModalityFailure(failedVariant) : null;
+}
+
+function getModalityIngestProgress(
+  modality: ZoneModality | null | undefined,
+): ModalityIngestProgressView | null {
+  if (!modality) return null;
+
+  const summary = modality.ingestSummaryJson;
+  const rawPhase = typeof summary?.phase === "string" ? summary.phase : null;
+  const rawPercent = summary?.progressPercent;
+  const percent =
+    typeof rawPercent === "number" && Number.isFinite(rawPercent)
+      ? Math.min(100, Math.max(0, Math.round(rawPercent)))
+      : null;
+  const phase = rawPhase ? rawPhase.replaceAll("_", " ") : null;
+  const message =
+    typeof summary?.message === "string" && summary.message.trim()
+      ? summary.message.trim()
+      : phase
+        ? phase
+        : modality.processingStatus.replaceAll("_", " ");
+
+  return { message, percent, phase };
+}
+
+function formatModalityProcessingStatus(modality: ZoneModality) {
+  if (modality.processingStatus === "ready") return "ready";
+  if (modality.processingStatus === "failed") {
+    return getModalityFailure(modality)?.label.toLowerCase() ?? "failed";
   }
 
-  return `${family.readyVariantCount}/${family.totalVariantCount} (ready / total)`;
+  const progress = getModalityIngestProgress(modality);
+  if (progress?.percent !== null && progress?.percent !== undefined) {
+    return `${progress.message} · ${progress.percent}%`;
+  }
+
+  return progress?.message ?? modality.processingStatus.replaceAll("_", " ");
+}
+
+function getFamilyIngestProgress(
+  family: ZoneModalityFamily,
+): ModalityIngestProgressView | null {
+  const activeVariant = family.variants.find(
+    (variant) =>
+      variant.processingStatus === "processing" ||
+      variant.processingStatus === "uploaded",
+  );
+
+  return activeVariant ? getModalityIngestProgress(activeVariant) : null;
+}
+
+function formatFamilyProcessingStatus(family: ZoneModalityFamily) {
+  if (family.totalVariantCount === 1 && family.variants[0]) {
+    return formatModalityProcessingStatus(family.variants[0]);
+  }
+
+  const activeVariant = family.variants.find(
+    (variant) =>
+      variant.processingStatus === "processing" ||
+      variant.processingStatus === "uploaded",
+  );
+
+  if (activeVariant) {
+    return `${formatModalityProcessingStatus(activeVariant)} · ${family.readyVariantCount}/${family.totalVariantCount} ready`;
+  }
+
+  const hasFailure = family.variants.some(
+    (variant) => variant.processingStatus === "failed",
+  );
+  if (hasFailure) {
+    return `failed · ${family.readyVariantCount}/${family.totalVariantCount} ready`;
+  }
+
+  return `${family.readyVariantCount}/${family.totalVariantCount} ready`;
 }
 
 function buildFamilyWeightingState(family: ZoneModalityFamily) {
@@ -472,7 +576,8 @@ async function extractFilesFromDroppedItems(
 
 export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   const dispatch = useAppDispatch();
-  const { data, isLoading } = useGetZoneModalitiesQuery(zoneId);
+  const { data, isLoading, refetch: refetchModalities } =
+    useGetZoneModalitiesQuery(zoneId);
   const modalityFamilies = data?.items ?? EMPTY_MODALITY_FAMILIES;
   const modalities = useMemo(
     () => modalityFamilies.flatMap((family) => family.variants),
@@ -510,6 +615,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   const dragCounterRef = useRef(0);
   const sourceInputRef = useRef<HTMLInputElement | null>(null);
   const sourceFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const previousProcessingStatusRef = useRef<Map<string, string>>(new Map());
   const resolvedActiveModalityId =
     activeModalityId &&
     modalities.some((modality) => modality.id === activeModalityId)
@@ -528,6 +634,27 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   const isPending =
     isAnalyzingSource || isCreatingFromStudy || isUpdatingFamily || isDeleting;
   const hasActiveIngest = hasActiveModalityIngest(modalityFamilies);
+
+  useEffect(() => {
+    const previousStatuses = previousProcessingStatusRef.current;
+    const nextStatuses = new Map<string, string>();
+
+    for (const modality of modalities) {
+      nextStatuses.set(modality.id, modality.processingStatus);
+      const previousStatus = previousStatuses.get(modality.id);
+
+      if (
+        previousStatus &&
+        previousStatus !== "failed" &&
+        modality.processingStatus === "failed"
+      ) {
+        const failure = getModalityFailure(modality);
+        toast.error(failure?.message ?? "Study processing failed.");
+      }
+    }
+
+    previousProcessingStatusRef.current = nextStatuses;
+  }, [modalities]);
 
   useEffect(() => {
     if (!hasActiveIngest) {
@@ -577,6 +704,20 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       stream.close();
     };
   }, [dispatch, hasActiveIngest, zoneId]);
+
+  useEffect(() => {
+    if (!hasActiveIngest) {
+      return;
+    }
+
+    // SSE is the primary live path. This low-frequency refetch is a safety net
+    // for browser/proxy disconnects so long MPR jobs never look permanently stuck.
+    const intervalId = window.setInterval(() => {
+      void refetchModalities();
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hasActiveIngest, refetchModalities]);
 
   useEffect(() => {
     const folderInput = sourceFolderInputRef.current as
@@ -716,13 +857,19 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     try {
       const detectedUpload = await analyzeModalityUploadFiles(files);
       setCreateDetectedUpload(detectedUpload);
-      if (createContext.kind === "new") {
+      if (
+        createContext.kind === "new" &&
+        createModalityTypeOverride !== "mpr"
+      ) {
         handleCreateModalityTypeChange(detectedUpload.detectedModalityType);
       }
       setShowReadyPreview(true);
     } catch (error) {
       setCreateDetectedUpload(null);
-      if (createContext.kind === "new") {
+      if (
+        createContext.kind === "new" &&
+        createModalityTypeOverride !== "mpr"
+      ) {
         handleCreateModalityTypeChange("other");
       }
       const message =
@@ -1058,8 +1205,31 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                     <TableCell className="text-muted-foreground">
                       {family.modalityType}
                     </TableCell>
-                    <TableCell className="capitalize text-muted-foreground">
-                      {formatFamilyProcessingStatus(family)}
+                    <TableCell className="max-w-64 text-muted-foreground">
+                      {(() => {
+                        const progress = getFamilyIngestProgress(family);
+                        const failure = getFamilyFailure(family);
+
+                        return progress ? (
+                          <ProcessingProgress
+                            compact
+                            label={progress.message}
+                            percent={progress.percent}
+                          />
+                        ) : failure ? (
+                          <span
+                            className="inline-flex items-center gap-1.5 text-destructive"
+                            title={failure.message}
+                          >
+                            <AlertCircleIcon className="size-3.5 shrink-0" />
+                            {failure.label}
+                          </span>
+                        ) : (
+                          <span className="capitalize">
+                            {formatFamilyProcessingStatus(family)}
+                          </span>
+                        );
+                      })()}
                     </TableCell>
                   </TableRow>
                 );
@@ -1371,6 +1541,8 @@ function ZoneModalityEditorCard({
   const isViewerPreparing =
     activeVariant?.processingStatus === "uploaded" ||
     activeVariant?.processingStatus === "processing";
+  const activeIngestProgress = getModalityIngestProgress(activeVariant);
+  const activeFailure = getModalityFailure(activeVariant);
   const viewerHref = activeVariant
     ? `/playground/zones/${zoneId}/modalities/${activeVariant.id}/viewer`
     : null;
@@ -1411,12 +1583,26 @@ function ZoneModalityEditorCard({
           <FrameTitle className="text-base">Edit Modality</FrameTitle>
           {isViewerReady && viewerHref ? (
             <Link href={viewerHref}>Open viewer</Link>
+          ) : activeFailure ? (
+            <span
+              className="inline-flex min-w-0 items-center gap-1.5 text-sm text-destructive"
+              title={activeFailure.message}
+            >
+              <AlertCircleIcon className="size-3.5 shrink-0" />
+              {activeFailure.label}
+            </span>
           ) : (
-            <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <span className="min-w-0 text-sm text-muted-foreground">
               {isViewerPreparing ? (
-                <LoaderCircleIcon className="size-4 animate-spin" />
-              ) : null}
-              {isViewerPreparing ? "Preparing viewer..." : "Viewer not ready"}
+                <ProcessingProgress
+                  compact
+                  label={activeIngestProgress?.message ?? "Preparing viewer..."}
+                  percent={activeIngestProgress?.percent ?? null}
+                  labelClassName="max-w-64"
+                />
+              ) : (
+                "Viewer not ready"
+              )}
             </span>
           )}
         </FrameHeader>
@@ -1524,8 +1710,34 @@ function ZoneModalityEditorCard({
                   <TableCell className="font-medium text-foreground">
                     {index + 1}
                   </TableCell>
-                  <TableCell className="font-medium text-foreground truncate w-[10ch]">
-                    {name}
+                  <TableCell className="font-medium text-foreground w-[16ch]">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="min-w-0 truncate">{name}</span>
+                      {variantViewerPreparing ? (
+                        <ProcessingProgress
+                          compact
+                          label={
+                            getModalityIngestProgress(variant)?.message ??
+                            "Preparing viewer..."
+                          }
+                          percent={getModalityIngestProgress(variant)?.percent ?? null}
+                          className="shrink-0 gap-1 text-[10px] font-normal"
+                        />
+                      ) : variant.processingStatus === "failed" ? (
+                        (() => {
+                          const failure = getModalityFailure(variant);
+                          return (
+                            <span
+                              className="inline-flex shrink-0 items-center gap-1 text-[10px] font-normal text-destructive"
+                              title={failure?.message ?? "Study processing failed."}
+                            >
+                              <AlertCircleIcon className="size-3" />
+                              {failure?.label ?? "Failed"}
+                            </span>
+                          );
+                        })()
+                      ) : null}
+                    </div>
                   </TableCell>
                   {supportsWeighting ? (
                     <TableCell className="min-w-44 text-muted-foreground">

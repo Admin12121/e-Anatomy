@@ -1,6 +1,8 @@
 import { ExternalLinkIcon } from "lucide-react"
 
 import { ContentFilters } from "./_components/content-filters"
+import { ContentLiveRefresh } from "./_components/content-live-refresh"
+import { ProcessingProgress } from "@/components/processing-progress"
 import { Badge } from "@/components/ui/badge"
 import { Frame } from "@/components/ui/frame"
 import { LinkButton } from "@/components/ui/link-button"
@@ -70,6 +72,60 @@ function getContentStatus(item: ZoneModalityFamily): ModalityProcessingStatus {
   if (statuses.has("failed")) return "failed"
 
   return "draft"
+}
+
+function getContentProgress(item: ZoneModalityFamily) {
+  const activeVariant = item.variants.find(
+    (variant) =>
+      variant.processingStatus === "processing" ||
+      variant.processingStatus === "uploaded",
+  )
+
+  if (!activeVariant) return null
+
+  const status = getContentStatus(item)
+  const summary = activeVariant.ingestSummaryJson
+  const message =
+    typeof summary?.message === "string" && summary.message.trim()
+      ? summary.message.trim()
+      : typeof summary?.phase === "string"
+        ? summary.phase.replaceAll("_", " ")
+        : status.replaceAll("_", " ")
+  const rawPercent = summary?.progressPercent
+  const percent =
+    typeof rawPercent === "number" && Number.isFinite(rawPercent)
+      ? Math.min(100, Math.max(0, Math.round(rawPercent)))
+      : null
+
+  return { message, percent }
+}
+
+
+function getContentFailure(item: ZoneModalityFamily) {
+  const failedVariant = item.variants.find(
+    (variant) => variant.processingStatus === "failed",
+  )
+
+  if (!failedVariant) return null
+
+  const summary = failedVariant.ingestSummaryJson
+  const phase = typeof summary?.phase === "string" ? summary.phase : null
+  const message =
+    typeof summary?.message === "string" && summary.message.trim()
+      ? summary.message.trim()
+      : "Study processing failed."
+
+  return {
+    label: phase === "interrupted" ? "Interrupted" : "Failed",
+    message,
+  }
+}
+
+function getContentStatusLabel(item: ZoneModalityFamily) {
+  const status = getContentStatus(item)
+  return item.totalVariantCount > 1
+    ? `${status.replaceAll("_", " ")} · ${item.readyVariantCount}/${item.totalVariantCount} ready`
+    : status.replaceAll("_", " ")
 }
 
 export default async function ContentPage({
@@ -183,9 +239,17 @@ export default async function ContentPage({
   const baseUrl = baseParams.size
     ? `/content?${baseParams.toString()}`
     : "/content"
+  const hasActiveContentIngest = contentItems.some((item) =>
+    item.variants.some(
+      (variant) =>
+        variant.processingStatus === "processing" ||
+        variant.processingStatus === "uploaded",
+    ),
+  )
 
   return (
     <div className="flex min-h-full flex-col gap-4 p-2">
+      <ContentLiveRefresh enabled={hasActiveContentIngest} />
       <ContentFilters initialSearch={search} initialStatus={status} />
 
       <Frame>
@@ -234,13 +298,29 @@ export default async function ContentPage({
                     <TableCell className="text-muted-foreground">
                       {item.zoneName}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant={badgeVariant(contentStatus)}>
-                        {contentStatus.replaceAll("_", " ")}
-                        {item.totalVariantCount > 1
-                          ? ` · ${item.readyVariantCount}/${item.totalVariantCount} ready`
-                          : ""}
-                      </Badge>
+                    <TableCell className="max-w-72">
+                      {(() => {
+                        const progress = getContentProgress(item)
+                        const failure = getContentFailure(item)
+                        return progress ? (
+                          <ProcessingProgress
+                            compact
+                            label={progress.message}
+                            percent={progress.percent}
+                          />
+                        ) : failure ? (
+                          <Badge
+                            variant={badgeVariant(contentStatus)}
+                            title={failure.message}
+                          >
+                            {failure.label}
+                          </Badge>
+                        ) : (
+                          <Badge variant={badgeVariant(contentStatus)}>
+                            {getContentStatusLabel(item)}
+                          </Badge>
+                        )
+                      })()}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatDate(item.latestUpdatedAt)}

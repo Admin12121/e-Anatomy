@@ -342,12 +342,15 @@ impl PlaygroundRepository {
                 modality.source_label,
                 modality.source_file_count,
                 modality.processing_status,
+                ingest.status AS ingest_status,
+                ingest.summary_json AS ingest_summary_json,
                 modality.notes AS modality_notes,
                 TO_CHAR(modality.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS modality_created_at,
                 TO_CHAR(modality.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS modality_updated_at
             FROM anatomy_zone_modality_families AS family
             INNER JOIN anatomy_zone_modalities AS modality ON modality.family_id = family.id
             INNER JOIN anatomy_zones AS zone ON zone.id = family.zone_id
+            LEFT JOIN anatomy_modality_ingest_jobs AS ingest ON ingest.id = modality.latest_ingest_job_id
             WHERE zone.account_id = $1 AND family.zone_id = $2
             ORDER BY
                 GREATEST(family.updated_at, modality.updated_at) DESC,
@@ -1432,6 +1435,25 @@ impl PlaygroundRepository {
         Ok(())
     }
 
+    pub async fn get_modality_viewer_manifest_payload(
+        &self,
+        pool: &PgPool,
+        modality_id: Uuid,
+    ) -> Result<Option<(String, serde_json::Value)>, sqlx::Error> {
+        let row = sqlx::query_as::<_, (String, Json<serde_json::Value>)>(
+            r#"
+            SELECT schema_version, manifest_json
+            FROM anatomy_viewer_manifests
+            WHERE modality_id = $1
+            "#,
+        )
+        .bind(modality_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(|(schema_version, manifest_json)| (schema_version, manifest_json.0)))
+    }
+
     pub async fn get_zone_modality_asset_storage(
         &self,
         pool: &PgPool,
@@ -2468,6 +2490,8 @@ impl From<ZoneModalityRow> for ZoneModality {
             source_label: value.source_label,
             source_file_count: value.source_file_count,
             processing_status: value.processing_status,
+            ingest_status: None,
+            ingest_summary_json: None,
             notes: value.notes,
             created_at: value.created_at,
             updated_at: value.updated_at,
@@ -2493,6 +2517,8 @@ struct ZoneModalityFamilyVariantRow {
     source_label: Option<String>,
     source_file_count: i32,
     processing_status: String,
+    ingest_status: Option<String>,
+    ingest_summary_json: Option<Json<serde_json::Value>>,
     modality_notes: Option<String>,
     modality_created_at: String,
     modality_updated_at: String,
@@ -2527,6 +2553,8 @@ fn group_zone_modality_family_rows(
             source_label: row.source_label,
             source_file_count: row.source_file_count,
             processing_status: row.processing_status,
+            ingest_status: row.ingest_status,
+            ingest_summary_json: row.ingest_summary_json.map(|value| value.0),
             notes: row.modality_notes,
             created_at: row.modality_created_at,
             updated_at: row.modality_updated_at,

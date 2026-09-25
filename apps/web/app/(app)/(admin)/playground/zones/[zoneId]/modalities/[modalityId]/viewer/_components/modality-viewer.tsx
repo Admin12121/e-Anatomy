@@ -15,10 +15,13 @@ import {
 import gsap from "gsap";
 import { toast } from "sonner";
 
+import { ProcessingProgress } from "@/components/processing-progress";
 import { Button } from "@/components/ui/button";
 import type {
   CreateViewerAnnotationInput,
   CreateViewerStructureGroupInput,
+  MprPlane,
+  MprViewerSpec,
   CreateViewerStructureInput,
   UpdateViewerAnnotationInput,
   UpdateViewerStructureGroupInput,
@@ -88,6 +91,7 @@ import {
   removeAssetIds,
 } from "./modality-viewer/slice-timeline";
 import { StudyPanel } from "./modality-viewer/study-panel";
+import { MprViewerCanvas } from "./modality-viewer/mpr-viewer-canvas";
 import { useViewerManifest } from "./modality-viewer/use-viewer-manifest";
 import {
   buildAssetImageSourceMap,
@@ -322,6 +326,12 @@ function ModalityViewerShell({
     }
   }, []);
 
+  useEffect(() => {
+    if (data?.modality.modalityType === "mpr") {
+      setShowStudyPanel(false);
+    }
+  }, [data?.modality.modalityType]);
+
   const filmstripScrollerRef = useRef<HTMLDivElement | null>(null);
   const sliceEditorScrollerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -356,6 +366,43 @@ function ModalityViewerShell({
   const lastNavigationSourceRef = useRef<NavigationSource>("button");
 
   const assets = useMemo(() => data?.assets ?? [], [data?.assets]);
+  const isMprViewer = data?.modality.modalityType === "mpr";
+  const mprSpec = useMemo(() => {
+    if (!isMprViewer || !data?.viewerSpec || typeof data.viewerSpec !== "object") {
+      return null;
+    }
+
+    const candidate = data.viewerSpec as Partial<MprViewerSpec>;
+    if (
+      candidate.schemaVersion !== "mpr-1" ||
+      !candidate.volume ||
+      !candidate.planes?.axial ||
+      !candidate.planes?.coronal ||
+      !candidate.planes?.sagittal
+    ) {
+      return null;
+    }
+
+    return candidate as MprViewerSpec;
+  }, [data?.viewerSpec, isMprViewer]);
+  const ingestProgress = useMemo(() => {
+    const summary = data?.ingestJob?.summaryJson;
+    if (!summary) return null;
+
+    const rawPercent = summary.progressPercent;
+    const percent =
+      typeof rawPercent === "number" && Number.isFinite(rawPercent)
+        ? Math.min(100, Math.max(0, Math.round(rawPercent)))
+        : null;
+    const message =
+      typeof summary.message === "string" && summary.message.trim()
+        ? summary.message.trim()
+        : typeof summary.phase === "string"
+          ? summary.phase.replaceAll("_", " ")
+          : "Preparing viewer";
+
+    return { message, percent };
+  }, [data?.ingestJob?.summaryJson]);
   const supportsWeighting = isMriModalityType(data?.modality.modalityType);
   const groups = useMemo(
     () => data?.structureGroups ?? [],
@@ -451,6 +498,30 @@ function ModalityViewerShell({
     () => buildViewerSliceItems(activeAssets, assetImageSourceById),
     [activeAssets, assetImageSourceById],
   );
+  const mprActivePlane = useMemo<MprPlane>(() => {
+    if (!mprSpec) return "axial";
+    const activeId = pendingAssetId ?? currentAssetId;
+    if (!activeId) return "axial";
+
+    for (const plane of ["axial", "coronal", "sagittal"] as const) {
+      if (mprSpec.planes[plane].assetIds.includes(activeId)) return plane;
+    }
+
+    return "axial";
+  }, [currentAssetId, mprSpec, pendingAssetId]);
+  const mprFilmstripAssets = useMemo(() => {
+    if (!mprSpec) return [];
+    return mprSpec.planes[mprActivePlane].assetIds
+      .map((assetId) => assetById.get(assetId) ?? null)
+      .filter((asset): asset is ZoneModalityAsset => Boolean(asset));
+  }, [assetById, mprActivePlane, mprSpec]);
+  const mprFilmstripItems = useMemo(
+    () => buildViewerSliceItems(mprFilmstripAssets, assetImageSourceById),
+    [assetImageSourceById, mprFilmstripAssets],
+  );
+  const displayedFilmstripItems = isMprViewer
+    ? mprFilmstripItems
+    : viewerSliceItems;
   const activeSliceAssetById = useMemo(
     () => new Map(viewerSliceItems.map((item) => [item.assetId, item.asset])),
     [viewerSliceItems],
@@ -512,6 +583,21 @@ function ModalityViewerShell({
     return activeSliceAssetIndexById.get(asset.id) ?? -1;
   }, [activeSliceAssetIndexById, currentAsset, pendingAsset]);
   const activeViewerAssetId = pendingAsset?.id ?? currentAsset?.id ?? null;
+  const displayedNavigationAssetIndex = useMemo(() => {
+    if (!isMprViewer) return navigationAssetIndex;
+    if (!activeViewerAssetId) return -1;
+    return mprFilmstripItems.findIndex(
+      (item) => item.assetId === activeViewerAssetId,
+    );
+  }, [
+    activeViewerAssetId,
+    isMprViewer,
+    mprFilmstripItems,
+    navigationAssetIndex,
+  ]);
+  const displayedSliceCount = isMprViewer
+    ? mprFilmstripItems.length
+    : activeAssets.length;
   const referenceProgress = useMemo(() => {
     if (activeAssets.length <= 1 || navigationAssetIndex < 0) {
       return 0;
@@ -520,8 +606,8 @@ function ModalityViewerShell({
     return clamp(navigationAssetIndex / (activeAssets.length - 1), 0, 1);
   }, [activeAssets.length, navigationAssetIndex]);
   const filmstripAssetOrderSignature = useMemo(
-    () => viewerSliceItems.map((item) => item.assetId).join("|"),
-    [viewerSliceItems],
+    () => displayedFilmstripItems.map((item) => item.assetId).join("|"),
+    [displayedFilmstripItems],
   );
 
   useEffect(() => {
@@ -1403,6 +1489,7 @@ function ModalityViewerShell({
   }, [
     activeAssets,
     currentAsset?.id,
+    isMprViewer,
     navigationAssetIndex,
     pendingAsset,
     preloadAsset,
@@ -1469,6 +1556,7 @@ function ModalityViewerShell({
   useEffect(() => {
     if (
       typeof window === "undefined" ||
+      isMprViewer ||
       activeAssets.length === 0 ||
       pendingAsset
     ) {
@@ -1551,6 +1639,24 @@ function ModalityViewerShell({
     });
   }, [
     currentAnnotations,
+    deferredSearchQuery,
+    selectedStructureId,
+    structuresById,
+    targetedLabeling,
+    visibleGroupIds,
+  ]);
+
+  const mprVisibleAnnotations = useMemo(() => {
+    return filterVisibleAnnotations({
+      annotations,
+      query: deferredSearchQuery,
+      selectedStructureId,
+      structuresById,
+      targetedLabeling,
+      visibleGroupIds,
+    });
+  }, [
+    annotations,
     deferredSearchQuery,
     selectedStructureId,
     structuresById,
@@ -1739,10 +1845,19 @@ function ModalityViewerShell({
         0,
         scroller.scrollWidth - scroller.clientWidth,
       );
+      // offsetLeft is relative to the nearest positioned ancestor. In the
+      // expanded editor each button sits inside a wrapper, so offsetLeft can be
+      // zero even for slice 100+. Measure relative to the scroller instead so
+      // both the compact strip and editor center the real active slice.
+      const scrollerRect = scroller.getBoundingClientRect();
+      const activeButtonRect = activeButton.getBoundingClientRect();
+      const activeCenterWithinScroller =
+        activeButtonRect.left -
+        scrollerRect.left +
+        scroller.scrollLeft +
+        activeButtonRect.width / 2;
       const targetScrollLeft = clamp(
-        activeButton.offsetLeft -
-          scroller.clientWidth / 2 +
-          activeButton.clientWidth / 2,
+        activeCenterWithinScroller - scroller.clientWidth / 2,
         0,
         maxScrollLeft,
       );
@@ -2449,12 +2564,71 @@ function ModalityViewerShell({
     setMainInteractionTool(nextTool);
   }
 
-  function handleCanvasClick(point: ViewerAnnotationPoint) {
+  function handleMprActivateAsset(assetId: string) {
+    navigationRequestIdRef.current += 1;
+    commitPendingAssetId(null);
+    commitCurrentAssetId(assetId);
+  }
+
+  function handleDisplayedFilmstripSelect(assetIndex: number) {
+    if (!isMprViewer) {
+      navigateToAsset(assetIndex, "click");
+      return;
+    }
+
+    const asset = mprFilmstripAssets[assetIndex];
+    if (asset) handleMprActivateAsset(asset.id);
+  }
+
+  function handleDisplayedPreviousAsset() {
+    if (!isMprViewer) {
+      handlePreviousAsset();
+      return;
+    }
+
+    const nextIndex = clamp(
+      displayedNavigationAssetIndex - 1,
+      0,
+      Math.max(0, mprFilmstripAssets.length - 1),
+    );
+    const asset = mprFilmstripAssets[nextIndex];
+    if (asset) handleMprActivateAsset(asset.id);
+  }
+
+  function handleDisplayedNextAsset() {
+    if (!isMprViewer) {
+      handleNextAsset();
+      return;
+    }
+
+    const nextIndex = clamp(
+      displayedNavigationAssetIndex + 1,
+      0,
+      Math.max(0, mprFilmstripAssets.length - 1),
+    );
+    const asset = mprFilmstripAssets[nextIndex];
+    if (asset) handleMprActivateAsset(asset.id);
+  }
+
+  function handleMprCanvasClick(
+    asset: ZoneModalityAsset,
+    point: ViewerAnnotationPoint,
+  ) {
+    handleMprActivateAsset(asset.id);
+    handleCanvasClick(point, asset);
+  }
+
+  function handleCanvasClick(
+    point: ViewerAnnotationPoint,
+    assetOverride?: ZoneModalityAsset | null,
+  ) {
     if (readOnly) {
       return;
     }
 
-    if (!currentAsset) {
+    const targetAsset = assetOverride ?? currentAsset;
+
+    if (!targetAsset) {
       return;
     }
 
@@ -2600,16 +2774,23 @@ function ModalityViewerShell({
     }
 
     const scroller = event.currentTarget;
+    // Do not hijack ordinary vertical scrolling. The bottom strip has one
+    // scroll axis: horizontal. Trackpad horizontal movement and Shift+wheel
+    // still scroll it, while vertical wheel input is left to the page/viewer.
     const horizontalDelta =
-      Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      Math.abs(event.deltaX) > 0
         ? event.deltaX
-        : event.deltaY;
+        : event.shiftKey
+          ? event.deltaY
+          : 0;
 
     if (horizontalDelta === 0) {
       return;
     }
 
+    gsap.killTweensOf(scroller);
     scroller.scrollLeft += horizontalDelta;
+    event.preventDefault();
     event.stopPropagation();
   }
 
@@ -3047,7 +3228,71 @@ function ModalityViewerShell({
       ) : null}
 
       <main className={mainClassName}>
-        <ViewerCanvas
+        {isMprViewer ? (
+          mprSpec ? (
+            <MprViewerCanvas
+              activeAssetId={currentAsset?.id ?? null}
+              annotationEditingEnabled={!readOnly}
+              annotationForm={annotationForm}
+              areaBrushSize={areaBrushSize}
+              areaEditTool={areaEditTool}
+              areaEraserSize={areaEraserSize}
+              assetsById={assetById}
+              canvasFlipHorizontal={canvasFlipHorizontal}
+              canvasFlipVertical={canvasFlipVertical}
+              canvasMode={canvasMode}
+              canvasRotationQuarterTurns={canvasRotationQuarterTurns}
+              draftDisconnectedPolygons={draftDisconnectedPolygons}
+              draftPointerPlaced={draftPointerPlaced}
+              draftStructureTitle={selectedStructure?.title ?? structureForm.title}
+              hoveredAnnotationId={hoveredAnnotationId}
+              imageSourcesByAssetId={assetImageSourceById}
+              mainInteractionTool={mainInteractionTool}
+              overlayOpacity={overlayOpacity}
+              selectedAnnotationId={selectedAnnotationId}
+              showCrossReferences={showCrossReferences}
+              showLabels={showLabels}
+              showOrientation={showOrientation}
+              spec={mprSpec}
+              stageRef={stageRef}
+              structuresById={structuresById}
+              visibleAnnotations={mprVisibleAnnotations}
+              onActivateAsset={handleMprActivateAsset}
+              onAnnotationHover={setHoveredAnnotationId}
+              onAnnotationSelect={(annotationId, structureId) => {
+                setSelectedAnnotationId(annotationId);
+                setSelectedStructureId(structureId);
+                setShowStudyPanel(true);
+                const structure = structuresById.get(structureId);
+                setSelectedGroupId(structure?.groupId ?? null);
+              }}
+              onCanvasClick={handleMprCanvasClick}
+              onDraftAnchorMove={handleDraftAnchorMove}
+              onDraftDisconnectedPolygonsChange={
+                handleDraftDisconnectedPolygonsChange
+              }
+              onDraftPolygonPointMove={handleDraftPolygonPointMove}
+              onDraftPolygonReplace={handleDraftPolygonReplace}
+            />
+          ) : (
+            <div className="flex min-h-0 items-center justify-center bg-black px-6 text-sm text-muted-foreground">
+              {shouldPollViewerData ? (
+                <div className="w-full max-w-md text-center">
+                  <ProcessingProgress
+                    className="justify-center text-sm text-white/70"
+                    label={
+                      ingestProgress?.message ?? "Preparing MPR reconstruction…"
+                    }
+                    percent={ingestProgress?.percent ?? null}
+                  />
+                </div>
+              ) : (
+                ingestFailureMessage || "MPR reconstruction is unavailable."
+              )}
+            </div>
+          )
+        ) : (
+          <ViewerCanvas
           annotationEditingEnabled={!readOnly}
           areaBrushSize={areaBrushSize}
           areaEditTool={areaEditTool}
@@ -3098,7 +3343,8 @@ function ModalityViewerShell({
           onDraftPolygonReplace={handleDraftPolygonReplace}
           onLayerScrubNavigate={handleLayerScrubNavigate}
           onWheelNavigate={handleWheelNavigation}
-        />
+          />
+        )}
 
         <ViewerToolbar
           activeAreaToolSize={activeAreaToolSize}
@@ -3172,73 +3418,80 @@ function ModalityViewerShell({
         {showBlockView ? (
           <ViewerBlockView
             activeAssetId={activeViewerAssetId}
-            assets={activeAssets}
+            assets={isMprViewer ? mprFilmstripAssets : activeAssets}
             onClose={() => setShowBlockView(false)}
             onSelectAsset={(assetIndex) => {
-              navigateToAsset(assetIndex, "click");
+              handleDisplayedFilmstripSelect(assetIndex);
               setShowBlockView(false);
             }}
           />
         ) : null}
       </main>
 
-      <SliceFilmstrip
-        activeAssetId={activeFilmstripAssetId}
-        allowEditing={!readOnly}
-        canDeleteLeftSlices={canDeleteLeftSlices}
-        canDeleteEvenSlices={canDeleteEvenSlices}
-        canDeleteMultiSelectedSlices={canDeleteMultiSelectedSlices}
-        canDeleteOddSlices={canDeleteOddSlices}
-        canDeleteRightSlices={canDeleteRightSlices}
-        canDeleteSelectedSlice={canDeleteSelectedSlice}
-        canFlipSliceTimeline={canFlipSliceTimeline}
-        canRedoSliceTimeline={canRedoSliceTimeline}
-        canUndoSliceTimeline={canUndoSliceTimeline}
-        sliceItems={viewerSliceItems}
-        filmstripScrollerRef={filmstripScrollerRef}
-        hasPendingSliceTimelineChanges={hasPendingSliceTimelineChanges}
-        isApplyingSliceChanges={isApplyingSliceChanges}
-        isAssetLoading={isAssetLoading}
-        navigationAssetIndex={navigationAssetIndex}
-        navigationDisabled={sliceInteractionLocked}
-        pendingDeletedSliceIds={pendingDeletedSliceIds}
-        pendingSliceSortUpdates={pendingSliceSortUpdates}
-        multiSelectEnabled={multiSelectEnabled}
-        multiSelectedSliceIds={activeMultiSelectedSliceIds}
-        showSliceEditorPanel={showSliceEditorPanel}
-        sliceEditorScrollerRef={sliceEditorScrollerRef}
-        totalSliceCount={activeAssets.length}
-        onApplyChanges={handleApplySliceTimelineChanges}
-        onDeleteEven={handleDeleteEvenSlices}
-        onDeleteLeft={handleDeleteLeftSlicesFromSelection}
-        onDeleteMultiSelected={handleDeleteMultiSelectedSlices}
-        onDeleteOdd={handleDeleteOddSlices}
-        onDeleteRight={handleDeleteRightSlicesFromSelection}
-        onDeleteSelected={handleDeleteSelectedSlice}
-        onFlipOrder={handleFlipSliceTimeline}
-        onNext={handleNextAsset}
-        onPrevious={handlePreviousAsset}
-        onRedo={handleRedoSliceTimeline}
-        onSelectAsset={(assetIndex) => navigateToAsset(assetIndex, "click")}
-        onToggleBlockView={() => {
-          if (sliceInteractionLocked) {
-            return;
+      {displayedFilmstripItems.length > 0 ? (
+        <SliceFilmstrip
+          activeAssetId={activeFilmstripAssetId}
+          allowEditing={!readOnly}
+          allowTimelineChanges={!isMprViewer}
+          canDeleteLeftSlices={!isMprViewer && canDeleteLeftSlices}
+          canDeleteEvenSlices={!isMprViewer && canDeleteEvenSlices}
+          canDeleteMultiSelectedSlices={
+            !isMprViewer && canDeleteMultiSelectedSlices
           }
-
-          setShowBlockView((current) => !current);
-        }}
-        onToggleMultiSelect={handleToggleSliceMultiSelect}
-        onToggleMultiSelectedAsset={handleToggleMultiSelectedSlice}
-        onToggleSliceEditorPanel={() => {
-          if (sliceInteractionLocked) {
-            return;
+          canDeleteOddSlices={!isMprViewer && canDeleteOddSlices}
+          canDeleteRightSlices={!isMprViewer && canDeleteRightSlices}
+          canDeleteSelectedSlice={!isMprViewer && canDeleteSelectedSlice}
+          canFlipSliceTimeline={!isMprViewer && canFlipSliceTimeline}
+          canRedoSliceTimeline={!isMprViewer && canRedoSliceTimeline}
+          canUndoSliceTimeline={!isMprViewer && canUndoSliceTimeline}
+          sliceItems={displayedFilmstripItems}
+          filmstripScrollerRef={filmstripScrollerRef}
+          hasPendingSliceTimelineChanges={
+            !isMprViewer && hasPendingSliceTimelineChanges
           }
-
-          setShowSliceEditorPanel((current) => !current);
-        }}
-        onUndo={handleUndoSliceTimeline}
-        onWheel={handleFilmstripHorizontalWheel}
-      />
+          isApplyingSliceChanges={!isMprViewer && isApplyingSliceChanges}
+          isAssetLoading={!isMprViewer && isAssetLoading}
+          navigationAssetIndex={displayedNavigationAssetIndex}
+          navigationDisabled={sliceInteractionLocked}
+          pendingDeletedSliceIds={isMprViewer ? [] : pendingDeletedSliceIds}
+          pendingSliceSortUpdates={isMprViewer ? [] : pendingSliceSortUpdates}
+          multiSelectEnabled={!isMprViewer && multiSelectEnabled}
+          multiSelectedSliceIds={
+            isMprViewer ? [] : activeMultiSelectedSliceIds
+          }
+          showSliceEditorPanel={showSliceEditorPanel}
+          sliceEditorScrollerRef={sliceEditorScrollerRef}
+          totalSliceCount={displayedSliceCount}
+          onApplyChanges={handleApplySliceTimelineChanges}
+          onDeleteEven={handleDeleteEvenSlices}
+          onDeleteLeft={handleDeleteLeftSlicesFromSelection}
+          onDeleteMultiSelected={handleDeleteMultiSelectedSlices}
+          onDeleteOdd={handleDeleteOddSlices}
+          onDeleteRight={handleDeleteRightSlicesFromSelection}
+          onDeleteSelected={handleDeleteSelectedSlice}
+          onFlipOrder={handleFlipSliceTimeline}
+          onNext={handleDisplayedNextAsset}
+          onPrevious={handleDisplayedPreviousAsset}
+          onRedo={handleRedoSliceTimeline}
+          onSelectAsset={handleDisplayedFilmstripSelect}
+          onToggleBlockView={() => {
+            if (sliceInteractionLocked) return;
+            setShowBlockView((current) => !current);
+          }}
+          onToggleMultiSelect={() => {
+            if (!isMprViewer) handleToggleSliceMultiSelect();
+          }}
+          onToggleMultiSelectedAsset={(assetId) => {
+            if (!isMprViewer) handleToggleMultiSelectedSlice(assetId);
+          }}
+          onToggleSliceEditorPanel={() => {
+            if (sliceInteractionLocked) return;
+            setShowSliceEditorPanel((current) => !current);
+          }}
+          onUndo={handleUndoSliceTimeline}
+          onWheel={handleFilmstripHorizontalWheel}
+        />
+      ) : null}
 
       {showControlPanel ? (
         <button

@@ -54,6 +54,7 @@ export type UpdateZoneInput = {
 
 export type ModalityType =
   | "mri"
+  | "mpr"
   | "ct"
   | "pet"
   | "ultrasound"
@@ -88,6 +89,8 @@ export type ZoneModality = {
   sourceLabel: string | null;
   sourceFileCount: number;
   processingStatus: ModalityProcessingStatus;
+  ingestStatus: ModalityIngestJobStatus | null;
+  ingestSummaryJson: Record<string, unknown> | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -373,6 +376,27 @@ export type ViewerAnnotation = {
   updatedAt: string;
 };
 
+export type MprPlane = "axial" | "coronal" | "sagittal";
+
+export type MprViewerPlaneSpec = {
+  sliceCount: number;
+  assetIds: string[];
+};
+
+export type MprViewerSpec = {
+  schemaVersion: "mpr-1" | string;
+  coordinateSystem: "DICOM_LPS" | string;
+  volume: {
+    dimensions: [number, number, number];
+    spacing: [number, number, number];
+    origin: [number, number, number];
+    frameOfReferenceUid: string | null;
+    sourceSeriesUid: string;
+    sourceSliceCount: number;
+  };
+  planes: Record<MprPlane, MprViewerPlaneSpec>;
+};
+
 export type ZoneModalityViewerManifest = {
   zone: ZoneDetail;
   modality: ZoneModality;
@@ -382,6 +406,8 @@ export type ZoneModalityViewerManifest = {
   assets: ZoneModalityAsset[];
   atlases: ZoneModalityAtlasPage[];
   atlasFrames: ZoneModalityAtlasFrame[];
+  viewerSchemaVersion: string | null;
+  viewerSpec: MprViewerSpec | Record<string, unknown> | null;
   structureGroups: ViewerStructureGroup[];
   structures: ViewerStructure[];
   annotations: ViewerAnnotation[];
