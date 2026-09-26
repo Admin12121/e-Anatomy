@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     io::Cursor,
     path::{Path, PathBuf},
@@ -155,6 +155,41 @@ struct MprVolumeGeometry {
     frame_of_reference_uid: Option<String>,
     source_series_uid: String,
     source_slice_count: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MprExcludedSlices {
+    sagittal: BTreeSet<usize>,
+    coronal: BTreeSet<usize>,
+    axial: BTreeSet<usize>,
+}
+
+impl MprExcludedSlices {
+    fn for_plane(&self, plane: &str) -> &BTreeSet<usize> {
+        match plane {
+            "sagittal" => &self.sagittal,
+            "coronal" => &self.coronal,
+            _ => &self.axial,
+        }
+    }
+
+    fn insert(&mut self, plane: &str, slice_index: usize) {
+        match plane {
+            "sagittal" => {
+                self.sagittal.insert(slice_index);
+            }
+            "coronal" => {
+                self.coronal.insert(slice_index);
+            }
+            _ => {
+                self.axial.insert(slice_index);
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.sagittal.is_empty() && self.coronal.is_empty() && self.axial.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1403,6 +1438,360 @@ impl PlaygroundService {
         })
     }
 
+    pub async fn delete_mpr_zone_modality_assets(
+        &self,
+        account_id: Uuid,
+        zone_id: Uuid,
+        modality_id: Uuid,
+        user_id: &str,
+        input: DeleteZoneModalityAssetsInput,
+    ) -> Result<DeleteZoneModalityAssetsResponse, AppError> {
+        let modality = self
+            .repo
+            .get_zone_modality_detail(&self.pool, account_id, zone_id, modality_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Modality was not found"))?;
+
+        if modality.modality_type != "mpr" {
+            return Err(AppError::bad_request(
+                "Synchronized MPR volume editing is only available for MPR modalities",
+            ));
+        }
+
+        if input.asset_ids.is_empty() {
+            return Err(AppError::bad_request("At least one MPR slice is required"));
+        }
+
+        let mut requested_ids = BTreeSet::new();
+        for asset_id in input.asset_ids {
+            let parsed = Uuid::parse_str(&asset_id)
+                .map_err(|_| AppError::bad_request("Asset id is invalid"))?;
+            requested_ids.insert(parsed);
+        }
+
+        let assets_before = self
+            .repo
+            .list_zone_modality_assets(&self.pool, account_id, zone_id, modality_id)
+            .await?;
+        let asset_by_id = assets_before
+            .iter()
+            .filter_map(|asset| Uuid::parse_str(&asset.id).ok().map(|id| (id, asset)))
+            .collect::<BTreeMap<_, _>>();
+
+        let (schema_version, mut manifest_json) = self
+            .repo
+            .get_modality_viewer_manifest_payload(&self.pool, modality_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("MPR viewer manifest was not found"))?;
+        if schema_version != "mpr-1" {
+            return Err(AppError::bad_request("MPR viewer manifest is invalid"));
+        }
+
+        let dimensions = manifest_json
+            .get("volume")
+            .and_then(|volume| volume.get("dimensions"))
+            .and_then(|value| value.as_array())
+            .filter(|values| values.len() == 3)
+            .and_then(|values| {
+                Some([
+                    usize::try_from(values[0].as_u64()?).ok()?,
+                    usize::try_from(values[1].as_u64()?).ok()?,
+                    usize::try_from(values[2].as_u64()?).ok()?,
+                ])
+            })
+            .ok_or_else(|| AppError::bad_request("MPR volume geometry is invalid"))?;
+
+        let mut excluded_slices = parse_mpr_excluded_slices(&manifest_json);
+        let mut requested_slice_ids = Vec::new();
+        for requested_id in &requested_ids {
+            let asset = asset_by_id.get(requested_id).ok_or_else(|| {
+                AppError::bad_request(
+                    "One or more requested MPR slices do not belong to this modality",
+                )
+            })?;
+            let plane = asset.orientation_code.as_deref().ok_or_else(|| {
+                AppError::bad_request("Requested asset is not an MPR plane slice")
+            })?;
+            if !matches!(plane, "axial" | "coronal" | "sagittal") {
+                return Err(AppError::bad_request(
+                    "Requested asset is not an axial, coronal, or sagittal MPR slice",
+                ));
+            }
+            let slice_index = asset
+                .slice_index
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| AppError::bad_request("MPR slice index is invalid"))?;
+            let axis_limit = match plane {
+                "sagittal" => dimensions[0],
+                "coronal" => dimensions[1],
+                _ => dimensions[2],
+            };
+            if slice_index >= axis_limit {
+                return Err(AppError::bad_request("MPR slice is outside the volume geometry"));
+            }
+            excluded_slices.insert(plane, slice_index);
+            requested_slice_ids.push(*requested_id);
+        }
+
+        for (plane, dimension) in [
+            ("sagittal", dimensions[0]),
+            ("coronal", dimensions[1]),
+            ("axial", dimensions[2]),
+        ] {
+            if excluded_slices.for_plane(plane).len() >= dimension {
+                return Err(AppError::bad_request(format!(
+                    "At least one {plane} MPR slice must remain"
+                )));
+            }
+        }
+
+        // Never silently destroy annotations while changing the volume. MPR
+        // editing should normally happen before labeling; if an explicitly
+        // removed plane already owns annotations, require the editor to move
+        // or remove those annotations first.
+        let annotations = self
+            .repo
+            .list_viewer_annotations(&self.pool, account_id, zone_id, modality_id)
+            .await?;
+        let requested_string_ids = requested_ids
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<BTreeSet<_>>();
+        if annotations
+            .iter()
+            .any(|annotation| requested_string_ids.contains(&annotation.asset_id))
+        {
+            return Err(AppError::bad_request(
+                "This MPR slice contains annotations. Move or remove those annotations before excluding the slice from the volume.",
+            ));
+        }
+
+        let ingest_job_id = assets_before
+            .iter()
+            .find_map(|asset| {
+                asset
+                    .ingest_job_id
+                    .as_deref()
+                    .and_then(|value| Uuid::parse_str(value).ok())
+            })
+            .ok_or_else(|| AppError::not_found("Ingest job was not found"))?;
+
+        let study_files = self.load_existing_mpr_study_files(ingest_job_id).await?;
+        let edit_root = self
+            .storage_root
+            .join("playground")
+            .join("derived")
+            .join(ingest_job_id.to_string())
+            .join(format!("mpr-edit-{}", Uuid::new_v4()));
+        fs::create_dir_all(&edit_root).await.map_err(|error| {
+            AppError::internal(format!("Unable to create MPR edit workspace: {error}"))
+        })?;
+
+        let storage_root = self.storage_root.clone();
+        let edit_root_for_task = edit_root.clone();
+        let study_files_for_task = study_files.clone();
+        let excluded_for_task = excluded_slices.clone();
+        let (progress_tx, _progress_rx) = mpsc::unbounded_channel::<MprProgressUpdate>();
+        let derivation = tokio::task::spawn_blocking(move || {
+            derive_mpr_volume_and_slices(
+                &storage_root,
+                &edit_root_for_task,
+                &study_files_for_task,
+                Some(&excluded_for_task),
+                &progress_tx,
+            )
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("MPR edit task failed: {error}")))?
+        .map_err(|error| AppError::bad_request(format!("Unable to rebuild edited MPR volume: {error}")))?;
+
+        // The exclusion model preserves the original patient-space dimensions.
+        // A deleted plane becomes absent from that plane's filmstrip while the
+        // same physical slab is zeroed inside both orthogonal reconstructions.
+        // This avoids the geometrically incorrect behavior of deleting an
+        // unrelated ordinal slice from each of the other planes.
+        if derivation.geometry.dimensions != dimensions {
+            let _ = fs::remove_dir_all(&edit_root).await;
+            return Err(AppError::internal(
+                "Edited MPR reconstruction changed the volume dimensions unexpectedly",
+            ));
+        }
+
+        let mut builds_by_plane_index = BTreeMap::<(String, i32), DerivedSliceBuild>::new();
+        for build in derivation.slice_builds {
+            let plane = build
+                .candidate
+                .orientation_code
+                .clone()
+                .unwrap_or_default();
+            builds_by_plane_index.insert((plane, build.candidate.slice_index), build);
+        }
+
+        let remaining_assets = assets_before
+            .iter()
+            .filter(|asset| {
+                Uuid::parse_str(&asset.id)
+                    .map(|asset_id| !requested_ids.contains(&asset_id))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        // Regenerate every surviving MPR plane image into a temporary
+        // workspace, then atomically replace the existing file contents while
+        // retaining the same asset IDs. Keeping IDs stable preserves pointers,
+        // regions, links, and any other metadata attached to surviving slices.
+        for asset in remaining_assets.iter().filter(|asset| {
+            asset.asset_kind == "derived_slice"
+                && matches!(
+                    asset.orientation_code.as_deref(),
+                    Some("axial") | Some("coronal") | Some("sagittal")
+                )
+        }) {
+            let plane = asset.orientation_code.clone().unwrap_or_default();
+            let slice_index = asset.slice_index.ok_or_else(|| {
+                AppError::internal("Stored MPR slice is missing its physical slice index")
+            })?;
+            let build = builds_by_plane_index
+                .get(&(plane.clone(), slice_index))
+                .ok_or_else(|| {
+                    AppError::internal(format!(
+                        "Rebuilt MPR volume is missing {plane} slice {slice_index}"
+                    ))
+                })?;
+            let generated_path = self.storage_root.join(&build.candidate.storage_key);
+            let storage_key = asset.storage_key.as_deref().ok_or_else(|| {
+                AppError::internal("Stored MPR slice file is unavailable")
+            })?;
+            let existing_path = self.storage_root.join(storage_key);
+            let bytes = fs::read(&generated_path).await.map_err(|error| {
+                AppError::internal(format!("Unable to read rebuilt MPR slice: {error}"))
+            })?;
+            if let Some(parent) = existing_path.parent() {
+                fs::create_dir_all(parent).await.map_err(|error| {
+                    AppError::internal(format!("Unable to prepare MPR slice directory: {error}"))
+                })?;
+            }
+            fs::write(&existing_path, &bytes).await.map_err(|error| {
+                AppError::internal(format!("Unable to replace edited MPR slice: {error}"))
+            })?;
+
+            if let Ok(asset_id) = Uuid::parse_str(&asset.id) {
+                self.repo
+                    .update_zone_modality_asset_binary_metadata(
+                        &self.pool,
+                        asset_id,
+                        &build.candidate.checksum,
+                        build.candidate.size_bytes,
+                        build.candidate.width,
+                        build.candidate.height,
+                    )
+                    .await?;
+            }
+        }
+
+        let packed_pages = self
+            .build_atlas_pages(ingest_job_id, &remaining_assets)
+            .await?;
+        let old_atlas_assets = self
+            .repo
+            .list_zone_modality_atlas_assets(&self.pool, account_id, zone_id, modality_id)
+            .await?;
+        let old_atlas_ids = old_atlas_assets
+            .iter()
+            .filter_map(|asset| Uuid::parse_str(&asset.id).ok())
+            .collect::<Vec<_>>();
+
+        let requested_count = requested_slice_ids.len();
+        let deleted_count = self
+            .repo
+            .delete_zone_modality_assets(
+                &self.pool,
+                account_id,
+                zone_id,
+                modality_id,
+                &requested_slice_ids,
+            )
+            .await? as usize;
+
+        if !old_atlas_ids.is_empty() {
+            self.repo
+                .delete_zone_modality_assets(
+                    &self.pool,
+                    account_id,
+                    zone_id,
+                    modality_id,
+                    &old_atlas_ids,
+                )
+                .await?;
+        }
+
+        let (atlas_pages, atlas_frames) = self
+            .persist_built_atlas_pages(modality_id, ingest_job_id, user_id, packed_pages)
+            .await?;
+
+        for plane in ["axial", "coronal", "sagittal"] {
+            let mut plane_assets = remaining_assets
+                .iter()
+                .filter(|asset| asset.orientation_code.as_deref() == Some(plane))
+                .collect::<Vec<_>>();
+            plane_assets.sort_by_key(|asset| asset.slice_index.unwrap_or(i32::MAX));
+
+            if let Some(plane_json) = manifest_json
+                .get_mut("planes")
+                .and_then(|planes| planes.get_mut(plane))
+            {
+                plane_json["sliceCount"] = json!(plane_assets.len());
+                plane_json["assetIds"] = json!(
+                    plane_assets
+                        .iter()
+                        .map(|asset| asset.id.clone())
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+
+        manifest_json["excludedSlices"] = mpr_excluded_slices_json(&excluded_slices);
+        manifest_json["atlases"] = json!(atlas_pages);
+        manifest_json["atlasFrames"] = json!(atlas_frames);
+
+        self.repo
+            .upsert_modality_viewer_manifest(
+                &self.pool,
+                modality_id,
+                ingest_job_id,
+                "mpr-1",
+                &manifest_json,
+            )
+            .await?;
+
+        let mut axial_assets = remaining_assets
+            .iter()
+            .filter(|asset| asset.orientation_code.as_deref() == Some("axial"))
+            .collect::<Vec<_>>();
+        axial_assets.sort_by_key(|asset| asset.slice_index.unwrap_or(i32::MAX));
+        let cover_image_url = axial_assets
+            .get(axial_assets.len() / 2)
+            .and_then(|asset| asset.thumbnail_url.as_deref().or(Some(asset.image_url.as_str())));
+        self.repo
+            .attach_ingest_job_to_modality(
+                &self.pool,
+                modality_id,
+                ingest_job_id,
+                user_id,
+                "ready",
+                cover_image_url,
+            )
+            .await?;
+
+        let _ = fs::remove_dir_all(&edit_root).await;
+
+        Ok(DeleteZoneModalityAssetsResponse {
+            requested_count,
+            deleted_count,
+        })
+    }
+
     pub async fn reorder_zone_modality_assets(
         &self,
         account_id: Uuid,
@@ -2371,6 +2760,41 @@ impl PlaygroundService {
         }
     }
 
+    async fn load_existing_mpr_study_files(
+        &self,
+        ingest_job_id: Uuid,
+    ) -> Result<Vec<PreparedStudyFile>, AppError> {
+        let storage_root = self.storage_root.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<PreparedStudyFile>, AppError> {
+            let expanded_root = storage_root
+                .join("playground")
+                .join("expanded")
+                .join(ingest_job_id.to_string());
+            let source_root = storage_root
+                .join("playground")
+                .join("source")
+                .join(ingest_job_id.to_string());
+
+            let mut files = Vec::new();
+            if expanded_root.exists() {
+                collect_study_files_recursive(&expanded_root, &expanded_root, &mut files)?;
+            }
+            if files.is_empty() && source_root.exists() {
+                collect_study_files_recursive(&source_root, &source_root, &mut files)?;
+            }
+
+            if files.is_empty() {
+                return Err(AppError::not_found(
+                    "Original DICOM source files are unavailable for MPR volume editing",
+                ));
+            }
+
+            Ok(files)
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("MPR source scan task failed: {error}")))?
+    }
+
     async fn derive_study_slices(
         &self,
         ingest_job_id: Uuid,
@@ -2510,6 +2934,7 @@ impl PlaygroundService {
                 &storage_root,
                 &derived_root,
                 &study_files,
+                None,
                 &progress_tx,
             )
         })
@@ -3428,6 +3853,7 @@ fn derive_mpr_volume_and_slices(
     storage_root: &Path,
     derived_root: &Path,
     study_files: &[PreparedStudyFile],
+    excluded_slices: Option<&MprExcludedSlices>,
     progress: &mpsc::UnboundedSender<MprProgressUpdate>,
 ) -> anyhow::Result<MprDerivationResult> {
     report_mpr_progress(
@@ -3570,7 +3996,7 @@ fn derive_mpr_volume_and_slices(
     let source_spacings = [first.column_spacing, first.row_spacing, slice_spacing];
     let source_directions = [first.row_direction, first.column_direction, slice_direction];
 
-    let (target_volume, target_dimensions, target_spacing, target_origin) =
+    let (mut target_volume, target_dimensions, target_spacing, target_origin) =
         if let Some(axis_mapping) = canonical_source_axis_mapping(source_directions) {
             report_mpr_progress(
                 progress,
@@ -3694,9 +4120,25 @@ fn derive_mpr_volume_and_slices(
             (target_volume, target_dimensions, target_spacing, target_origin)
         };
 
+    if let Some(excluded_slices) = excluded_slices.filter(|excluded| !excluded.is_empty()) {
+        apply_mpr_exclusions(&mut target_volume, target_dimensions, excluded_slices);
+    }
+
     let (window_low, window_high) = histogram_window(&histogram);
     let [nx, ny, nz] = target_dimensions;
-    let total_plane_slices = nx + ny + nz;
+    let sagittal_excluded = excluded_slices
+        .map(|excluded| excluded.sagittal.len())
+        .unwrap_or(0);
+    let coronal_excluded = excluded_slices
+        .map(|excluded| excluded.coronal.len())
+        .unwrap_or(0);
+    let axial_excluded = excluded_slices
+        .map(|excluded| excluded.axial.len())
+        .unwrap_or(0);
+    let total_plane_slices = nx
+        .saturating_sub(sagittal_excluded)
+        .saturating_add(ny.saturating_sub(coronal_excluded))
+        .saturating_add(nz.saturating_sub(axial_excluded));
     let render_report_every = (total_plane_slices / 24).max(1);
     let mut plane_asset_counts = BTreeMap::new();
     let planes = [("axial", nz), ("coronal", ny), ("sagittal", nx)];
@@ -3704,8 +4146,18 @@ fn derive_mpr_volume_and_slices(
 
     for (plane, count) in planes {
         std::fs::create_dir_all(derived_root.join(plane))?;
-        plane_asset_counts.insert(plane.to_string(), count);
+        let excluded_for_plane = excluded_slices
+            .map(|excluded| excluded.for_plane(plane))
+            .cloned()
+            .unwrap_or_default();
+        plane_asset_counts.insert(
+            plane.to_string(),
+            count.saturating_sub(excluded_for_plane.len()),
+        );
         for slice_index in 0..count {
+            if excluded_for_plane.contains(&slice_index) {
+                continue;
+            }
             render_tasks.push((plane, slice_index));
         }
     }
@@ -3977,6 +4429,30 @@ fn report_mpr_progress(
         completed,
         total,
     });
+}
+
+fn apply_mpr_exclusions(
+    volume: &mut [u16],
+    dimensions: [usize; 3],
+    excluded: &MprExcludedSlices,
+) {
+    let [nx, ny, nz] = dimensions;
+    if nx == 0 || ny == 0 || nz == 0 {
+        return;
+    }
+
+    for z in 0..nz {
+        let z_excluded = excluded.axial.contains(&z);
+        for y in 0..ny {
+            let y_excluded = excluded.coronal.contains(&y);
+            let row_offset = (z * ny + y) * nx;
+            for x in 0..nx {
+                if z_excluded || y_excluded || excluded.sagittal.contains(&x) {
+                    volume[row_offset + x] = 0;
+                }
+            }
+        }
+    }
 }
 
 fn canonical_source_axis_mapping(
@@ -4645,6 +5121,56 @@ fn dicom_text(object: &dicom::object::DefaultDicomObject, name: &str) -> Option<
         .filter(|value| !value.is_empty())
 }
 
+fn collect_study_files_recursive(
+    root: &Path,
+    current: &Path,
+    output: &mut Vec<PreparedStudyFile>,
+) -> Result<(), AppError> {
+    let entries = std::fs::read_dir(current).map_err(|error| {
+        AppError::internal(format!(
+            "Unable to read stored MPR source directory {}: {error}",
+            current.display()
+        ))
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            AppError::internal(format!("Unable to inspect stored MPR source: {error}"))
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            AppError::internal(format!("Unable to inspect stored MPR source type: {error}"))
+        })?;
+
+        if file_type.is_dir() {
+            collect_study_files_recursive(root, &path, output)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(|value| value.to_str())
+            .map(|value| value.replace('\\', "/"));
+        let original_file_name = path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or("file")
+            .to_string();
+
+        output.push(PreparedStudyFile {
+            source_relative_path: relative,
+            original_file_name,
+            file_path: path,
+        });
+    }
+
+    Ok(())
+}
+
 fn recommended_dicom_derivation_concurrency() -> usize {
     std::thread::available_parallelism()
         .map(|parallelism| parallelism.get().min(MAX_CONCURRENT_DICOM_DERIVATIONS))
@@ -5088,9 +5614,45 @@ fn build_mpr_viewer_manifest_json(
         "schemaVersion": "mpr-1",
         "coordinateSystem": "DICOM_LPS",
         "volume": geometry,
+        "excludedSlices": {
+            "axial": [],
+            "coronal": [],
+            "sagittal": [],
+        },
         "planes": planes,
         "atlases": atlases,
         "atlasFrames": atlas_frames,
+    })
+}
+
+fn parse_mpr_excluded_slices(manifest: &serde_json::Value) -> MprExcludedSlices {
+    fn read_plane(manifest: &serde_json::Value, plane: &str) -> BTreeSet<usize> {
+        manifest
+            .get("excludedSlices")
+            .and_then(|value| value.get(plane))
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_u64())
+                    .filter_map(|value| usize::try_from(value).ok())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    MprExcludedSlices {
+        axial: read_plane(manifest, "axial"),
+        coronal: read_plane(manifest, "coronal"),
+        sagittal: read_plane(manifest, "sagittal"),
+    }
+}
+
+fn mpr_excluded_slices_json(excluded: &MprExcludedSlices) -> serde_json::Value {
+    json!({
+        "axial": excluded.axial.iter().copied().collect::<Vec<_>>(),
+        "coronal": excluded.coronal.iter().copied().collect::<Vec<_>>(),
+        "sagittal": excluded.sagittal.iter().copied().collect::<Vec<_>>(),
     })
 }
 

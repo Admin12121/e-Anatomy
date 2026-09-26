@@ -275,6 +275,24 @@ export const playgroundApi = createApi({
         body: input,
       }),
     }),
+    deleteMprZoneModalitySlices: builder.mutation<
+      DeleteZoneModalityAssetsResponse,
+      {
+        zoneId: string
+        modalityId: string
+        input: DeleteZoneModalityAssetsInput
+      }
+    >({
+      invalidatesTags: (_result, _error, { modalityId }) => [
+        { type: "ZoneModalityAssets", id: `LIST:${modalityId}` },
+        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
+      ],
+      query: ({ zoneId, modalityId, input }) => ({
+        url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/mpr/slices/bulk-delete`,
+        method: "POST",
+        body: input,
+      }),
+    }),
     reorderZoneModalityAssets: builder.mutation<
       ReorderZoneModalityAssetsResponse,
       {
@@ -329,9 +347,6 @@ export const playgroundApi = createApi({
         input: CreateViewerStructureGroupInput
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structure-groups`,
         method: "POST",
@@ -347,9 +362,6 @@ export const playgroundApi = createApi({
         input: UpdateViewerStructureGroupInput
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, groupId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structure-groups/${groupId}`,
         method: "PATCH",
@@ -364,9 +376,6 @@ export const playgroundApi = createApi({
         groupId: string
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, groupId }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structure-groups/${groupId}`,
         method: "DELETE",
@@ -380,9 +389,6 @@ export const playgroundApi = createApi({
         input: CreateViewerStructureInput
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures`,
         method: "POST",
@@ -398,9 +404,6 @@ export const playgroundApi = createApi({
         input: UpdateViewerStructureInput
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, structureId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures/${structureId}`,
         method: "PATCH",
@@ -415,9 +418,6 @@ export const playgroundApi = createApi({
         structureId: string
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, structureId }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/structures/${structureId}`,
         method: "DELETE",
@@ -431,9 +431,6 @@ export const playgroundApi = createApi({
         input: CreateViewerAnnotationInput
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/annotations`,
         method: "POST",
@@ -449,9 +446,6 @@ export const playgroundApi = createApi({
         input: UpdateViewerAnnotationInput
       }
     >({
-      invalidatesTags: (_result, _error, { modalityId }) => [
-        { type: "ZoneViewer", id: `VIEWER:${modalityId}` },
-      ],
       query: ({ zoneId, modalityId, annotationId, input }) => ({
         url: `/playground/zones/${zoneId}/modalities/${modalityId}/viewer/annotations/${annotationId}`,
         method: "PATCH",
@@ -488,6 +482,7 @@ export const {
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
   useDeleteZoneModalityAssetsBulkMutation,
+  useDeleteMprZoneModalitySlicesMutation,
   useDeleteZoneModalityAssetMutation,
   useDeleteZoneModalityMutation,
   useGetZoneModalityViewerManifestQuery,

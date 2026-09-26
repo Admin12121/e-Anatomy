@@ -33,12 +33,14 @@ import type {
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 import {
+  playgroundApi,
   useCreateViewerAnnotationMutation,
   useCreateViewerStructureGroupMutation,
   useCreateViewerStructureMutation,
   useCreateZoneModalityAssetMutation,
   useDeleteZoneModalityAssetMutation,
   useDeleteZoneModalityAssetsBulkMutation,
+  useDeleteMprZoneModalitySlicesMutation,
   useDeleteViewerStructureGroupMutation,
   useDeleteViewerStructureMutation,
   useReorderZoneModalityAssetsMutation,
@@ -49,6 +51,7 @@ import {
   useUpdateZoneModalityAssetMutation,
 } from "@/lib/store/services/playground-api";
 import { cn } from "@/lib/utils";
+import { useAppDispatch } from "@/lib/store/hooks";
 import { isMriModalityType } from "@/lib/playground/modality-options";
 import Loader from "@/components/ui/loader";
 import { ModalityViewerRightPanel } from "./right-panel";
@@ -206,6 +209,7 @@ function ModalityViewerShell({
   zoneId,
   zoneSlug,
 }: ModalityViewerShellProps) {
+  const dispatch = useAppDispatch();
   const { resolvedTheme } = useTheme();
   const readOnly = mode === "public";
   const {
@@ -241,6 +245,7 @@ function ModalityViewerShell({
     useDeleteViewerStructureMutation();
   const [reorderModalityAssets] = useReorderZoneModalityAssetsMutation();
   const [deleteModalityAssetsBulk] = useDeleteZoneModalityAssetsBulkMutation();
+  const [deleteMprSlices] = useDeleteMprZoneModalitySlicesMutation();
   const [rebuildZoneModalityAtlases] = useRebuildZoneModalityAtlasesMutation();
   const [createModalityAsset, { isLoading: isCreatingModalityAsset }] =
     useCreateZoneModalityAssetMutation();
@@ -248,6 +253,61 @@ function ModalityViewerShell({
     useUpdateZoneModalityAssetMutation();
   const [deleteModalityAsset, { isLoading: isDeletingModalityAsset }] =
     useDeleteZoneModalityAssetMutation();
+
+  const upsertViewerGroupInCache = useCallback(
+    (group: ViewerStructureGroup) => {
+      dispatch(
+        playgroundApi.util.updateQueryData(
+          "getZoneModalityViewerManifest",
+          { zoneId, modalityId },
+          (draft) => {
+            const index = draft.structureGroups.findIndex(
+              (item) => item.id === group.id,
+            );
+            if (index >= 0) draft.structureGroups[index] = group;
+            else draft.structureGroups.push(group);
+          },
+        ),
+      );
+    },
+    [dispatch, modalityId, zoneId],
+  );
+  const upsertViewerStructureInCache = useCallback(
+    (structure: ViewerStructure) => {
+      dispatch(
+        playgroundApi.util.updateQueryData(
+          "getZoneModalityViewerManifest",
+          { zoneId, modalityId },
+          (draft) => {
+            const index = draft.structures.findIndex(
+              (item) => item.id === structure.id,
+            );
+            if (index >= 0) draft.structures[index] = structure;
+            else draft.structures.push(structure);
+          },
+        ),
+      );
+    },
+    [dispatch, modalityId, zoneId],
+  );
+  const upsertViewerAnnotationInCache = useCallback(
+    (annotation: ViewerAnnotation) => {
+      dispatch(
+        playgroundApi.util.updateQueryData(
+          "getZoneModalityViewerManifest",
+          { zoneId, modalityId },
+          (draft) => {
+            const index = draft.annotations.findIndex(
+              (item) => item.id === annotation.id,
+            );
+            if (index >= 0) draft.annotations[index] = annotation;
+            else draft.annotations.push(annotation);
+          },
+        ),
+      );
+    },
+    [dispatch, modalityId, zoneId],
+  );
 
   const [activeWeighting, setActiveWeighting] = useState<string>("all");
   const [pendingWeighting, setPendingWeighting] = useState<string | null>(null);
@@ -315,6 +375,16 @@ function ModalityViewerShell({
     [],
   );
   const [isApplyingSliceChanges, setIsApplyingSliceChanges] = useState(false);
+  const [mprPendingDeletedAssetIds, setMprPendingDeletedAssetIds] = useState<string[]>([]);
+  const [mprDeleteUndoStack, setMprDeleteUndoStack] = useState<string[][]>([]);
+  const [mprDeleteRedoStack, setMprDeleteRedoStack] = useState<string[][]>([]);
+  const [isApplyingMprSliceChanges, setIsApplyingMprSliceChanges] = useState(false);
+
+  useEffect(() => {
+    setMprPendingDeletedAssetIds([]);
+    setMprDeleteUndoStack([]);
+    setMprDeleteRedoStack([]);
+  }, [modalityId]);
 
   useLayoutEffect(() => {
     if (typeof window === "undefined") {
@@ -367,6 +437,7 @@ function ModalityViewerShell({
 
   const assets = useMemo(() => data?.assets ?? [], [data?.assets]);
   const isMprViewer = data?.modality.modalityType === "mpr";
+  const displayStudyPanel = showStudyPanel && !isMprViewer;
   const mprSpec = useMemo(() => {
     if (!isMprViewer || !data?.viewerSpec || typeof data.viewerSpec !== "object") {
       return null;
@@ -498,23 +569,50 @@ function ModalityViewerShell({
     () => buildViewerSliceItems(activeAssets, assetImageSourceById),
     [activeAssets, assetImageSourceById],
   );
+  const mprPendingDeletedAssetIdSet = useMemo(
+    () => new Set(mprPendingDeletedAssetIds),
+    [mprPendingDeletedAssetIds],
+  );
+  const mprWorkingSpec = useMemo<MprViewerSpec | null>(() => {
+    if (!mprSpec) return null;
+
+    const filterPlane = (plane: MprPlane) => {
+      const assetIds = mprSpec.planes[plane].assetIds.filter(
+        (assetId) => !mprPendingDeletedAssetIdSet.has(assetId),
+      );
+      return {
+        ...mprSpec.planes[plane],
+        assetIds,
+        sliceCount: assetIds.length,
+      };
+    };
+
+    return {
+      ...mprSpec,
+      planes: {
+        axial: filterPlane("axial"),
+        coronal: filterPlane("coronal"),
+        sagittal: filterPlane("sagittal"),
+      },
+    };
+  }, [mprPendingDeletedAssetIdSet, mprSpec]);
   const mprActivePlane = useMemo<MprPlane>(() => {
-    if (!mprSpec) return "axial";
+    if (!mprWorkingSpec) return "axial";
     const activeId = pendingAssetId ?? currentAssetId;
     if (!activeId) return "axial";
 
     for (const plane of ["axial", "coronal", "sagittal"] as const) {
-      if (mprSpec.planes[plane].assetIds.includes(activeId)) return plane;
+      if (mprWorkingSpec.planes[plane].assetIds.includes(activeId)) return plane;
     }
 
     return "axial";
-  }, [currentAssetId, mprSpec, pendingAssetId]);
+  }, [currentAssetId, mprWorkingSpec, pendingAssetId]);
   const mprFilmstripAssets = useMemo(() => {
-    if (!mprSpec) return [];
-    return mprSpec.planes[mprActivePlane].assetIds
+    if (!mprWorkingSpec) return [];
+    return mprWorkingSpec.planes[mprActivePlane].assetIds
       .map((assetId) => assetById.get(assetId) ?? null)
       .filter((asset): asset is ZoneModalityAsset => Boolean(asset));
-  }, [assetById, mprActivePlane, mprSpec]);
+  }, [assetById, mprActivePlane, mprWorkingSpec]);
   const mprFilmstripItems = useMemo(
     () => buildViewerSliceItems(mprFilmstripAssets, assetImageSourceById),
     [assetImageSourceById, mprFilmstripAssets],
@@ -1688,19 +1786,19 @@ function ModalityViewerShell({
       : showSliceEditorPanel
         ? "max-h-[calc(100vh-310px)]"
         : "max-h-[calc(100vh-101px)]",
-    showStudyPanel
+    displayStudyPanel
       ? "max-xl:grid-cols-[8.5rem_minmax(0,1fr)]"
       : "max-xl:grid-cols-[minmax(0,1fr)]",
-    showStudyPanel &&
+    displayStudyPanel &&
       showControlPanel &&
       "xl:grid-cols-[22rem_minmax(0,1fr)_22rem]",
-    showStudyPanel && !showControlPanel && "xl:grid-cols-[22rem_minmax(0,1fr)]",
-    !showStudyPanel && showControlPanel && "xl:grid-cols-[minmax(0,1fr)_22rem]",
-    !showStudyPanel && !showControlPanel && "xl:grid-cols-[minmax(0,1fr)]",
+    displayStudyPanel && !showControlPanel && "xl:grid-cols-[22rem_minmax(0,1fr)]",
+    !displayStudyPanel && showControlPanel && "xl:grid-cols-[minmax(0,1fr)_22rem]",
+    !displayStudyPanel && !showControlPanel && "xl:grid-cols-[minmax(0,1fr)]",
   );
   const mainClassName = cn(
     "relative grid min-h-0 grid-rows-[minmax(0,1fr)_auto]",
-    showStudyPanel ? "max-xl:col-start-2" : "max-xl:col-span-full",
+    displayStudyPanel ? "max-xl:col-start-2" : "max-xl:col-span-full",
   );
   const viewerTitle = useMemo(() => {
     if (!showOrientation) {
@@ -1783,6 +1881,28 @@ function ModalityViewerShell({
     activeMultiSelectedSliceIds.length > 0 &&
     activeMultiSelectedSliceIds.length < activeAssets.length;
   const canFlipSliceTimeline = activeAssets.length > 1;
+  const mprCanUndoSliceTimeline = mprDeleteUndoStack.length > 0;
+  const mprCanRedoSliceTimeline = mprDeleteRedoStack.length > 0;
+  const mprCanDeleteSelectedSlice = Boolean(
+    mprWorkingSpec &&
+      displayedNavigationAssetIndex >= 0 &&
+      mprWorkingSpec.planes[mprActivePlane].assetIds.length > 1,
+  );
+  const mprDeleteLeftCount = Math.max(0, displayedNavigationAssetIndex);
+  const mprDeleteRightCount = Math.max(
+    0,
+    mprFilmstripItems.length - displayedNavigationAssetIndex - 1,
+  );
+  const mprCanDeleteLeftSlices = Boolean(
+    mprWorkingSpec &&
+      mprDeleteLeftCount > 0 &&
+      mprWorkingSpec.planes[mprActivePlane].assetIds.length > mprDeleteLeftCount,
+  );
+  const mprCanDeleteRightSlices = Boolean(
+    mprWorkingSpec &&
+      mprDeleteRightCount > 0 &&
+      mprWorkingSpec.planes[mprActivePlane].assetIds.length > mprDeleteRightCount,
+  );
   const pendingDeletedSliceIds = useMemo(
     () =>
       getPendingDeletedAssetIds(
@@ -2103,6 +2223,7 @@ function ModalityViewerShell({
           }).unwrap()
         : await createStructure({ input, modalityId, zoneId }).unwrap();
 
+      upsertViewerStructureInCache(structure);
       if (!options?.silentSuccess) {
         toast.success(
           selectedStructure ? "Structure updated." : "Structure created.",
@@ -2239,16 +2360,18 @@ function ModalityViewerShell({
           }).unwrap()
         : await createAnnotation({ input, modalityId, zoneId }).unwrap();
 
+      upsertViewerAnnotationInCache(annotation);
       let createdDetachedCount = 0;
       let failedDetachedCount = 0;
 
       for (const polygonPoints of detachedPolygonsForSave) {
         try {
-          await createAnnotation({
+          const detachedAnnotation = await createAnnotation({
             input: buildDetachedAreaInput(polygonPoints),
             modalityId,
             zoneId,
           }).unwrap();
+          upsertViewerAnnotationInCache(detachedAnnotation);
           createdDetachedCount += 1;
         } catch {
           failedDetachedCount += 1;
@@ -2320,6 +2443,7 @@ function ModalityViewerShell({
           }).unwrap()
         : await createGroup({ input, modalityId, zoneId }).unwrap();
 
+      upsertViewerGroupInCache(group);
       toast.success(groupBeingEdited ? "Group updated." : "Group created.");
       setSelectedGroupId(group.id);
       setVisibleGroupIds((current) =>
@@ -2349,6 +2473,20 @@ function ModalityViewerShell({
 
     try {
       await deleteGroup({ groupId, modalityId, zoneId }).unwrap();
+      dispatch(
+        playgroundApi.util.updateQueryData(
+          "getZoneModalityViewerManifest",
+          { zoneId, modalityId },
+          (draft) => {
+            draft.structureGroups = draft.structureGroups.filter(
+              (item) => item.id !== groupId,
+            );
+            for (const structure of draft.structures) {
+              if (structure.groupId === groupId) structure.groupId = null;
+            }
+          },
+        ),
+      );
       if (selectedGroupId === groupId) {
         setSelectedGroupId(null);
       }
@@ -2509,6 +2647,20 @@ function ModalityViewerShell({
 
     try {
       await deleteStructure({ modalityId, structureId, zoneId }).unwrap();
+      dispatch(
+        playgroundApi.util.updateQueryData(
+          "getZoneModalityViewerManifest",
+          { zoneId, modalityId },
+          (draft) => {
+            draft.structures = draft.structures.filter(
+              (item) => item.id !== structureId,
+            );
+            draft.annotations = draft.annotations.filter(
+              (annotation) => annotation.structureId !== structureId,
+            );
+          },
+        ),
+      );
       if (selectedStructureId === structureId) {
         setSelectedStructureId(null);
         setSelectedAnnotationId(null);
@@ -2869,6 +3021,124 @@ function ModalityViewerShell({
     setCanvasMode("browse");
   }
 
+  function commitMprDeletedAssetIds(nextDeletedIds: string[]) {
+    if (readOnly || !mprSpec) return;
+
+    const nextSet = new Set(nextDeletedIds);
+    for (const plane of ["axial", "coronal", "sagittal"] as const) {
+      const remainingCount = mprSpec.planes[plane].assetIds.filter(
+        (assetId) => !nextSet.has(assetId),
+      ).length;
+      if (remainingCount < 1) {
+        toast.error(`At least one ${plane} slice must remain.`);
+        return;
+      }
+    }
+
+    const normalizedNext = Array.from(nextSet).sort();
+    const normalizedCurrent = Array.from(new Set(mprPendingDeletedAssetIds)).sort();
+    if (normalizedNext.join("|") === normalizedCurrent.join("|")) return;
+
+    setMprDeleteUndoStack((history) => [
+      ...history,
+      mprPendingDeletedAssetIds,
+    ]);
+    setMprDeleteRedoStack([]);
+    setMprPendingDeletedAssetIds(normalizedNext);
+
+    if (activeViewerAssetId && nextSet.has(activeViewerAssetId)) {
+      const activePlaneIds = mprSpec.planes[mprActivePlane].assetIds.filter(
+        (assetId) => !nextSet.has(assetId),
+      );
+      const nextIndex = clamp(
+        displayedNavigationAssetIndex,
+        0,
+        Math.max(0, activePlaneIds.length - 1),
+      );
+      const nextAssetId = activePlaneIds[nextIndex];
+      if (nextAssetId) handleMprActivateAsset(nextAssetId);
+    }
+  }
+
+  function handleMprDeleteLeftSlices() {
+    if (!mprWorkingSpec || !mprCanDeleteLeftSlices) return;
+    const deleteIds = new Set(mprPendingDeletedAssetIds);
+    for (const assetId of mprWorkingSpec.planes[mprActivePlane].assetIds.slice(
+      0,
+      mprDeleteLeftCount,
+    )) {
+      deleteIds.add(assetId);
+    }
+    commitMprDeletedAssetIds(Array.from(deleteIds));
+  }
+
+  function handleMprDeleteRightSlices() {
+    if (!mprWorkingSpec || !mprCanDeleteRightSlices) return;
+    const deleteIds = new Set(mprPendingDeletedAssetIds);
+    const planeIds = mprWorkingSpec.planes[mprActivePlane].assetIds;
+    for (const assetId of planeIds.slice(
+      Math.max(0, planeIds.length - mprDeleteRightCount),
+    )) {
+      deleteIds.add(assetId);
+    }
+    commitMprDeletedAssetIds(Array.from(deleteIds));
+  }
+
+  function handleMprDeleteSelectedSlice() {
+    if (!mprWorkingSpec || !mprCanDeleteSelectedSlice) return;
+    const deleteIds = new Set(mprPendingDeletedAssetIds);
+    const assetId =
+      mprWorkingSpec.planes[mprActivePlane].assetIds[
+        displayedNavigationAssetIndex
+      ];
+    if (assetId) deleteIds.add(assetId);
+
+    commitMprDeletedAssetIds(Array.from(deleteIds));
+  }
+
+  function handleMprUndoSliceTimeline() {
+    const previous = mprDeleteUndoStack[mprDeleteUndoStack.length - 1];
+    if (!previous) return;
+    setMprDeleteUndoStack((history) => history.slice(0, -1));
+    setMprDeleteRedoStack((history) => [...history, mprPendingDeletedAssetIds]);
+    setMprPendingDeletedAssetIds(previous);
+  }
+
+  function handleMprRedoSliceTimeline() {
+    const next = mprDeleteRedoStack[mprDeleteRedoStack.length - 1];
+    if (!next) return;
+    setMprDeleteRedoStack((history) => history.slice(0, -1));
+    setMprDeleteUndoStack((history) => [...history, mprPendingDeletedAssetIds]);
+    setMprPendingDeletedAssetIds(next);
+  }
+
+  async function handleApplyMprSliceChanges() {
+    if (readOnly || isApplyingMprSliceChanges || mprPendingDeletedAssetIds.length === 0) {
+      return;
+    }
+
+    setIsApplyingMprSliceChanges(true);
+    try {
+      const result = await deleteMprSlices({
+        modalityId,
+        zoneId,
+        input: { assetIds: mprPendingDeletedAssetIds },
+      }).unwrap();
+
+      await refetchViewerManifest();
+      setMprPendingDeletedAssetIds([]);
+      setMprDeleteUndoStack([]);
+      setMprDeleteRedoStack([]);
+      toast.success(
+        `Applied patient-space MPR volume changes (${result.deletedCount} excluded).`,
+      );
+    } catch (error) {
+      toast.error(readMutationError(error, "Unable to apply synchronized MPR slice changes."));
+    } finally {
+      setIsApplyingMprSliceChanges(false);
+    }
+  }
+
   function commitSliceTimeline(nextOrder: string[]) {
     if (readOnly) {
       return;
@@ -3199,7 +3469,7 @@ function ModalityViewerShell({
 
   return (
     <div className={shellGridClass}>
-      {showStudyPanel ? (
+      {displayStudyPanel ? (
         <StudyPanel
           readOnly={readOnly}
           referenceAssets={referenceAssets}
@@ -3229,7 +3499,7 @@ function ModalityViewerShell({
 
       <main className={mainClassName}>
         {isMprViewer ? (
-          mprSpec ? (
+          mprWorkingSpec ? (
             <MprViewerCanvas
               activeAssetId={currentAsset?.id ?? null}
               annotationEditingEnabled={!readOnly}
@@ -3253,7 +3523,7 @@ function ModalityViewerShell({
               showCrossReferences={showCrossReferences}
               showLabels={showLabels}
               showOrientation={showOrientation}
-              spec={mprSpec}
+              spec={mprWorkingSpec}
               stageRef={stageRef}
               structuresById={structuresById}
               visibleAnnotations={mprVisibleAnnotations}
@@ -3262,7 +3532,6 @@ function ModalityViewerShell({
               onAnnotationSelect={(annotationId, structureId) => {
                 setSelectedAnnotationId(annotationId);
                 setSelectedStructureId(structureId);
-                setShowStudyPanel(true);
                 const structure = structuresById.get(structureId);
                 setSelectedGroupId(structure?.groupId ?? null);
               }}
@@ -3355,7 +3624,8 @@ function ModalityViewerShell({
           crossReferenceToggleDisabled={readOnly}
           overlayOpacity={annotationForm.overlayOpacity}
           showCrossReferences={showCrossReferences}
-          showStudyPanel={showStudyPanel}
+          showStudyPanel={displayStudyPanel}
+          showStudyPanelToggle={!isMprViewer}
           onAreaBrushSizeChange={setAreaBrushSize}
           onAreaDraftReset={clearPolygonDraft}
           onAreaEditToolChange={setAreaEditTool}
@@ -3432,28 +3702,36 @@ function ModalityViewerShell({
         <SliceFilmstrip
           activeAssetId={activeFilmstripAssetId}
           allowEditing={!readOnly}
-          allowTimelineChanges={!isMprViewer}
-          canDeleteLeftSlices={!isMprViewer && canDeleteLeftSlices}
+          allowTimelineChanges={!readOnly}
+          timelineControlMode={isMprViewer ? "synchronized-delete" : "full"}
+          thumbnailFit={isMprViewer ? "contain" : "cover"}
+          lazyAtlasThumbnails={isMprViewer}
+          mobileCompactNavigation={isMprViewer}
+          canDeleteLeftSlices={isMprViewer ? mprCanDeleteLeftSlices : canDeleteLeftSlices}
           canDeleteEvenSlices={!isMprViewer && canDeleteEvenSlices}
-          canDeleteMultiSelectedSlices={
-            !isMprViewer && canDeleteMultiSelectedSlices
-          }
+          canDeleteMultiSelectedSlices={!isMprViewer && canDeleteMultiSelectedSlices}
           canDeleteOddSlices={!isMprViewer && canDeleteOddSlices}
-          canDeleteRightSlices={!isMprViewer && canDeleteRightSlices}
-          canDeleteSelectedSlice={!isMprViewer && canDeleteSelectedSlice}
+          canDeleteRightSlices={isMprViewer ? mprCanDeleteRightSlices : canDeleteRightSlices}
+          canDeleteSelectedSlice={isMprViewer ? mprCanDeleteSelectedSlice : canDeleteSelectedSlice}
           canFlipSliceTimeline={!isMprViewer && canFlipSliceTimeline}
-          canRedoSliceTimeline={!isMprViewer && canRedoSliceTimeline}
-          canUndoSliceTimeline={!isMprViewer && canUndoSliceTimeline}
+          canRedoSliceTimeline={isMprViewer ? mprCanRedoSliceTimeline : canRedoSliceTimeline}
+          canUndoSliceTimeline={isMprViewer ? mprCanUndoSliceTimeline : canUndoSliceTimeline}
           sliceItems={displayedFilmstripItems}
           filmstripScrollerRef={filmstripScrollerRef}
           hasPendingSliceTimelineChanges={
-            !isMprViewer && hasPendingSliceTimelineChanges
+            isMprViewer
+              ? mprPendingDeletedAssetIds.length > 0
+              : hasPendingSliceTimelineChanges
           }
-          isApplyingSliceChanges={!isMprViewer && isApplyingSliceChanges}
+          isApplyingSliceChanges={
+            isMprViewer ? isApplyingMprSliceChanges : isApplyingSliceChanges
+          }
           isAssetLoading={!isMprViewer && isAssetLoading}
           navigationAssetIndex={displayedNavigationAssetIndex}
           navigationDisabled={sliceInteractionLocked}
-          pendingDeletedSliceIds={isMprViewer ? [] : pendingDeletedSliceIds}
+          pendingDeletedSliceIds={
+            isMprViewer ? mprPendingDeletedAssetIds : pendingDeletedSliceIds
+          }
           pendingSliceSortUpdates={isMprViewer ? [] : pendingSliceSortUpdates}
           multiSelectEnabled={!isMprViewer && multiSelectEnabled}
           multiSelectedSliceIds={
@@ -3462,17 +3740,25 @@ function ModalityViewerShell({
           showSliceEditorPanel={showSliceEditorPanel}
           sliceEditorScrollerRef={sliceEditorScrollerRef}
           totalSliceCount={displayedSliceCount}
-          onApplyChanges={handleApplySliceTimelineChanges}
+          onApplyChanges={
+            isMprViewer ? handleApplyMprSliceChanges : handleApplySliceTimelineChanges
+          }
           onDeleteEven={handleDeleteEvenSlices}
-          onDeleteLeft={handleDeleteLeftSlicesFromSelection}
+          onDeleteLeft={
+            isMprViewer ? handleMprDeleteLeftSlices : handleDeleteLeftSlicesFromSelection
+          }
           onDeleteMultiSelected={handleDeleteMultiSelectedSlices}
           onDeleteOdd={handleDeleteOddSlices}
-          onDeleteRight={handleDeleteRightSlicesFromSelection}
-          onDeleteSelected={handleDeleteSelectedSlice}
+          onDeleteRight={
+            isMprViewer ? handleMprDeleteRightSlices : handleDeleteRightSlicesFromSelection
+          }
+          onDeleteSelected={
+            isMprViewer ? handleMprDeleteSelectedSlice : handleDeleteSelectedSlice
+          }
           onFlipOrder={handleFlipSliceTimeline}
           onNext={handleDisplayedNextAsset}
           onPrevious={handleDisplayedPreviousAsset}
-          onRedo={handleRedoSliceTimeline}
+          onRedo={isMprViewer ? handleMprRedoSliceTimeline : handleRedoSliceTimeline}
           onSelectAsset={handleDisplayedFilmstripSelect}
           onToggleBlockView={() => {
             if (sliceInteractionLocked) return;
@@ -3488,7 +3774,7 @@ function ModalityViewerShell({
             if (sliceInteractionLocked) return;
             setShowSliceEditorPanel((current) => !current);
           }}
-          onUndo={handleUndoSliceTimeline}
+          onUndo={isMprViewer ? handleMprUndoSliceTimeline : handleUndoSliceTimeline}
           onWheel={handleFilmstripHorizontalWheel}
         />
       ) : null}
@@ -3521,7 +3807,7 @@ function ModalityViewerShell({
           overlayOpacity={overlayOpacity}
           showOrientation={showOrientation}
           showLabels={showLabels}
-          showStudyPanel={showStudyPanel}
+          showStudyPanel={displayStudyPanel}
           structureForm={structureForm}
           structures={structures}
           visibleGroupIds={visibleGroupIds}

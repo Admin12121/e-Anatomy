@@ -36,7 +36,7 @@ const PLANE_LABELS: Record<MprPlane, string> = {
 };
 
 const MPR_PLANES: readonly MprPlane[] = ["axial", "coronal", "sagittal"];
-const VIEWPORT_IMAGE_CACHE_LIMIT = 24;
+const VIEWPORT_IMAGE_CACHE_LIMIT = 10;
 const viewportImageCache = new Map<string, HTMLImageElement>();
 const viewportImagePromiseCache = new Map<string, Promise<HTMLImageElement | null>>();
 
@@ -154,24 +154,36 @@ export function MprViewerCanvas({
     if (!activeAssetId) return;
 
     for (const plane of MPR_PLANES) {
-      const index = spec.planes[plane].assetIds.indexOf(activeAssetId);
-      if (index < 0) continue;
+      const displayIndex = spec.planes[plane].assetIds.indexOf(activeAssetId);
+      if (displayIndex < 0) continue;
+      const activeAsset = assetsById.get(activeAssetId) ?? null;
+      const sourceIndex = sourceIndexForPlaneAsset(
+        plane,
+        activeAsset,
+        displayIndex,
+        spec.volume.dimensions,
+      );
       setCursor((current) => {
         const next: MprCursor = [current[0], current[1], current[2]];
-        if (plane === "axial") next[2] = index;
-        if (plane === "coronal") next[1] = index;
-        if (plane === "sagittal") next[0] = index;
+        if (plane === "axial") next[2] = sourceIndex;
+        if (plane === "coronal") next[1] = sourceIndex;
+        if (plane === "sagittal") next[0] = sourceIndex;
         return sameCursor(current, next) ? current : next;
       });
       setActiveEditPlane((current) => (current === plane ? current : plane));
       break;
     }
-  }, [activeAssetId, spec.planes]);
+  }, [activeAssetId, assetsById, spec.planes, spec.volume.dimensions]);
 
   const assetIdForPlane = (plane: MprPlane, nextCursor = cursor) => {
-    const planeSpec = spec.planes[plane];
-    const index = planeSliceIndex(plane, nextCursor);
-    return planeSpec.assetIds[clampIndex(index, planeSpec.assetIds.length)] ?? null;
+    const selection = findNearestPlaneAsset(
+      plane,
+      spec.planes[plane].assetIds,
+      assetsById,
+      planeSliceIndex(plane, nextCursor),
+      spec.volume.dimensions,
+    );
+    return selection?.assetId ?? null;
   };
 
   function updateCursorFromPoint(
@@ -197,15 +209,23 @@ export function MprViewerCanvas({
 
   function movePlaneToSlice(plane: MprPlane, nextIndex: number) {
     const planeSpec = spec.planes[plane];
-    const clamped = clampIndex(nextIndex, planeSpec.assetIds.length);
+    const clampedDisplayIndex = clampIndex(nextIndex, planeSpec.assetIds.length);
+    const nextAssetId = planeSpec.assetIds[clampedDisplayIndex];
+    const nextAsset = nextAssetId ? assetsById.get(nextAssetId) ?? null : null;
+    const sourceIndex = sourceIndexForPlaneAsset(
+      plane,
+      nextAsset,
+      clampedDisplayIndex,
+      spec.volume.dimensions,
+    );
+
     setCursor((current) => {
       const next: MprCursor = [current[0], current[1], current[2]];
-      if (plane === "axial") next[2] = clamped;
-      if (plane === "coronal") next[1] = clamped;
-      if (plane === "sagittal") next[0] = clamped;
+      if (plane === "axial") next[2] = sourceIndex;
+      if (plane === "coronal") next[1] = sourceIndex;
+      if (plane === "sagittal") next[0] = sourceIndex;
       return sameCursor(current, next) ? current : next;
     });
-    const nextAssetId = planeSpec.assetIds[clamped];
     if (nextAssetId) onActivateAsset(nextAssetId);
   }
 
@@ -229,15 +249,6 @@ export function MprViewerCanvas({
     const assetId = assetIdForPlane(plane);
     if (assetId) onActivateAsset(assetId);
   }
-
-  const worldCoordinate = useMemo<[number, number, number]>(() => {
-    const { origin, spacing } = spec.volume;
-    return [
-      origin[0] + cursor[0] * spacing[0],
-      origin[1] + cursor[1] * spacing[1],
-      origin[2] + cursor[2] * spacing[2],
-    ];
-  }, [cursor, spec.volume]);
 
   const sharedViewportProps = {
     annotationForm,
@@ -268,6 +279,15 @@ export function MprViewerCanvas({
     onActivateAsset,
     onAnnotationHover,
     onAnnotationSelect,
+    onReviewPointClick: (
+      plane: MprPlane,
+      asset: ZoneModalityAsset,
+      point: ViewerAnnotationPoint,
+    ) => {
+      setActiveEditPlane(plane);
+      onActivateAsset(asset.id);
+      updateCursorFromPoint(plane, point);
+    },
     onCanvasClick: (plane: MprPlane, asset: ZoneModalityAsset, point: ViewerAnnotationPoint) => {
       setActiveEditPlane(plane);
       onActivateAsset(asset.id);
@@ -284,21 +304,19 @@ export function MprViewerCanvas({
 
   return (
     <div ref={stageRef} className="relative h-full min-h-0 overflow-hidden bg-black">
-      <div className="grid h-full min-h-0 grid-cols-[minmax(13rem,0.42fr)_minmax(0,1fr)] grid-rows-2 gap-px bg-border/70">
+      <div className="grid h-full min-h-0 grid-cols-[minmax(13rem,0.42fr)_minmax(0,1fr)] grid-rows-2 gap-px bg-border/70 max-[719px]:grid-cols-2 max-[719px]:grid-rows-[minmax(0,1.45fr)_minmax(0,0.85fr)]">
         {MPR_PLANES.map((plane) => (
           <MprViewport
             key={plane}
             {...sharedViewportProps}
             activeForEditing={activeEditPlane === plane}
             className={slotClassForPlane(plane, slots)}
+            isMain={slots.main === plane}
             plane={plane}
           />
         ))}
       </div>
 
-      <div className="pointer-events-none absolute bottom-16 left-1/2 z-30 -translate-x-1/2 rounded-md border border-white/15 bg-black/70 px-3 py-1.5 font-mono text-[11px] text-white/85 backdrop-blur">
-        LPS {worldCoordinate.map((value) => value.toFixed(2)).join(" · ")} mm
-      </div>
     </div>
   );
 }
@@ -311,7 +329,13 @@ type MprViewportProps = Omit<
   plane: MprPlane;
   cursor: MprCursor;
   activeForEditing: boolean;
+  isMain: boolean;
   className?: string;
+  onReviewPointClick: (
+    plane: MprPlane,
+    asset: ZoneModalityAsset,
+    point: ViewerAnnotationPoint,
+  ) => void;
   onCanvasClick: (
     plane: MprPlane,
     asset: ZoneModalityAsset,
@@ -326,6 +350,7 @@ function MprViewport({
   plane,
   cursor,
   activeForEditing,
+  isMain,
   className,
   assetsById,
   imageSourcesByAssetId,
@@ -353,6 +378,7 @@ function MprViewport({
   onActivateAsset,
   onAnnotationHover,
   onAnnotationSelect,
+  onReviewPointClick,
   onCanvasClick,
   onDraftAnchorMove,
   onDraftDisconnectedPolygonsChange,
@@ -364,32 +390,154 @@ function MprViewport({
   const stageRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<SVGSVGElement | null>(null);
   const planeSpec = spec.planes[plane];
-  const sliceIndex = clampIndex(planeSliceIndex(plane, cursor), planeSpec.assetIds.length);
-  const assetId = planeSpec.assetIds[sliceIndex] ?? null;
+  const sourceSliceIndex = planeSliceIndex(plane, cursor);
+  const selection = findNearestPlaneAsset(
+    plane,
+    planeSpec.assetIds,
+    assetsById,
+    sourceSliceIndex,
+    spec.volume.dimensions,
+  );
+  const sliceIndex = selection?.displayIndex ?? 0;
+  const assetId = selection?.assetId ?? null;
   const asset = assetId ? assetsById.get(assetId) ?? null : null;
   const imageSource = assetId ? imageSourcesByAssetId.get(assetId) ?? null : null;
-  const currentImageElement = useViewportImage(imageSource?.imageUrl ?? null);
-  const crosshairPoint = cursorToPlanePoint(plane, cursor, spec.volume.dimensions);
-  const annotations = useMemo(
-    () =>
-      asset
-        ? visibleAnnotations.filter((annotation) => annotation.assetId === asset.id)
-        : [],
-    [asset, visibleAnnotations],
+  // Render the viewport from the atlas page again. One atlas page contains a
+  // run of nearby slices, so scrubbing within that run becomes an in-memory
+  // crop instead of a new network request for every slice.
+  const viewportImageUrl = imageSource?.imageUrl ?? asset?.imageUrl ?? null;
+  const currentImageElement = useViewportImage(
+    viewportImageUrl,
+    isMain ? "high" : "auto",
   );
+  const crosshairPoint = cursorToPlanePoint(plane, cursor, spec.volume.dimensions);
+  const annotations = useMemo(() => {
+    if (!asset || !selection) return [];
+
+    const localAnnotations = visibleAnnotations.filter(
+      (annotation) => annotation.assetId === asset.id,
+    );
+    const localIds = new Set(localAnnotations.map((annotation) => annotation.id));
+    const projectedPointers: ViewerAnnotation[] = [];
+
+    for (const annotation of visibleAnnotations) {
+      if (localIds.has(annotation.id)) continue;
+      if (annotation.polygonPoints.length >= 3) continue;
+
+      const sourceAsset = assetsById.get(annotation.assetId) ?? null;
+      const sourcePlane = mprPlaneForAsset(sourceAsset);
+      if (!sourceAsset || !sourcePlane) continue;
+
+      const sourceDisplayIndex = spec.planes[sourcePlane].assetIds.indexOf(
+        sourceAsset.id,
+      );
+      if (sourceDisplayIndex < 0) continue;
+
+      const sourceIndex = sourceIndexForPlaneAsset(
+        sourcePlane,
+        sourceAsset,
+        sourceDisplayIndex,
+        spec.volume.dimensions,
+      );
+      const anchor =
+        annotation.id === selectedAnnotationId &&
+        annotationForm.polygonPoints.length < 3
+          ? { x: annotationForm.anchorX, y: annotationForm.anchorY }
+          : { x: annotation.anchorX, y: annotation.anchorY };
+      const annotationCursor = cursorFromPlanePoint(
+        sourcePlane,
+        anchor,
+        sourceIndex,
+        spec.volume.dimensions,
+      );
+      const projectedSlice = planeSliceIndex(plane, annotationCursor);
+      const projectedSelection = findNearestPlaneAsset(
+        plane,
+        planeSpec.assetIds,
+        assetsById,
+        projectedSlice,
+        spec.volume.dimensions,
+      );
+
+      if (projectedSelection?.assetId !== asset.id) continue;
+
+      const projectedPoint = cursorToPlanePoint(
+        plane,
+        annotationCursor,
+        spec.volume.dimensions,
+      );
+      projectedPointers.push({
+        ...annotation,
+        anchorX: projectedPoint.x,
+        anchorY: projectedPoint.y,
+        assetId: asset.id,
+        polygonPoints: [],
+      });
+    }
+
+    return [...localAnnotations, ...projectedPointers];
+  }, [
+    annotationForm.anchorX,
+    annotationForm.anchorY,
+    annotationForm.polygonPoints.length,
+    asset,
+    assetsById,
+    plane,
+    planeSpec.assetIds,
+    selectedAnnotationId,
+    selection,
+    spec.planes,
+    spec.volume.dimensions,
+    visibleAnnotations,
+  ]);
+  const selectedAnnotationSourceAssetId = selectedAnnotationId
+    ? visibleAnnotations.find((annotation) => annotation.id === selectedAnnotationId)
+        ?.assetId ?? null
+    : null;
+  const selectedAnnotationIdForViewport =
+    selectedAnnotationSourceAssetId === asset.id ? selectedAnnotationId : null;
+  const supplementalPointerMarkers =
+    !isMain &&
+    !activeForEditing &&
+    draftPointerPlaced &&
+    annotationForm.polygonPoints.length < 3
+      ? [
+          {
+            color: annotationForm.colorHex.trim() || "#6366f1",
+            point: crosshairPoint,
+          },
+        ]
+      : [];
 
   useEffect(() => {
-    for (const neighborIndex of [sliceIndex - 1, sliceIndex + 1]) {
+    // Atlas pages are intentionally prefetched only near a page boundary. This
+    // keeps scrubbing smooth without pulling the entire study into memory.
+    const urls = new Set<string>();
+    for (const neighborIndex of [sliceIndex - 8, sliceIndex + 8]) {
       if (neighborIndex < 0 || neighborIndex >= planeSpec.assetIds.length) continue;
       const neighborAssetId = planeSpec.assetIds[neighborIndex];
       const neighborSource = neighborAssetId
         ? imageSourcesByAssetId.get(neighborAssetId) ?? null
         : null;
-      if (neighborSource?.imageUrl) {
-        void loadViewportImage(neighborSource.imageUrl);
+      if (
+        neighborSource?.imageUrl &&
+        neighborSource.imageUrl !== viewportImageUrl
+      ) {
+        urls.add(neighborSource.imageUrl);
       }
     }
-  }, [imageSourcesByAssetId, planeSpec.assetIds, sliceIndex]);
+
+    for (const url of urls) {
+      void loadViewportImage(url, "low");
+    }
+  }, [
+    imageSourcesByAssetId,
+    planeSpec.assetIds,
+    sliceIndex,
+    viewportImageUrl,
+  ]);
+
+  const effectiveCanvasMode = activeForEditing ? canvasMode : "browse";
 
   if (!asset) {
     return (
@@ -412,10 +560,12 @@ function MprViewport({
         annotationForm={annotationForm}
         canvasFlipHorizontal={canvasFlipHorizontal}
         canvasFlipVertical={canvasFlipVertical}
-        canvasMode={activeForEditing ? canvasMode : "browse"}
+        canvasMode={effectiveCanvasMode}
         canvasRotationQuarterTurns={canvasRotationQuarterTurns}
         compact
-        crosshairPoint={crosshairPoint}
+        crosshairPoint={
+          isMain ? (showCrossReferences ? crosshairPoint : null) : crosshairPoint
+        }
         crosshairStroke="rgba(255, 255, 255, 0.94)"
         currentAsset={asset}
         currentAssetIndex={sliceIndex}
@@ -425,15 +575,26 @@ function MprViewport({
         draftPointerPlaced={draftPointerPlaced}
         editorMode={annotationEditingEnabled && activeForEditing}
         hoveredAnnotationId={hoveredAnnotationId}
+        hideViewerTitle
         ingestFailureMessage={null}
         isIngesting={false}
         lockInitialFitScale={false}
+        reserveLabelSpace={false}
         isPreparingInitialAsset={!currentImageElement}
         mainInteractionTool={mainInteractionTool}
         onAnnotationHover={onAnnotationHover}
         onAnnotationSelect={onAnnotationSelect}
-        onCanvasClick={(point) => onCanvasClick(plane, asset, point)}
-        onDraftAnchorMove={onDraftAnchorMove}
+        onBrowsePointClick={(point) =>
+          onReviewPointClick(plane, asset, point)
+        }
+        onCanvasClick={(point) => {
+          if (effectiveCanvasMode === "browse") return;
+          onCanvasClick(plane, asset, point);
+        }}
+        onDraftAnchorMove={(point) => {
+          onReviewPointClick(plane, asset, point);
+          onDraftAnchorMove(point);
+        }}
         onDraftDisconnectedPolygonsChange={onDraftDisconnectedPolygonsChange}
         onDraftPolygonPointMove={onDraftPolygonPointMove}
         onDraftPolygonReplace={onDraftPolygonReplace}
@@ -445,54 +606,93 @@ function MprViewport({
         }}
         overlayOpacity={overlayOpacity}
         overlayRef={overlayRef}
-        selectedAnnotationId={selectedAnnotationId}
-        showCrossReferences={showCrossReferences}
-        showLabels={showLabels}
+        selectedAnnotationId={selectedAnnotationIdForViewport}
+        showCrossReferences={false}
+        showLabels={isMain && showLabels}
         showOrientation={showOrientation}
+        showPointerMarkers={!isMain}
+        supplementalPointerMarkers={supplementalPointerMarkers}
         stageRef={stageRef}
         structuresById={structuresById}
         totalSliceCount={planeSpec.assetIds.length}
-        viewerTitle={`${PLANE_LABELS[plane]} ${sliceIndex + 1}/${planeSpec.assetIds.length}`}
+        viewerTitle={PLANE_LABELS[plane]}
         visibleAnnotations={annotations}
         draftDisconnectedPolygons={draftDisconnectedPolygons}
       />
+      {showOrientation ? (
+        <div className="pointer-events-none absolute left-3 top-2 z-30 text-xs font-semibold text-white/90">
+          {PLANE_LABELS[plane]}
+        </div>
+      ) : null}
+      <div className="pointer-events-none absolute bottom-2 left-3 z-30 rounded bg-black/55 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white/85">
+        {sliceIndex + 1}/{planeSpec.assetIds.length}
+      </div>
     </div>
   );
 }
 
-function useViewportImage(imageUrl: string | null) {
-  const [imageElement, setImageElement] = useState<HTMLImageElement | null>(() =>
-    imageUrl ? getCachedViewportImage(imageUrl) : null,
-  );
+type ViewportImagePriority = "high" | "auto" | "low";
+
+function useViewportImage(
+  imageUrl: string | null,
+  priority: ViewportImagePriority = "auto",
+) {
+  const [loaded, setLoaded] = useState<{
+    image: HTMLImageElement;
+    url: string;
+  } | null>(() => {
+    if (!imageUrl) return null;
+    const image = getCachedViewportImage(imageUrl);
+    return image ? { image, url: imageUrl } : null;
+  });
+
+  // Never return an image that belongs to the previous atlas page. The child
+  // canvas deliberately keeps its last rendered pixels while the next page is
+  // loading, which avoids a flash and prevents a new atlas frame from being
+  // cropped out of the old atlas image for one render.
+  const cachedForRequestedUrl = imageUrl
+    ? getCachedViewportImage(imageUrl)
+    : null;
+  const imageElement =
+    imageUrl && loaded?.url === imageUrl
+      ? loaded.image
+      : cachedForRequestedUrl;
 
   useEffect(() => {
     if (!imageUrl) {
-      setImageElement((current) => (current === null ? current : null));
+      setLoaded(null);
       return;
     }
 
     const cached = getCachedViewportImage(imageUrl);
     if (cached) {
-      setImageElement((current) => (current === cached ? current : cached));
+      setLoaded((current) =>
+        current?.url === imageUrl && current.image === cached
+          ? current
+          : { image: cached, url: imageUrl },
+      );
       return;
     }
 
     let cancelled = false;
-    void loadViewportImage(imageUrl).then((image) => {
-      if (!cancelled) {
-        setImageElement((current) => (current === image ? current : image));
+    void loadViewportImage(imageUrl, priority).then((image) => {
+      if (!cancelled && image) {
+        setLoaded({ image, url: imageUrl });
       }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [imageUrl]);
+  }, [imageUrl, priority]);
 
   return imageElement;
 }
 
-function loadViewportImage(imageUrl: string) {
+function loadViewportImage(
+  imageUrl: string,
+  priority: ViewportImagePriority = "auto",
+) {
   const cached = getCachedViewportImage(imageUrl);
   if (cached) return Promise.resolve(cached);
 
@@ -502,6 +702,7 @@ function loadViewportImage(imageUrl: string) {
   const promise = new Promise<HTMLImageElement | null>((resolve) => {
     const image = new Image();
     image.decoding = "async";
+    image.fetchPriority = priority;
     image.onload = () => {
       rememberViewportImage(imageUrl, image);
       viewportImagePromiseCache.delete(imageUrl);
@@ -542,9 +743,13 @@ function rememberViewportImage(imageUrl: string, image: HTMLImageElement) {
 }
 
 function slotClassForPlane(plane: MprPlane, slots: MprSlots) {
-  if (plane === slots.main) return "col-start-2 row-span-2 row-start-1";
-  if (plane === slots.topLeft) return "col-start-1 row-start-1";
-  return "col-start-1 row-start-2";
+  if (plane === slots.main) {
+    return "col-start-2 row-span-2 row-start-1 max-[719px]:col-span-2 max-[719px]:col-start-1 max-[719px]:row-span-1 max-[719px]:row-start-1";
+  }
+  if (plane === slots.topLeft) {
+    return "col-start-1 row-start-1 max-[719px]:col-start-1 max-[719px]:row-start-2";
+  }
+  return "col-start-1 row-start-2 max-[719px]:col-start-2 max-[719px]:row-start-2";
 }
 
 function sameCursor(left: MprCursor, right: MprCursor) {
@@ -555,6 +760,97 @@ function planeSliceIndex(plane: MprPlane, cursor: MprCursor) {
   if (plane === "axial") return cursor[2];
   if (plane === "coronal") return cursor[1];
   return cursor[0];
+}
+
+function sourceIndexForPlaneAsset(
+  plane: MprPlane,
+  asset: ZoneModalityAsset | null,
+  fallbackDisplayIndex: number,
+  dimensions: [number, number, number],
+) {
+  const dimensionCount = planeDimensionCount(plane, dimensions);
+  return clampIndex(asset?.sliceIndex ?? fallbackDisplayIndex, dimensionCount);
+}
+
+function findNearestPlaneAsset(
+  plane: MprPlane,
+  assetIds: readonly string[],
+  assetsById: ReadonlyMap<string, ZoneModalityAsset>,
+  targetSourceIndex: number,
+  dimensions: [number, number, number],
+) {
+  let best: { assetId: string; displayIndex: number; sourceIndex: number } | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let displayIndex = 0; displayIndex < assetIds.length; displayIndex += 1) {
+    const assetId = assetIds[displayIndex];
+    if (!assetId) continue;
+    const asset = assetsById.get(assetId) ?? null;
+    const sourceIndex = sourceIndexForPlaneAsset(
+      plane,
+      asset,
+      displayIndex,
+      dimensions,
+    );
+    const distance = Math.abs(sourceIndex - targetSourceIndex);
+    if (distance < bestDistance) {
+      best = { assetId, displayIndex, sourceIndex };
+      bestDistance = distance;
+      if (distance === 0) break;
+    }
+  }
+
+  return best;
+}
+
+function planeDimensionCount(
+  plane: MprPlane,
+  dimensions: [number, number, number],
+) {
+  if (plane === "axial") return dimensions[2];
+  if (plane === "coronal") return dimensions[1];
+  return dimensions[0];
+}
+
+function mprPlaneForAsset(
+  asset: ZoneModalityAsset | null,
+): MprPlane | null {
+  const orientation = asset?.orientationCode?.trim().toLowerCase();
+  if (orientation === "axial") return "axial";
+  if (orientation === "coronal") return "coronal";
+  if (orientation === "sagittal") return "sagittal";
+  return null;
+}
+
+function cursorFromPlanePoint(
+  plane: MprPlane,
+  point: ViewerAnnotationPoint,
+  sourceSliceIndex: number,
+  dimensions: [number, number, number],
+): MprCursor {
+  const [nx, ny, nz] = dimensions;
+
+  if (plane === "axial") {
+    return [
+      normalizedToIndex(point.x, nx),
+      normalizedToIndex(point.y, ny),
+      clampIndex(sourceSliceIndex, nz),
+    ];
+  }
+
+  if (plane === "coronal") {
+    return [
+      normalizedToIndex(point.x, nx),
+      clampIndex(sourceSliceIndex, ny),
+      nz - 1 - normalizedToIndex(point.y, nz),
+    ];
+  }
+
+  return [
+    clampIndex(sourceSliceIndex, nx),
+    normalizedToIndex(point.x, ny),
+    nz - 1 - normalizedToIndex(point.y, nz),
+  ];
 }
 
 function cursorToPlanePoint(

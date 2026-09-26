@@ -73,6 +73,7 @@ type ViewerCanvasProps = {
   currentAssetIndex: number;
   compact?: boolean;
   lockInitialFitScale?: boolean;
+  reserveLabelSpace?: boolean;
   crosshairPoint?: ViewerAnnotationPoint | null;
   crosshairStroke?: string;
   currentAtlasFrame: ZoneModalityAtlasFrame | null;
@@ -81,6 +82,7 @@ type ViewerCanvasProps = {
   draftPointerPlaced: boolean;
   editorMode: boolean;
   hoveredAnnotationId: string | null;
+  hideViewerTitle?: boolean;
   ingestFailureMessage: string | null;
   isIngesting: boolean;
   isPreparingInitialAsset: boolean;
@@ -88,7 +90,13 @@ type ViewerCanvasProps = {
   onAnnotationHover: (annotationId: string | null) => void;
   onViewportDoubleClick?: () => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
+  onBrowsePointClick?: (point: ViewerAnnotationPoint) => void;
   onCanvasClick: (point: ViewerAnnotationPoint) => void;
+  showPointerMarkers?: boolean;
+  supplementalPointerMarkers?: Array<{
+    color: string;
+    point: ViewerAnnotationPoint;
+  }>;
   onDraftAnchorMove: (point: ViewerAnnotationPoint) => void;
   onDraftDisconnectedPolygonsChange: (
     polygons: ViewerAnnotationPoint[][],
@@ -128,6 +136,7 @@ export function ViewerCanvas({
   currentAssetIndex,
   compact = false,
   lockInitialFitScale = true,
+  reserveLabelSpace = true,
   crosshairPoint = null,
   crosshairStroke = "rgba(56, 189, 248, 0.9)",
   currentAtlasFrame,
@@ -136,6 +145,7 @@ export function ViewerCanvas({
   draftPointerPlaced,
   editorMode,
   hoveredAnnotationId,
+  hideViewerTitle = false,
   ingestFailureMessage,
   isIngesting,
   isPreparingInitialAsset,
@@ -143,7 +153,10 @@ export function ViewerCanvas({
   onAnnotationHover,
   onViewportDoubleClick,
   onAnnotationSelect,
+  onBrowsePointClick,
   onCanvasClick,
+  showPointerMarkers = false,
+  supplementalPointerMarkers = [],
   onDraftAnchorMove,
   onDraftDisconnectedPolygonsChange,
   onDraftPolygonPointMove,
@@ -179,6 +192,7 @@ export function ViewerCanvas({
   const layerScrubDragRef = useRef<{
     pointerId: number;
     startIndex: number;
+    startX: number;
     startY: number;
   } | null>(null);
   const layerScrubFrameRef = useRef<number | null>(null);
@@ -219,6 +233,7 @@ export function ViewerCanvas({
   const normalizedCanvasRotation = ((canvasRotationQuarterTurns % 4) + 4) % 4;
   const shouldAutoArrangeLabels =
     showLabels && (!compact || visibleAnnotations.length > 0);
+  const shouldReserveLabelSpace = shouldAutoArrangeLabels && reserveLabelSpace;
   const sourceDimensions = resolveViewerImageDimensions([
     {
       height: currentAtlasFrame?.height,
@@ -244,14 +259,14 @@ export function ViewerCanvas({
       calculateViewerLayout({
         imageHeight: sourceImageHeight,
         imageWidth: sourceImageWidth,
-        reserveLabelSpace: shouldAutoArrangeLabels,
+        reserveLabelSpace: shouldReserveLabelSpace,
         rotationQuarterTurns: normalizedCanvasRotation,
         stageHeight: Math.max(stageSizePx.height, 1),
         stageWidth: Math.max(stageSizePx.width, 1),
       }),
     [
       normalizedCanvasRotation,
-      shouldAutoArrangeLabels,
+      shouldReserveLabelSpace,
       sourceImageHeight,
       sourceImageWidth,
       stageSizePx.height,
@@ -265,7 +280,7 @@ export function ViewerCanvas({
         fitScaleCap: lockInitialFitScale ? initialFitScaleCapRef.current : null,
         imageHeight: sourceImageHeight,
         imageWidth: sourceImageWidth,
-        reserveLabelSpace: shouldAutoArrangeLabels,
+        reserveLabelSpace: shouldReserveLabelSpace,
         rotationQuarterTurns: normalizedCanvasRotation,
         stageHeight: Math.max(stageSizePx.height, 1),
         stageWidth: Math.max(stageSizePx.width, 1),
@@ -273,7 +288,7 @@ export function ViewerCanvas({
     [
       lockInitialFitScale,
       normalizedCanvasRotation,
-      shouldAutoArrangeLabels,
+      shouldReserveLabelSpace,
       sourceImageHeight,
       sourceImageWidth,
       stageSizePx.height,
@@ -1234,6 +1249,7 @@ export function ViewerCanvas({
           0,
           Math.max(totalSliceCount - 1, 0),
         ),
+        startX: event.clientX,
         startY: event.clientY,
       };
       return;
@@ -1337,8 +1353,19 @@ export function ViewerCanvas({
       return;
     }
 
+    const layerDrag =
+      layerScrubDragRef.current?.pointerId === event.pointerId
+        ? layerScrubDragRef.current
+        : null;
+    const isLayerClick =
+      layerDrag !== null &&
+      Math.hypot(
+        event.clientX - layerDrag.startX,
+        event.clientY - layerDrag.startY,
+      ) <= 5;
+
     if (
-      layerScrubDragRef.current?.pointerId === event.pointerId &&
+      layerDrag &&
       layerScrubFrameRef.current !== null &&
       typeof window !== "undefined"
     ) {
@@ -1346,13 +1373,29 @@ export function ViewerCanvas({
       layerScrubFrameRef.current = null;
     }
 
-    if (layerScrubDragRef.current?.pointerId === event.pointerId) {
+    if (layerDrag) {
       const queuedIndex = layerScrubQueuedIndexRef.current;
       layerScrubQueuedIndexRef.current = null;
 
       if (queuedIndex !== null && queuedIndex !== currentAssetIndex) {
         onLayerScrubNavigate(queuedIndex);
       }
+    }
+
+    if (
+      isLayerClick &&
+      canvasMode === "browse" &&
+      mainInteractionTool === "layers" &&
+      onBrowsePointClick &&
+      overlayRef.current
+    ) {
+      onBrowsePointClick(
+        resolvePointerPoint({
+          clientX: event.clientX,
+          clientY: event.clientY,
+          currentTarget: overlayRef.current,
+        }),
+      );
     }
 
     clearMainInteractionDragState();
@@ -1369,9 +1412,11 @@ export function ViewerCanvas({
         compact && "h-full min-h-0",
       )}
     >
-      <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center px-6 py-4 text-sm">
-        {showOrientation ? viewerTitle : "Viewer"}
-      </div>
+      {!hideViewerTitle ? (
+        <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center px-6 py-4 text-sm">
+          {showOrientation ? viewerTitle : "Viewer"}
+        </div>
+      ) : null}
 
       <div
         ref={stageRef}
@@ -1460,7 +1505,11 @@ export function ViewerCanvas({
                 return;
               }
 
-              onCanvasClick(resolvePointerPoint(event));
+              const pointerPoint = resolvePointerPoint(event);
+              if (canvasMode === "browse") {
+                onBrowsePointClick?.(pointerPoint);
+              }
+              onCanvasClick(pointerPoint);
             }}
             onPointerDown={(event) => {
               if (event.button !== 0) {
@@ -1647,6 +1696,8 @@ export function ViewerCanvas({
               selectedAnnotationId={selectedAnnotationId}
               showCrossReferences={showCrossReferences}
               showDraftPointer={showDraftPointer}
+              showPointerMarkers={showPointerMarkers}
+              supplementalPointerMarkers={supplementalPointerMarkers}
               structuresById={structuresById}
               viewerLayout={viewerLayout}
               visibleAnnotations={visibleAnnotations}

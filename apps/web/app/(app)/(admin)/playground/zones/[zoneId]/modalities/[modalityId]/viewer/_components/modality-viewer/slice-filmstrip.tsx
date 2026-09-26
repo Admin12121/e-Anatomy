@@ -16,6 +16,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type MutableRefObject,
   type MouseEvent as ReactMouseEvent,
@@ -53,6 +54,7 @@ function buildAtlasThumbnailStyle(
   atlasPage: ZoneModalityAtlasPage,
   atlasFrame: ZoneModalityAtlasFrame,
   thumbnailSizePx: number,
+  fit: "cover" | "contain" = "cover",
 ): CSSProperties | null {
   if (
     atlasPage.width <= 0 ||
@@ -64,10 +66,16 @@ function buildAtlasThumbnailStyle(
     return null;
   }
 
-  const scale = Math.max(
-    thumbnailSizePx / atlasFrame.width,
-    thumbnailSizePx / atlasFrame.height,
-  );
+  const scale =
+    fit === "contain"
+      ? Math.min(
+          thumbnailSizePx / atlasFrame.width,
+          thumbnailSizePx / atlasFrame.height,
+        )
+      : Math.max(
+          thumbnailSizePx / atlasFrame.width,
+          thumbnailSizePx / atlasFrame.height,
+        );
   const atlasScaledWidth = atlasPage.width * scale;
   const atlasScaledHeight = atlasPage.height * scale;
   const frameScaledWidth = atlasFrame.width * scale;
@@ -85,10 +93,61 @@ function buildAtlasThumbnailStyle(
   };
 }
 
+function LazyAtlasThumbnail({
+  eager,
+  scrollerRef,
+  style,
+}: {
+  eager: boolean;
+  scrollerRef: MutableRefObject<HTMLDivElement | null>;
+  style: CSSProperties;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [visible, setVisible] = useState(eager);
+
+  useEffect(() => {
+    if (eager) {
+      setVisible(true);
+      return;
+    }
+
+    const host = hostRef.current;
+    if (!host || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setVisible(true);
+        observer.disconnect();
+      },
+      {
+        root: scrollerRef.current,
+        rootMargin: "160px",
+      },
+    );
+
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, [eager, scrollerRef]);
+
+  return (
+    <div ref={hostRef} className="h-full w-full">
+      {visible ? <div className="h-full w-full" style={style} /> : null}
+    </div>
+  );
+}
+
 type SliceFilmstripProps = {
   activeAssetId: string | null;
   allowEditing: boolean;
   allowTimelineChanges?: boolean;
+  timelineControlMode?: "full" | "synchronized-delete";
+  thumbnailFit?: "cover" | "contain";
+  lazyAtlasThumbnails?: boolean;
+  mobileCompactNavigation?: boolean;
   canDeleteLeftSlices: boolean;
   canDeleteEvenSlices: boolean;
   canDeleteMultiSelectedSlices: boolean;
@@ -139,6 +198,10 @@ export function SliceFilmstrip({
   activeAssetId,
   allowEditing,
   allowTimelineChanges = true,
+  timelineControlMode = "full",
+  thumbnailFit = "cover",
+  lazyAtlasThumbnails = false,
+  mobileCompactNavigation = false,
   canDeleteLeftSlices,
   canDeleteEvenSlices,
   canDeleteMultiSelectedSlices,
@@ -237,7 +300,12 @@ export function SliceFilmstrip({
         variant === "compact" ? COMPACT_ITEM_WIDTH_PX : EDITOR_ITEM_WIDTH_PX;
       const atlasThumbnailStyle =
         atlasFrame && atlasPage
-          ? buildAtlasThumbnailStyle(atlasPage, atlasFrame, thumbnailSizePx)
+          ? buildAtlasThumbnailStyle(
+              atlasPage,
+              atlasFrame,
+              thumbnailSizePx,
+              thumbnailFit,
+            )
           : null;
 
       const button = (
@@ -271,17 +339,32 @@ export function SliceFilmstrip({
         >
           <div
             className={cn(
-              "aspect-square",
+              "relative aspect-square overflow-hidden",
               variant === "compact" ? "bg-black/40" : "bg-black/50",
             )}
           >
             {atlasThumbnailStyle ? (
-              <div className="h-full w-full" style={atlasThumbnailStyle} />
+              lazyAtlasThumbnails ? (
+                <LazyAtlasThumbnail
+                  eager={isActive}
+                  scrollerRef={
+                    variant === "compact"
+                      ? filmstripScrollerRef
+                      : sliceEditorScrollerRef
+                  }
+                  style={atlasThumbnailStyle}
+                />
+              ) : (
+                <div className="h-full w-full" style={atlasThumbnailStyle} />
+              )
             ) : (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 alt={asset.label}
-                className="h-full w-full object-cover"
+                className={cn(
+                  "h-full w-full",
+                  thumbnailFit === "contain" ? "object-contain" : "object-cover",
+                )}
                 decoding="async"
                 fetchPriority={isActive ? "high" : "low"}
                 loading={isActive ? "eager" : "lazy"}
@@ -325,11 +408,15 @@ export function SliceFilmstrip({
       activeAssetId,
       allowTimelineChanges,
       handleSelectAsset,
+      filmstripScrollerRef,
       handleToggleMultiSelectedAsset,
+      lazyAtlasThumbnails,
       multiSelectEnabled,
       multiSelectedSliceIdSet,
       navigationDisabled,
       onToggleMultiSelectedAsset,
+      sliceEditorScrollerRef,
+      thumbnailFit,
     ],
   );
 
@@ -344,14 +431,14 @@ export function SliceFilmstrip({
   );
 
   return (
-    <div className="absolute bottom-0 left-0 w-full px-2">
+    <div className="absolute bottom-0 left-0 w-full px-2 max-[719px]:px-1">
       <div
         className={cn(
           "rounded-sm bg-white/3 backdrop-blur-sm transition-all",
           allowEditing && showSliceEditorPanel && "pb-2",
         )}
       >
-        <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 p-1">
+        <div className="mx-auto grid w-full max-w-[calc(100%-0.5rem)] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 p-1 max-[719px]:max-w-full max-[719px]:gap-1">
           <button
             type="button"
             aria-expanded={allowEditing && showSliceEditorPanel}
@@ -379,7 +466,7 @@ export function SliceFilmstrip({
             />
           </button>
 
-          <div className="relative ml-23.75 min-w-0">
+          <div className="relative ml-1 min-w-0">
             <div className="pointer-events-none absolute inset-y-1 left-1/2 z-20 w-px -translate-x-1/2 bg-primary" />
             <div
               ref={filmstripScrollerRef}
@@ -392,9 +479,10 @@ export function SliceFilmstrip({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 max-[719px]:gap-1">
             <Button
               size="icon"
+              className={cn(mobileCompactNavigation && "max-[719px]:hidden")}
               disabled={navigationDisabled}
               onClick={onToggleBlockView}
             >
@@ -407,7 +495,12 @@ export function SliceFilmstrip({
             >
               <ArrowLeft />
             </Button>
-            <p className="w-24 pr-1 text-center text-sm font-semibold tabular-nums dark:text-white/85">
+            <p
+              className={cn(
+                "w-24 pr-1 text-center text-sm font-semibold tabular-nums dark:text-white/85",
+                mobileCompactNavigation && "max-[719px]:hidden",
+              )}
+            >
               {isAssetLoading ? (
                 <span className="inline-flex items-center justify-center gap-1.5">
                   <LoaderCircleIcon className="size-3 animate-spin" />
@@ -424,33 +517,37 @@ export function SliceFilmstrip({
         </div>
 
         {allowEditing && showSliceEditorPanel ? (
-          <div className="mx-auto h-50 w-full max-w-[calc(100%-0.5rem)] rounded-md border border-white/12 bg-black/60 p-2">
+          <div className="mx-auto h-50 w-full max-w-[calc(100%-0.5rem)] rounded-md border border-white/12 bg-black/60 p-2 max-[719px]:h-40 max-[719px]:max-w-full">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={multiSelectEnabled ? "default" : "ghost"}
-                title={
-                  multiSelectEnabled
-                    ? "Disable multi-select"
-                    : "Enable multi-select"
-                }
-                disabled={navigationDisabled || !allowTimelineChanges}
-                onClick={onToggleMultiSelect}
-              >
-                <MousePointerClick className="size-4" />
-              </Button>
-              {multiSelectedSliceIds.length > 0 ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  title={`Delete ${multiSelectedSliceIds.length} selected slices`}
-                  disabled={navigationDisabled || !allowTimelineChanges || !canDeleteMultiSelectedSlices}
-                  onClick={onDeleteMultiSelected}
-                >
-                  <Trash className="size-4" />
-                </Button>
+              {timelineControlMode === "full" ? (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={multiSelectEnabled ? "default" : "ghost"}
+                    title={
+                      multiSelectEnabled
+                        ? "Disable multi-select"
+                        : "Enable multi-select"
+                    }
+                    disabled={navigationDisabled || !allowTimelineChanges}
+                    onClick={onToggleMultiSelect}
+                  >
+                    <MousePointerClick className="size-4" />
+                  </Button>
+                  {multiSelectedSliceIds.length > 0 ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      title={`Delete ${multiSelectedSliceIds.length} selected slices`}
+                      disabled={navigationDisabled || !allowTimelineChanges || !canDeleteMultiSelectedSlices}
+                      onClick={onDeleteMultiSelected}
+                    >
+                      <Trash className="size-4" />
+                    </Button>
+                  ) : null}
+                </>
               ) : null}
               <Button
                 type="button"
@@ -492,26 +589,30 @@ export function SliceFilmstrip({
               >
                 <DeleteAllRightIcon className="size-4" />
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                title="Delete odd-numbered slices"
-                disabled={navigationDisabled || !allowTimelineChanges || !canDeleteOddSlices}
-                onClick={onDeleteOdd}
-              >
-                <TicketMinus className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                title="Delete even-numbered slices"
-                disabled={navigationDisabled || !allowTimelineChanges || !canDeleteEvenSlices}
-                onClick={onDeleteEven}
-              >
-                <Tickets className="size-4" />
-              </Button>
+              {timelineControlMode === "full" ? (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    title="Delete odd-numbered slices"
+                    disabled={navigationDisabled || !allowTimelineChanges || !canDeleteOddSlices}
+                    onClick={onDeleteOdd}
+                  >
+                    <TicketMinus className="size-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    title="Delete even-numbered slices"
+                    disabled={navigationDisabled || !allowTimelineChanges || !canDeleteEvenSlices}
+                    onClick={onDeleteEven}
+                  >
+                    <Tickets className="size-4" />
+                  </Button>
+                </>
+              ) : null}
               <Button
                 type="button"
                 size="sm"
@@ -522,19 +623,23 @@ export function SliceFilmstrip({
               >
                 <Trash className="size-4" />
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                title="Flip slice order"
-                disabled={navigationDisabled || !allowTimelineChanges || !canFlipSliceTimeline}
-                onClick={onFlipOrder}
-              >
-                <FlipSliceOrderIcon className="size-4" />
-              </Button>
-              <span className="ml-auto text-xs text-white/75">
+              {timelineControlMode === "full" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  title="Flip slice order"
+                  disabled={navigationDisabled || !allowTimelineChanges || !canFlipSliceTimeline}
+                  onClick={onFlipOrder}
+                >
+                  <FlipSliceOrderIcon className="size-4" />
+                </Button>
+              ) : null}
+              <span className="ml-auto text-xs text-white/75 max-[719px]:hidden">
                 {hasPendingSliceTimelineChanges
-                  ? `Pending ${pendingDeletedSliceIds.length} delete / ${pendingSliceSortUpdates.length} reorder`
+                  ? timelineControlMode === "synchronized-delete"
+                    ? `Pending ${pendingDeletedSliceIds.length} synchronized deletes`
+                    : `Pending ${pendingDeletedSliceIds.length} delete / ${pendingSliceSortUpdates.length} reorder`
                   : navigationAssetIndex >= 0
                     ? `Selected ${navigationAssetIndex + 1}/${totalSliceCount}`
                     : `Selected 0/${totalSliceCount}`}
@@ -557,7 +662,7 @@ export function SliceFilmstrip({
 
             <div
               ref={sliceEditorScrollerRef}
-              className="no-scrollbar h-36.25 overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-md bg-black/35 p-2"
+              className="no-scrollbar h-36.25 overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-md bg-black/35 p-2 max-[719px]:h-24"
               onWheel={navigationDisabled ? undefined : onWheel}
             >
               <div className="flex w-max items-start gap-2">

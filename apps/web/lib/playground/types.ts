@@ -394,6 +394,7 @@ export type MprViewerSpec = {
     sourceSeriesUid: string;
     sourceSliceCount: number;
   };
+  excludedSlices?: Record<MprPlane, number[]>;
   planes: Record<MprPlane, MprViewerPlaneSpec>;
 };
 

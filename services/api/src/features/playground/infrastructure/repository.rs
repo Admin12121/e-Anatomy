@@ -883,6 +883,38 @@ impl PlaygroundRepository {
         Ok(row.map(Into::into))
     }
 
+    pub async fn update_zone_modality_asset_binary_metadata(
+        &self,
+        pool: &PgPool,
+        asset_id: Uuid,
+        checksum: &str,
+        size_bytes: i64,
+        width: i32,
+        height: i32,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE anatomy_zone_modality_assets
+            SET
+                checksum = $2,
+                size_bytes = $3,
+                width = $4,
+                height = $5,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(asset_id)
+        .bind(checksum)
+        .bind(size_bytes)
+        .bind(width)
+        .bind(height)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn delete_zone_modality_asset(
         &self,
         pool: &PgPool,

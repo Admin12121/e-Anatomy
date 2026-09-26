@@ -87,6 +87,10 @@ pub fn routes() -> Router<AppState> {
             get(get_zone_modality_viewer_manifest),
         )
         .route(
+            "/zones/{zone_id}/modalities/{modality_id}/viewer/mpr/slices/bulk-delete",
+            axum::routing::post(delete_mpr_zone_modality_slices),
+        )
+        .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/atlases/rebuild",
             axum::routing::post(rebuild_zone_modality_atlases),
         )
@@ -506,6 +510,29 @@ async fn reorder_zone_modality_assets(
     let response = state
         .playground_service
         .reorder_zone_modality_assets(
+            actor.account_id,
+            zone_id,
+            modality_id,
+            &actor.user_id,
+            input,
+        )
+        .await?;
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+
+async fn delete_mpr_zone_modality_slices(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    Json(input): Json<DeleteZoneModalityAssetsInput>,
+) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
+    let response = state
+        .playground_service
+        .delete_mpr_zone_modality_assets(
             actor.account_id,
             zone_id,
             modality_id,

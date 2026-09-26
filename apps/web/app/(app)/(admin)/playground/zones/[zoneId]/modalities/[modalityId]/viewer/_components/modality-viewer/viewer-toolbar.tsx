@@ -34,6 +34,7 @@ type ViewerToolbarProps = {
   overlayOpacity: number;
   showCrossReferences: boolean;
   showStudyPanel: boolean;
+  showStudyPanelToggle?: boolean;
   onAreaBrushSizeChange: (value: number) => void;
   onAreaDraftReset: () => void;
   onAreaEditToolChange: (tool: AreaEditTool) => void;
@@ -55,6 +56,7 @@ export function ViewerToolbar({
   overlayOpacity,
   showCrossReferences,
   showStudyPanel,
+  showStudyPanelToggle = true,
   onAreaBrushSizeChange,
   onAreaEditToolChange,
   onAreaEraserSizeChange,
@@ -71,19 +73,21 @@ export function ViewerToolbar({
         aria-label="Viewer controls"
         className="absolute right-3 top-3 z-30 rounded-sm p-0.5 max-[719px]:top-10"
       >
-        <Button
-          aria-label={showStudyPanel ? "Hide study panel" : "Show study panel"}
-          type="button"
-          size="icon-lg"
-          variant={!showStudyPanel ? "secondary" : "default"}
-          onClick={() => onShowStudyPanelChange(!showStudyPanel)}
-        >
-          {showStudyPanel ? (
-            <ArrowLeft className="size-4" />
-          ) : (
-            <ArrowRight className="size-4" />
-          )}
-        </Button>
+        {showStudyPanelToggle ? (
+          <Button
+            aria-label={showStudyPanel ? "Hide study panel" : "Show study panel"}
+            type="button"
+            size="icon-lg"
+            variant={!showStudyPanel ? "secondary" : "default"}
+            onClick={() => onShowStudyPanelChange(!showStudyPanel)}
+          >
+            {showStudyPanel ? (
+              <ArrowLeft className="size-4" />
+            ) : (
+              <ArrowRight className="size-4" />
+            )}
+          </Button>
+        ) : null}
         {!crossReferenceToggleDisabled && (
           <Button
             aria-label={

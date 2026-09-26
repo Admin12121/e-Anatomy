@@ -48,6 +48,11 @@ type ViewerCanvasMainOverlayProps = {
   selectedAnnotationId: string | null;
   showCrossReferences: boolean;
   showDraftPointer: boolean;
+  showPointerMarkers: boolean;
+  supplementalPointerMarkers: Array<{
+    color: string;
+    point: ViewerAnnotationPoint;
+  }>;
   structuresById: Map<string, ViewerStructure>;
   viewerLayout: ViewerLayout;
   visibleAnnotations: ViewerAnnotation[];
@@ -113,6 +118,8 @@ export function ViewerCanvasMainOverlay({
   selectedAnnotationId,
   showCrossReferences,
   showDraftPointer,
+  showPointerMarkers,
+  supplementalPointerMarkers,
   structuresById,
   viewerLayout,
   visibleAnnotations,
@@ -209,6 +216,18 @@ export function ViewerCanvasMainOverlay({
               />
             )}
 
+            {showPointerMarkers && !isRegion && !canDragAnchor ? (
+              <circle
+                cx={anchorX * viewerLayout.coordinateWidth}
+                cy={anchorY * viewerLayout.coordinateHeight}
+                fill={color}
+                pointerEvents="none"
+                r={3.2 * canvasUnitsPerScreenPixel}
+                stroke="rgba(255,255,255,0.9)"
+                strokeWidth={1.15 * canvasUnitsPerScreenPixel}
+              />
+            ) : null}
+
             {canDragAnchor ? (
               <circle
                 className="cursor-move"
@@ -243,6 +262,19 @@ export function ViewerCanvasMainOverlay({
           </g>
         );
       })}
+
+      {supplementalPointerMarkers.map((marker, markerIndex) => (
+        <circle
+          key={`supplemental-pointer-${markerIndex}`}
+          cx={marker.point.x * viewerLayout.coordinateWidth}
+          cy={marker.point.y * viewerLayout.coordinateHeight}
+          fill={marker.color}
+          pointerEvents="none"
+          r={3.2 * canvasUnitsPerScreenPixel}
+          stroke="rgba(255,255,255,0.92)"
+          strokeWidth={1.15 * canvasUnitsPerScreenPixel}
+        />
+      ))}
 
       {showDraftPointer ? (
         <circle
