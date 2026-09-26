@@ -7,12 +7,17 @@ import {
   shouldTrackPageView,
   trackAnalyticsEvent,
 } from "@/lib/analytics/client"
+import { isPublicAnalyticsPath } from "@/lib/analytics/events"
 
 export function AnalyticsTracker() {
   const pathname = usePathname()
 
   useEffect(() => {
-    if (!pathname || !shouldTrackPageView(pathname)) {
+    if (
+      !pathname ||
+      !isPublicAnalyticsPath(pathname) ||
+      !shouldTrackPageView(pathname)
+    ) {
       return
     }
 

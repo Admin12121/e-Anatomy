@@ -10,22 +10,16 @@ import {
 } from "lucide-react"
 
 import { UserActions } from "../_components/user-actions"
+import { AnalyticsMetricCard } from "@/components/analytics/analytics-overview-cards"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
   Frame,
-  FrameDescription,
   FrameHeader,
   FramePanel,
   FrameTitle,
 } from "@/components/ui/frame"
+import { RouteTabs } from "@/components/ui/route-tabs"
 import {
   Table,
   TableBody,
@@ -43,9 +37,14 @@ import {
   user as authUser,
 } from "@/lib/db/auth-schema"
 import { db } from "@/lib/db/client"
+import { resolveRouteTab } from "@/lib/analytics/presentation"
+
+const TABS = ["overview", "sessions", "security", "activity"] as const
+type UserTab = (typeof TABS)[number]
 
 type UserDetailPageProps = {
   params: Promise<{ userId: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }
 
 function formatDateTime(value: Date | null | undefined) {
@@ -79,9 +78,17 @@ function deviceLabel(userAgent: string | null) {
   return "Web browser"
 }
 
-export default async function UserDetailPage({ params }: UserDetailPageProps) {
+export default async function UserDetailPage({
+  params,
+  searchParams,
+}: UserDetailPageProps) {
   const { user: currentUser } = await requireAdminSession("/users")
   const { userId } = await params
+  const tab = resolveRouteTab<UserTab>(
+    (await searchParams).tab,
+    TABS,
+    "overview",
+  )
   const [userRecord] = await db
     .select()
     .from(authUser)
@@ -171,44 +178,54 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
   const metrics = [
     {
       description: `${activeSessionCount} currently active`,
+      footer: "Sign-in sessions",
       icon: MonitorSmartphoneIcon,
       title: "Sessions",
       value: totalSessionCount,
     },
     {
       description: "External sign-in methods",
+      footer: "Sign-in connections",
       icon: Link2Icon,
       title: "Connected accounts",
       value: externalAccounts.length,
     },
     {
       description: "Registered secure credentials",
+      footer: "Registered passkeys",
       icon: KeyRoundIcon,
       title: "Passkeys",
       value: passkeyItems.length,
     },
     {
       description: formatDateTime(sessionItems[0]?.updatedAt),
+      footer: "Last account activity",
       icon: ActivityIcon,
       title: "Latest activity",
       value: sessionItems.length > 0 ? "Seen" : "None",
     },
   ]
+  const routeTabs = TABS.map((item) => ({
+    href:
+      item === "overview" ? `/users/${userId}` : `/users/${userId}?tab=${item}`,
+    label: item[0].toUpperCase() + item.slice(1),
+    value: item,
+  }))
 
   return (
     <div className="flex min-h-full flex-col gap-4 p-2">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-2">
+      <div className="flex flex-col gap-3 px-1 py-1 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-2">
           <Button asChild size="icon-sm" variant="ghost">
             <Link aria-label="Back to users" href="/users">
               <ArrowLeftIcon aria-hidden="true" />
             </Link>
           </Button>
           <div className="min-w-0">
-            <h1 className="truncate font-heading text-2xl font-semibold tracking-tight">
+            <h1 className="truncate font-heading text-xl font-semibold tracking-tight">
               {userRecord.name}
             </h1>
-            <p className="truncate text-sm text-muted-foreground">
+            <p className="truncate text-xs text-muted-foreground">
               {userRecord.email}
             </p>
           </div>
@@ -218,7 +235,7 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
             {getRoleLabel(normalizeRoleCode(userRecord.role))}
           </Badge>
           <Badge
-            variant={normalizedStatus === "active" ? "outline" : "secondary"}
+            variant={normalizedStatus === "active" ? "success" : "secondary"}
           >
             {normalizedStatus === "active" ? "Active" : "Inactive"}
           </Badge>
@@ -231,67 +248,41 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
         </div>
       </div>
 
-      <Frame>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-64">Field</TableHead>
-              <TableHead>Value</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {detailRows.map(([label, value]) => (
-              <TableRow key={label}>
-                <TableCell className="font-medium">{label}</TableCell>
-                <TableCell className="break-all text-muted-foreground">
-                  {value}
-                </TableCell>
-              </TableRow>
+      <RouteTabs items={routeTabs} value={tab} />
+
+      {tab === "overview" ? (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {metrics.map((metric) => (
+              <AnalyticsMetricCard
+                detail={metric.description}
+                footer={metric.footer}
+                icon={metric.icon}
+                key={metric.title}
+                title={metric.title}
+                value={String(metric.value)}
+              />
             ))}
-          </TableBody>
-        </Table>
-      </Frame>
-
-      <section aria-labelledby="user-analytics-heading" className="space-y-4">
-        <div>
-          <h2
-            className="font-heading text-xl font-semibold tracking-tight"
-            id="user-analytics-heading"
-          >
-            User analytics
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Account and authentication activity currently available for this
-            user.
-          </p>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {metrics.map((metric) => (
-            <Card key={metric.title}>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-3">
-                  <CardTitle>{metric.title}</CardTitle>
-                  <metric.icon className="size-4 text-muted-foreground" />
+          </div>
+          <Frame>
+            <FramePanel className="grid gap-x-8 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
+              {detailRows.map(([label, value]) => (
+                <div className="min-w-0" key={label}>
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {label}
+                  </div>
+                  <div className="mt-1 break-all text-sm font-medium">
+                    {value}
+                  </div>
                 </div>
-                <CardDescription>{metric.description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="font-heading text-3xl font-semibold">
-                  {metric.value}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </section>
+              ))}
+            </FramePanel>
+          </Frame>
+        </>
+      ) : null}
 
-      <Frame>
-        <FrameHeader>
-          <FrameTitle>Recent sessions</FrameTitle>
-          <FrameDescription>
-            The latest 25 sign-in sessions. Session tokens are never displayed.
-          </FrameDescription>
-        </FrameHeader>
+      {tab === "sessions" ? (
+        <Frame>
         <Table>
           <TableHeader>
             <TableRow>
@@ -335,7 +326,7 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
                       {formatDateTime(item.expiresAt)}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={isActive ? "outline" : "secondary"}>
+                      <Badge variant={isActive ? "success" : "secondary"}>
                         {isActive ? "Active" : "Expired"}
                       </Badge>
                     </TableCell>
@@ -345,23 +336,45 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
             )}
           </TableBody>
         </Table>
-      </Frame>
+        </Frame>
+      ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      {tab === "security" ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+        <Frame>
+          <FrameHeader>
+            <FrameTitle>Authentication</FrameTitle>
+          </FrameHeader>
+          <FramePanel className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                Email verification
+              </div>
+              <div className="mt-1 font-medium">
+                {userRecord.emailVerified ? "Verified" : "Not verified"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                Two-factor authentication
+              </div>
+              <div className="mt-1 font-medium">
+                {userRecord.twoFactorEnabled ? "Enabled" : "Disabled"}
+              </div>
+            </div>
+          </FramePanel>
+        </Frame>
         <Frame>
           <FrameHeader>
             <FrameTitle>Sign-in methods</FrameTitle>
-            <FrameDescription>
-              Authentication providers connected to this account.
-            </FrameDescription>
           </FrameHeader>
           <FramePanel className="space-y-3">
             {accountItems.length === 0 && passkeyItems.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No sign-in methods found.
               </p>
-            ) : (
-              accountItems.map((item) => (
+            ) : null}
+            {accountItems.map((item) => (
                 <div
                   className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
                   key={item.id}
@@ -373,8 +386,7 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
                     {formatDateTime(item.createdAt)}
                   </span>
                 </div>
-              ))
-            )}
+              ))}
             {passkeyItems.map((item) => (
               <div
                 className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
@@ -393,23 +405,22 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
             ))}
           </FramePanel>
         </Frame>
+        </div>
+      ) : null}
 
+      {tab === "activity" ? (
         <Frame>
           <FrameHeader>
             <FrameTitle>Content activity</FrameTitle>
-            <FrameDescription>
-              Page views, structures selected, and content engagement.
-            </FrameDescription>
           </FrameHeader>
           <FramePanel>
             <p className="text-sm text-muted-foreground">
-              Per-user content events will appear here when the analytics event
-              collection backend is enabled. No activity is inferred or
-              fabricated from authentication data.
+              Page views, structure selections, and engagement will appear here
+              after first-party event storage is enabled.
             </p>
           </FramePanel>
         </Frame>
-      </div>
+      ) : null}
     </div>
   )
 }

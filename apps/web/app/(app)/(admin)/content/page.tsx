@@ -15,26 +15,14 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { TablePagination } from "@/components/ui/table-pagination"
-import { buildInternalAdminHeaders } from "@/lib/api/admin"
 import { ApiClientError } from "@/lib/api/errors"
-import { serverApiFetch } from "@/lib/api/server"
 import { requireCapabilitySession } from "@/lib/auth/session"
-import type {
-  ModalityProcessingStatus,
-  ZoneListResponse,
-  ZoneModalityFamily,
-  ZoneModalityFamilyListResponse,
-} from "@/lib/playground/types"
+import type { ContentCatalogItem } from "@/lib/content/catalog"
+import { loadContentCatalog } from "@/lib/content/catalog-server"
+import type { ModalityProcessingStatus, ZoneModalityFamily } from "@/lib/playground/types"
 
 const PAGE_SIZE = 25
 const STATUSES = new Set(["draft", "uploaded", "processing", "ready", "failed"])
-
-type ContentItem = ZoneModalityFamily & {
-  latestUpdatedAt: string
-  primaryModalityId: string
-  zoneId: string
-  zoneName: string
-}
 
 function readParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? ""
@@ -139,63 +127,11 @@ export default async function ContentPage({
   const requestedStatus = readParam(params.status)
   const status = STATUSES.has(requestedStatus) ? requestedStatus : "all"
   const requestedPage = Number.parseInt(readParam(params.page), 10)
-  let contentItems: ContentItem[] = []
+  let contentItems: ContentCatalogItem[] = []
   let loadError: string | null = null
 
   try {
-    const zonesResponse = await serverApiFetch<ZoneListResponse>(
-      "/playground/zones",
-      {
-        cache: "no-store",
-        includeCookie: false,
-        headers: buildInternalAdminHeaders(user),
-      },
-    )
-    const modalityResponses = await Promise.all(
-      zonesResponse.items.map(async (zone) => ({
-        response: await serverApiFetch<ZoneModalityFamilyListResponse>(
-          `/playground/zones/${zone.id}/modalities`,
-          {
-            cache: "no-store",
-            includeCookie: false,
-            headers: buildInternalAdminHeaders(user),
-          },
-        ),
-        zone,
-      })),
-    )
-
-    contentItems = modalityResponses
-      .flatMap(({ response, zone }) =>
-        response.items.flatMap((family) => {
-          const primaryModality = family.variants[0]
-
-          if (!primaryModality) {
-            return []
-          }
-
-          const latestUpdatedAt = family.variants.reduce(
-            (latest, variant) =>
-              variant.updatedAt.localeCompare(latest) > 0
-                ? variant.updatedAt
-                : latest,
-            primaryModality.updatedAt,
-          )
-
-          return [
-            {
-              ...family,
-              latestUpdatedAt,
-              primaryModalityId: primaryModality.id,
-              zoneId: zone.id,
-              zoneName: zone.name,
-            },
-          ]
-        }),
-      )
-      .sort((left, right) =>
-        right.latestUpdatedAt.localeCompare(left.latestUpdatedAt),
-      )
+    contentItems = await loadContentCatalog(user)
   } catch (error) {
     loadError =
       error instanceof ApiClientError
@@ -289,7 +225,17 @@ export default async function ContentPage({
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
-                      <div className="font-medium">{item.name}</div>
+                      {user.capabilities.includes("view_analytics") ? (
+                        <LinkButton
+                          className="h-auto justify-start p-0 font-medium"
+                          href={`/content/${item.primarySlug}`}
+                          variant="link"
+                        >
+                          {item.name}
+                        </LinkButton>
+                      ) : (
+                        <div className="font-medium">{item.name}</div>
+                      )}
                       <div className="mt-1 text-xs text-muted-foreground">
                         {item.modalityType.toUpperCase()} · {item.totalVariantCount}{" "}
                         {item.totalVariantCount === 1 ? "variant" : "variants"}

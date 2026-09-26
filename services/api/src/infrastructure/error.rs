@@ -15,6 +15,8 @@ pub enum AppError {
     #[error("{0}")]
     Unauthorized(String),
     #[error("{0}")]
+    RateLimited(String),
+    #[error("{0}")]
     Internal(String),
 }
 
@@ -44,6 +46,10 @@ impl AppError {
         Self::Unauthorized(message.into())
     }
 
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::RateLimited(message.into())
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal(message.into())
     }
@@ -55,6 +61,11 @@ impl IntoResponse for AppError {
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, "bad_request", message),
             Self::NotFound(message) => (StatusCode::NOT_FOUND, "not_found", message),
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, "unauthorized", message),
+            Self::RateLimited(message) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                message,
+            ),
             Self::Internal(message) => {
                 error!(message = %message, "internal application error");
                 (

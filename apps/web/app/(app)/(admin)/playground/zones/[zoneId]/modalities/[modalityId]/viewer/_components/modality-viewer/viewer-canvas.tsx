@@ -1465,6 +1465,7 @@ export function ViewerCanvas({
             annotationForm={annotationForm}
             canvasMode={canvasMode}
             editorMode={editorMode}
+            hoveredAnnotationId={hoveredAnnotationId}
             overlayOpacity={overlayOpacity}
             selectedAnnotationId={selectedAnnotationId}
             structuresById={structuresById}

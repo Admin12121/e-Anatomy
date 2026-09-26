@@ -495,7 +495,9 @@ function MprViewport({
         ?.assetId ?? null
     : null;
   const selectedAnnotationIdForViewport =
-    selectedAnnotationSourceAssetId === asset.id ? selectedAnnotationId : null;
+    asset && selectedAnnotationSourceAssetId === asset.id
+      ? selectedAnnotationId
+      : null;
   const supplementalPointerMarkers =
     !isMain &&
     !activeForEditing &&

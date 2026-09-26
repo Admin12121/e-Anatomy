@@ -8,6 +8,10 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 use crate::features::{
+    analytics::http::routes::{
+        public_routes as public_analytics_routes,
+        routes as analytics_routes,
+    },
     health::http::routes as health_routes,
     modules::http::routes as module_routes,
     playground::http::{public_routes as public_playground_routes, routes as playground_routes},
@@ -52,6 +56,8 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .nest("/api/v1/health", health_routes())
+        .nest("/api/v1/public/analytics", public_analytics_routes())
+        .nest("/api/v1/analytics", analytics_routes())
         .nest("/api/v1/modules", module_routes())
         .nest("/api/v1/public/playground", public_playground_routes())
         .nest("/api/v1/playground", playground_routes())

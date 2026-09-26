@@ -12,19 +12,21 @@ const SESSION_REFERRER_KEY = "anatomy.analytics.session-referrer"
 const PAGE_VIEW_DEDUP_KEY = "anatomy.analytics.last-page-view"
 const VISITOR_TTL_MS = 180 * 24 * 60 * 60 * 1000
 const PAGE_VIEW_DEDUP_MS = 2_000
+let volatileVisitorId: string | null = null
 
 type StoredVisitor = {
   expiresAt: number
   id: string
 }
 
-function sanitizeReferrer(value: string) {
+export function normalizeAnalyticsReferrer(value: string, siteOrigin: string) {
   if (!value) {
     return null
   }
 
   try {
     const url = new URL(value)
+    if (url.origin === siteOrigin) return null
     return `${url.origin}${url.pathname}`.slice(0, 512)
   } catch {
     return null
@@ -52,7 +54,10 @@ function getVisitorId() {
     // Storage can be unavailable in private or restricted browser contexts.
   }
 
+  if (volatileVisitorId) return volatileVisitorId
+
   const id = window.crypto.randomUUID()
+  volatileVisitorId = id
 
   try {
     window.localStorage.setItem(
@@ -70,7 +75,10 @@ function getVisitorId() {
 }
 
 function getReferrers() {
-  const currentReferrer = sanitizeReferrer(document.referrer)
+  const currentReferrer = normalizeAnalyticsReferrer(
+    document.referrer,
+    window.location.origin,
+  )
   let originalReferrer = currentReferrer
   let sessionReferrer = currentReferrer
 

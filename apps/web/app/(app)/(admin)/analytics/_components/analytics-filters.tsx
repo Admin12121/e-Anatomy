@@ -1,6 +1,6 @@
 "use client"
 
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 
 import {
   Select,
@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ANALYTICS_EVENT_NAMES } from "@/lib/analytics/events"
+import { buildAnalyticsUrl } from "@/lib/analytics/presentation"
 
 function formatEventName(value: string) {
   return value
@@ -18,38 +19,46 @@ function formatEventName(value: string) {
     .join(" ")
 }
 
+const RANGE_ITEMS = {
+  "7": "Last 7 days",
+  "30": "Last 30 days",
+  "90": "Last 90 days",
+}
+const EVENT_ITEMS = Object.fromEntries(
+  ["all", ...ANALYTICS_EVENT_NAMES].map((name) => [
+    name,
+    name === "all" ? "All events" : formatEventName(name),
+  ]),
+)
+
 export function AnalyticsFilters({
   days,
   eventName,
+  showEventFilter = false,
 }: {
   days: number
-  eventName: string
+  eventName?: string
+  showEventFilter?: boolean
 }) {
+  const pathname = usePathname()
   const router = useRouter()
 
   function navigate(next: Partial<{ days: string; event: string }>) {
-    const params = new URLSearchParams(window.location.search)
-    params.delete("page")
-
-    for (const [key, value] of Object.entries(next)) {
-      if (!value || value === "all") {
-        params.delete(key)
-      } else {
-        params.set(key, value)
-      }
-    }
-
-    const query = params.toString()
-    router.push(query ? `/analytics?${query}` : "/analytics")
+    router.push(buildAnalyticsUrl(pathname, window.location.search, next))
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[13rem_16rem_1fr]">
+    <div className="flex flex-wrap gap-3">
       <Select
+        items={RANGE_ITEMS}
         value={String(days)}
         onValueChange={(value) => navigate({ days: value ?? "30" })}
       >
-        <SelectTrigger aria-label="Analytics date range">
+        <SelectTrigger
+          aria-label="Analytics date range"
+          className="w-40"
+          size="sm"
+        >
           <SelectValue>Last {days} days</SelectValue>
         </SelectTrigger>
         <SelectPopup>
@@ -59,24 +68,33 @@ export function AnalyticsFilters({
         </SelectPopup>
       </Select>
 
-      <Select
-        value={eventName}
-        onValueChange={(value) => navigate({ event: value ?? "all" })}
-      >
-        <SelectTrigger aria-label="Filter by event name">
-          <SelectValue>
-            {eventName === "all" ? "All events" : formatEventName(eventName)}
-          </SelectValue>
-        </SelectTrigger>
-        <SelectPopup>
-          <SelectItem value="all">All events</SelectItem>
-          {ANALYTICS_EVENT_NAMES.map((name) => (
-            <SelectItem key={name} value={name}>
-              {formatEventName(name)}
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
+      {showEventFilter ? (
+        <Select
+          items={EVENT_ITEMS}
+          value={eventName ?? "all"}
+          onValueChange={(value) => navigate({ event: value ?? "all" })}
+        >
+          <SelectTrigger
+            aria-label="Filter by event name"
+            className="w-52"
+            size="sm"
+          >
+            <SelectValue>
+              {!eventName || eventName === "all"
+                ? "All events"
+                : formatEventName(eventName)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="all">All events</SelectItem>
+            {ANALYTICS_EVENT_NAMES.map((name) => (
+              <SelectItem key={name} value={name}>
+                {formatEventName(name)}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      ) : null}
     </div>
   )
 }
