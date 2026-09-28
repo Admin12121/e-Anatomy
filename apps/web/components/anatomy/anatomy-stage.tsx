@@ -2,6 +2,7 @@
 
 import {
   Suspense,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -100,6 +101,7 @@ type AnatomySceneProps = {
   hoveredLayer: HighlightableLayerId | null;
   onCreateAnchor?: (anchor: ZoneAnchor) => void;
   onHoveredLayerChange: (layer: HighlightableLayerId | null) => void;
+  onReady?: () => void;
   onZoneSelect?: (zoneId: string) => void;
   pointerTarget: MutableRefObject<PointerTarget>;
   selectedZoneId: string | null;
@@ -143,6 +145,7 @@ type AnatomyStageProps = {
   modelOffsetX?: number;
   modelOffsetY?: number;
   onCreateAnchor?: (anchor: ZoneAnchor) => void;
+  onReady?: () => void;
   onZoneSelect?: (zoneId: string) => void;
   overlay?: (hoveredLayer: HighlightableLayerId | null) => ReactNode;
   previewLayer?: HighlightableLayerId | null;
@@ -644,6 +647,7 @@ export function AnatomyStage({
   modelOffsetX = 0,
   modelOffsetY = 0,
   onCreateAnchor,
+  onReady,
   onZoneSelect,
   overlay,
   previewLayer = null,
@@ -710,6 +714,7 @@ export function AnatomyStage({
             hoveredLayer={hoveredLayer}
             onCreateAnchor={onCreateAnchor}
             onHoveredLayerChange={setHoveredLayer}
+            onReady={onReady}
             onZoneSelect={onZoneSelect}
             modelOffsetX={modelOffsetX}
             pointerTarget={pointerTarget}
@@ -735,6 +740,7 @@ function AnatomyScene({
   hoveredLayer,
   onCreateAnchor,
   onHoveredLayerChange,
+  onReady,
   onZoneSelect,
   modelOffsetX,
   pointerTarget,
@@ -786,9 +792,33 @@ function AnatomyScene({
           modelOffsetY={modelOffsetY}
           targetModelHeight={targetModelHeight}
         />
+        <AnatomySceneReady onReady={onReady} />
       </Suspense>
     </>
   );
+}
+
+function AnatomySceneReady({ onReady }: { onReady?: () => void }) {
+  const didNotifyRef = useRef(false);
+
+  useEffect(() => {
+    if (!onReady || didNotifyRef.current) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      if (didNotifyRef.current) {
+        return;
+      }
+
+      didNotifyRef.current = true;
+      onReady();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [onReady]);
+
+  return null;
 }
 
 function AnatomyAssembly({

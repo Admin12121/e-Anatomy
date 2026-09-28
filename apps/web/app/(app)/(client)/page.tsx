@@ -43,6 +43,7 @@ import {
   useGetPublicZonesQuery,
 } from "@/lib/store/services/public-playground-api";
 import ShinyText from "@/components/shiny-text";
+import { Footer } from "./_components";
 
 const loadAnatomyStage = () => import("@/components/anatomy/anatomy-stage");
 
@@ -62,6 +63,7 @@ CustomEase.create("glide", "0.8, 0, 0.2, 1");
 const PRELOADER_CRITICAL_CSS = `
 [data-preloader-shell] {
   position: relative;
+  isolation: isolate;
   min-height: 100svh;
   background: #000;
 }
@@ -80,7 +82,7 @@ const PRELOADER_CRITICAL_CSS = `
 }
 
 [data-preloader-shell] .preloader-backdrop {
-  z-index: 0;
+  z-index: 20;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -89,7 +91,7 @@ const PRELOADER_CRITICAL_CSS = `
 }
 
 [data-preloader-shell] .preloader {
-  z-index: 2;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -149,6 +151,7 @@ const PRELOADER_CRITICAL_CSS = `
 
 [data-preloader-shell] .hero {
   position: relative;
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -156,7 +159,9 @@ const PRELOADER_CRITICAL_CSS = `
   background: #000;
   color: #fff;
   text-align: center;
+  overflow: hidden;
   transform: scale(0.75);
+  transform-origin: 50% 50%;
 }
 
 [data-preloader-shell] .preloader-revealer {
@@ -299,28 +304,29 @@ export default function Page() {
     setSelectedZoneId(zoneId);
   }
 
+  const markStageReady = useCallback(() => {
+    if (stageReadyRef.current) {
+      return;
+    }
+
+    stageReadyRef.current = true;
+
+    if (pendingEngageRef.current) {
+      runExitAnimationRef.current?.();
+    }
+  }, []);
+
   useEffect(() => {
     if (preloaderMode === "checking") {
       return;
     }
 
     if (!shouldRunInitialPreloader) {
-      stageReadyRef.current = true;
+      markStageReady();
       return;
     }
 
     let cancelled = false;
-    const markStageReady = () => {
-      if (cancelled || stageReadyRef.current) {
-        return;
-      }
-
-      stageReadyRef.current = true;
-
-      if (pendingEngageRef.current) {
-        runExitAnimationRef.current?.();
-      }
-    };
     const readyFallback = window.setTimeout(
       markStageReady,
       STAGE_PRELOAD_READY_TIMEOUT_MS,
@@ -332,19 +338,26 @@ export default function Page() {
           return;
         }
 
-        const preloadPromise = module.preloadAnatomyStageAssets?.();
-        void preloadPromise?.catch(() => null);
-        markStageReady();
+        // Mount the Canvas behind the white revealer immediately.
+        startTransition(() => {
+          setIsStageActivated(true);
+        });
+
+        // Warm the GLB cache in parallel. AnatomyStage calls markStageReady only
+        // after its Suspense boundary has resolved and the scene has painted.
+        void module.preloadAnatomyStageAssets?.().catch(() => null);
       })
       .catch(() => {
-        markStageReady();
+        if (!cancelled) {
+          markStageReady();
+        }
       });
 
     return () => {
       cancelled = true;
       window.clearTimeout(readyFallback);
     };
-  }, [preloaderMode, shouldRunInitialPreloader]);
+  }, [markStageReady, preloaderMode, shouldRunInitialPreloader]);
 
   useLayoutEffect(() => {
     if (preloaderMode === "checking") {
@@ -367,6 +380,8 @@ export default function Page() {
     let introTimeline: gsap.core.Timeline | null = null;
     let preloaderReadyFallback: number | undefined;
 
+    const preloaderBackdrop =
+      page.querySelector<HTMLDivElement>(".preloader-backdrop");
     const preloader = page.querySelector<HTMLDivElement>(".preloader");
     const hero = page.querySelector<HTMLElement>(".hero");
     const heroHeading = page.querySelector<HTMLHeadingElement>(".hero h1");
@@ -386,6 +401,7 @@ export default function Page() {
     const btnOutroLabel = page.querySelector<HTMLElement>("#pbc-outro-label");
 
     if (
+      !preloaderBackdrop ||
       !preloader ||
       !hero ||
       !heroRevealer ||
@@ -417,6 +433,11 @@ export default function Page() {
         })
       : null;
 
+    gsap.set(preloaderBackdrop, {
+      clearProps: "all",
+      display: "flex",
+      zIndex: 20,
+    });
     gsap.set(preloader, {
       clearProps: "all",
       display: "flex",
@@ -471,9 +492,6 @@ export default function Page() {
         preloaderReadyFallback = undefined;
       }
 
-      startTransition(() => {
-        setIsStageActivated(true);
-      });
       exitTimeline?.kill();
       exitTimeline = gsap.timeline();
 
@@ -510,6 +528,10 @@ export default function Page() {
           },
           "-=0.75",
         )
+        // The black panel closes from right to left. The white revealer below
+        // follows almost immediately, so the already-mounted AnatomyStage is
+        // exposed inside the same centered 75% frame. The white HUD remains
+        // visible only outside that frame.
         .to(preloader, {
           clipPath: "polygon(0% 0%, 0% 0%, 0% 100%, 0% 100%)",
           duration: 1.5,
@@ -531,6 +553,9 @@ export default function Page() {
           scale: 1,
           duration: 1.25,
           ease: "hop",
+          onComplete: () => {
+            gsap.set([preloaderBackdrop, heroRevealer], { display: "none" });
+          },
         });
 
       const heroWords = page.querySelectorAll(".hero h1 .word");
@@ -684,7 +709,7 @@ export default function Page() {
 
   const heroClassName = shouldRunInitialPreloader
     ? "hero"
-    : "relative h-[100svh] w-full overflow-hidden bg-black text-white";
+    : "relative z-10 h-[100svh] w-full overflow-hidden bg-black text-white";
 
   return (
     <div
@@ -823,6 +848,7 @@ export default function Page() {
             <AnatomyStage
               backgroundColor="#141414"
               className="h-full! w-full!"
+              onReady={markStageReady}
               onZoneSelect={handleSelectZone}
               selectedZoneId={activeSelectedZoneId}
               showBackdrop={false}
@@ -1127,6 +1153,12 @@ export default function Page() {
           <div className="preloader-revealer z-10" />
         ) : null}
       </section>
+
+      {/* Keep the reveal footer in normal document flow. On desktop the
+          component intentionally overlaps the hero by one viewport and sits
+          behind it, so scrolling lifts the AnatomyStage away and reveals the
+          footer image instead of placing the footer inside the 3D canvas. */}
+      <Footer />
     </div>
   );
 }

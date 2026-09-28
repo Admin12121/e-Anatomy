@@ -1,108 +1,39 @@
-import {
-  ActivityIcon,
-  SparklesIcon,
-  UserRoundPlusIcon,
-  UsersRoundIcon,
-} from "lucide-react"
-import type { LucideIcon } from "lucide-react"
-
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Frame, FramePanel } from "@/components/ui/frame"
 import type { AnalyticsOverview } from "@/lib/analytics/metrics"
 import type { AnalyticsReport } from "@/lib/analytics/server"
 import { formatMetricComparison } from "@/lib/analytics/presentation"
 
-function ComparisonBars({
-  current,
-  previous,
-}: {
-  current: number | null
-  previous: number | null
-}) {
-  if (current === null || previous === null) {
-    return (
-      <div aria-label="Awaiting analytics data" className="flex h-10 w-24 items-end gap-1">
-        {Array.from({ length: 7 }).map((_, index) => (
-          <span
-            className="h-px flex-1 border-t border-dotted border-muted-foreground/50"
-            key={index}
-          />
-        ))}
-      </div>
-    )
-  }
-
-  const maximum = Math.max(current, previous, 1)
-  const previousHeight = Math.max(4, Math.round((previous / maximum) * 32))
-  const currentHeight = Math.max(4, Math.round((current / maximum) * 32))
-
-  return (
-    <div
-      aria-label={`Previous ${previous}, current ${current}`}
-      className="flex h-10 w-16 items-end justify-end gap-1.5"
-    >
-      <span
-        className="w-3 rounded-sm bg-muted-foreground/30"
-        style={{ height: previousHeight }}
-      />
-      <span
-        className="w-3 rounded-sm bg-primary/80"
-        style={{ height: currentHeight }}
-      />
-    </div>
-  )
-}
-
 export function AnalyticsMetricCard({
-  comparisonLabel,
-  current = null,
-  detail,
-  footer,
-  icon: Icon,
-  previous = null,
-  title,
+  label,
+  meta,
   value,
 }: {
-  comparisonLabel?: string
-  current?: number | null
-  detail: string
-  footer: string
-  icon: LucideIcon
-  previous?: number | null
-  title: string
+  label: string
+  meta: string
   value: string
 }) {
   return (
-    <Card className="min-h-44 gap-0 py-0" size="sm">
-      <CardHeader className="pt-4">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
-            {title}
-          </CardTitle>
-          <Icon className="size-4 text-muted-foreground" />
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-1 items-end justify-between gap-4 pb-4 pt-3">
-        <div className="min-w-0">
-          <div className="font-heading text-4xl font-semibold tabular-nums">
-            {value}
+    <Frame className="cursor-default outline-1 outline-offset-2 outline-neutral-300/50 transition-colors hover:outline-neutral-300 dark:outline-neutral-800/50 dark:hover:outline-neutral-700">
+      <FramePanel>
+        <div className="flex min-h-28 flex-col justify-between gap-6">
+          <div className="flex items-start justify-between gap-4">
+            <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+              {label}
+            </div>
+            <span
+              aria-hidden="true"
+              className="size-2 rounded-full bg-foreground/45 shadow-[0_0_18px_color-mix(in_srgb,var(--foreground)_24%,transparent)]"
+            />
           </div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">
-            {comparisonLabel ?? footer}
+          <div>
+            <div className="font-mono text-4xl font-semibold tracking-tight text-foreground tabular-nums sm:text-5xl">
+              {value}
+            </div>
+            <div className="mt-2 text-xs text-muted-foreground">{meta}</div>
           </div>
         </div>
-        <ComparisonBars current={current} previous={previous} />
-      </CardContent>
-      <CardFooter className="mt-auto justify-between gap-3 border-t bg-muted/25 py-3 text-muted-foreground">
-        <span className="font-medium text-foreground">{footer}</span>
-        <span className="text-right text-xs">{detail}</span>
-      </CardFooter>
-    </Card>
+      </FramePanel>
+    </Frame>
   )
 }
 
@@ -123,45 +54,27 @@ export function AnalyticsOverviewCards({
   )
   const metrics = [
     {
-      comparison: null,
-      current: collection?.uniqueVisitors ?? null,
-      detail: collection
+      label: "Visitors",
+      meta: collection
         ? `${collection.pageViews.toLocaleString()} page views`
-        : "Unique viewers",
-      footer: collection ? "Unique viewers" : "Collection not connected",
-      icon: UsersRoundIcon,
-      previous: collection ? 0 : null,
-      title: "Visitors",
+        : "Collection not connected",
       value: collection?.uniqueVisitors.toLocaleString() ?? "—",
     },
     {
-      comparison: newcomerComparison,
-      current: overview.newcomers.current,
-      detail: `Previous ${overview.rangeDays} days: ${overview.newcomers.previous.toLocaleString()}`,
-      footer: "Accounts created",
-      icon: UserRoundPlusIcon,
-      previous: overview.newcomers.previous,
-      title: "Newcomers",
+      label: "Newcomers",
+      meta: newcomerComparison.label,
       value: overview.newcomers.current.toLocaleString(),
     },
     {
-      comparison: activeComparison,
-      current: overview.activeAccounts.current,
-      detail: `Previous ${overview.rangeDays} days: ${overview.activeAccounts.previous.toLocaleString()}`,
-      footer: "Accounts with session activity",
-      icon: ActivityIcon,
-      previous: overview.activeAccounts.previous,
-      title: "Active accounts",
+      label: "Active accounts",
+      meta: activeComparison.label,
       value: overview.activeAccounts.current.toLocaleString(),
     },
     {
-      comparison: null,
-      current: collection?.engagedViews ?? null,
-      detail: "30-second threshold",
-      footer: collection ? "Engaged views" : "Collection not connected",
-      icon: SparklesIcon,
-      previous: collection ? 0 : null,
-      title: "Engagement",
+      label: "Engagement",
+      meta: collection
+        ? "30-second engagement threshold"
+        : "Collection not connected",
       value: collection?.engagedViews.toLocaleString() ?? "—",
     },
   ]
@@ -170,14 +83,9 @@ export function AnalyticsOverviewCards({
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {metrics.map((metric) => (
         <AnalyticsMetricCard
-          comparisonLabel={metric.comparison?.label}
-          current={metric.current}
-          detail={metric.detail}
-          footer={metric.footer}
-          icon={metric.icon}
-          key={metric.title}
-          previous={metric.previous}
-          title={metric.title}
+          key={metric.label}
+          label={metric.label}
+          meta={metric.meta}
           value={metric.value}
         />
       ))}

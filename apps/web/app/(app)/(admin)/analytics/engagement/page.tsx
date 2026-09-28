@@ -1,4 +1,4 @@
-import { ActivityIcon, ScanSearchIcon } from "lucide-react"
+import { ScanSearchIcon } from "lucide-react"
 
 import { AnalyticsEmptyPanel } from "../_components/analytics-empty-panel"
 import { AnalyticsFilters } from "../_components/analytics-filters"
@@ -25,12 +25,8 @@ export default async function EngagementAnalyticsPage({
       <AnalyticsFilters days={days} />
       <div className="grid gap-4 lg:grid-cols-2">
         <AnalyticsMetricCard
-          current={report.engagedViews}
-          detail="30-second threshold"
-          footer="Engaged content views"
-          icon={ActivityIcon}
-          previous={0}
-          title="Engagement"
+          label="Engagement"
+          meta="30-second engagement threshold"
           value={report.engagedViews.toLocaleString()}
         />
         <AnalyticsEmptyPanel

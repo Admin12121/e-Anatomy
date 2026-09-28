@@ -326,13 +326,6 @@ export function ProfileSettingsPanel({
 
   return (
     <Frame>
-      <FrameHeader>
-        <FrameTitle className="text-xl font-semibold">Profile</FrameTitle>
-        <p className="text-sm text-muted-foreground">
-          Manage your name, primary email address, and connected sign-in
-          providers.
-        </p>
-      </FrameHeader>
       <FramePanel className="space-y-8 pt-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
           <Avatar size="lg" className="size-16">

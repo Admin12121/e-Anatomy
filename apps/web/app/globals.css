@@ -2,6 +2,31 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+
+/* Portal legal reference fonts */
+@font-face {
+  font-family: "Rules Variable";
+  src: url("https://portal.nousresearch.com/font/Rules/RulesVariable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Rules Gothic Condensed";
+  src: url("https://portal.nousresearch.com/font/Rules/RulesGothicCnd-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Rules Gothic Compressed";
+  src: url("https://portal.nousresearch.com/font/Rules/RulesGothicCmp-Medium.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

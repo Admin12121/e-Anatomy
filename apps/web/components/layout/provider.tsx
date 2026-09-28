@@ -68,6 +68,8 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
   const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
   const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
   const isPublicViewerRoute = isPublicViewerPath(pathname)
+  const isLegalRoute = pathname === "/terms" || pathname === "/privacy"
+  const usesNativeDocumentScroll = isPublicViewerRoute || isLegalRoute
   const preloaderStateValue = useMemo(
     () => ({
       isPreloaderActive: false,
@@ -82,6 +84,7 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
       className={cn(
         "relative",
         isPublicViewerRoute && "min-h-dvh overflow-x-hidden overflow-y-auto",
+        isLegalRoute && "min-h-dvh overflow-x-hidden",
       )}
     >
       <div
@@ -89,6 +92,7 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
           "opacity-100",
           isPublicViewerRoute &&
             "h-dvh min-h-0 overflow-x-hidden overflow-y-auto dark:bg-[#171717]",
+          isLegalRoute && "min-h-dvh",
         )}
       >
         {children}
@@ -98,7 +102,7 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
 
   return (
     <PreloaderStateProvider value={preloaderStateValue}>
-      {isPublicViewerRoute ? (
+      {usesNativeDocumentScroll ? (
         content
       ) : (
         <ReactLenis root options={lenisOptions}>

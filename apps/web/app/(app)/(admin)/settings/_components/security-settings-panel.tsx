@@ -441,16 +441,6 @@ export function SecuritySettingsPanel() {
   return (
     <div className="space-y-6">
       <Frame>
-        <FrameHeader>
-          <FrameTitle className="flex items-center gap-2">
-            <KeyRound className="size-4" />
-            Change Password
-          </FrameTitle>
-          <CardDescription>
-            Change your current password, or reset it with an email code if you
-            no longer remember it.
-          </CardDescription>
-        </FrameHeader>
         <FramePanel>
           <FieldGroup>
             <Field>
@@ -626,15 +616,6 @@ export function SecuritySettingsPanel() {
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
         <Frame>
-          <FrameHeader>
-            <FrameTitle className="flex items-center gap-2">
-              <ShieldCheck className="size-4" />
-              Two-Factor Authentication
-            </FrameTitle>
-            <CardDescription>
-              Add an authenticator-app code or an email code after sign-in.
-            </CardDescription>
-          </FrameHeader>
           <FramePanel className="space-y-6">
             <div className="rounded-xl border border-border bg-muted/40 p-4 text-sm">
               <p className="font-medium">
@@ -794,15 +775,6 @@ export function SecuritySettingsPanel() {
         </Frame>
 
         <Frame>
-          <FrameHeader>
-            <FrameTitle className="flex items-center gap-2">
-              <Fingerprint className="size-4" />
-              Passkeys
-            </FrameTitle>
-            <CardDescription>
-              Register device-backed credentials for passwordless sign-in.
-            </CardDescription>
-          </FrameHeader>
           <FramePanel className="space-y-5">
             <FieldGroup>
               <Field>

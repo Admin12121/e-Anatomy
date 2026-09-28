@@ -102,31 +102,26 @@ export default async function ContentDetailPage({
 
   const metrics = [
     {
-      detail: "Event collection required",
-      footer: "Content page views",
-      icon: BarChart3Icon,
-      title: "Total views",
+      label: "Total views",
+      meta: "Content page views",
       value: report.pageViews.toLocaleString(),
     },
     {
-      detail: "Distinct visitor IDs",
-      footer: "Unique viewers",
-      icon: UsersRoundIcon,
-      title: "Unique viewers",
+      label: "Unique viewers",
+      meta: "Distinct recognized visitors",
       value: report.uniqueVisitors.toLocaleString(),
     },
     {
-      detail: "30-second threshold",
-      footer: "Engaged views",
-      icon: ActivityIcon,
-      title: "Engagement",
+      label: "Engagement",
+      meta: "30-second engagement threshold",
       value: report.engagedViews.toLocaleString(),
     },
     {
-      detail: "Insufficient history",
-      footer: "Awaiting history",
-      icon: Globe2Icon,
-      title: "Trending",
+      label: "Trending",
+      meta:
+        report.daily.length >= 2
+          ? "Recent viewing history available"
+          : "Insufficient history",
       value: report.daily.length >= 2 ? "Active" : "—",
     },
   ]
@@ -163,18 +158,15 @@ export default async function ContentDetailPage({
         </LinkButton>
       </div>
 
-      <RouteTabs items={routeTabs} value={tab} />
-
-      {tab === "overview" ? (
-        <>
+      <RouteTabs items={routeTabs} value={tab}>
+        {tab === "overview" ? (
+          <>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {metrics.map((metric) => (
               <AnalyticsMetricCard
-                detail={metric.detail}
-                footer={metric.footer}
-                icon={metric.icon}
-                key={metric.title}
-                title={metric.title}
+                key={metric.label}
+                label={metric.label}
+                meta={metric.meta}
                 value={metric.value}
               />
             ))}
@@ -212,10 +204,10 @@ export default async function ContentDetailPage({
               </FramePanel>
             </Frame>
           </div>
-        </>
-      ) : null}
+          </>
+        ) : null}
 
-      {tab === "audience" ? (
+        {tab === "audience" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           <Frame>
             <FrameHeader>
@@ -240,9 +232,9 @@ export default async function ContentDetailPage({
             />
           </Frame>
         </div>
-      ) : null}
+        ) : null}
 
-      {tab === "acquisition" ? (
+        {tab === "acquisition" ? (
         <Frame>
           <FrameHeader>
             <FrameTitle>Traffic sources</FrameTitle>
@@ -254,9 +246,9 @@ export default async function ContentDetailPage({
             title="No acquisition data yet"
           />
         </Frame>
-      ) : null}
+        ) : null}
 
-      {tab === "engagement" ? (
+        {tab === "engagement" ? (
         <div className="space-y-4">
           <Frame>
             <FrameHeader>
@@ -302,7 +294,8 @@ export default async function ContentDetailPage({
             />
           </Frame>
         </div>
-      ) : null}
+        ) : null}
+      </RouteTabs>
     </div>
   )
 }

@@ -1,13 +1,8 @@
 import Link from "next/link"
+import type { ReactNode } from "react"
 import { notFound } from "next/navigation"
 import { and, count, desc, eq, gt } from "drizzle-orm"
-import {
-  ActivityIcon,
-  ArrowLeftIcon,
-  KeyRoundIcon,
-  Link2Icon,
-  MonitorSmartphoneIcon,
-} from "lucide-react"
+import { ArrowLeftIcon } from "lucide-react"
 
 import { UserActions } from "../_components/user-actions"
 import { AnalyticsMetricCard } from "@/components/analytics/analytics-overview-cards"
@@ -156,52 +151,84 @@ export default async function UserDetailPage({
   )
   const normalizedStatus =
     userRecord.status === "active" ? "active" : "inactive"
-  const detailRows = [
-    ["User ID", userRecord.id],
-    ["Name", userRecord.name],
-    ["Email", userRecord.email],
-    ["Email verified", userRecord.emailVerified ? "Verified" : "Not verified"],
-    ["Role", getRoleLabel(normalizeRoleCode(userRecord.role))],
-    ["Status", normalizedStatus === "active" ? "Active" : "Inactive"],
-    [
-      "Two-factor authentication",
-      userRecord.twoFactorEnabled ? "Enabled" : "Disabled",
-    ],
-    ["Created", formatDateTime(userRecord.createdAt)],
-    ["Updated", formatDateTime(userRecord.updatedAt)],
-    ["Last login", formatDateTime(userRecord.lastLoginAt)],
-    ["API account ID", userRecord.apiAccountId ?? "Not linked"],
-    ["API account slug", userRecord.apiAccountSlug ?? "Not linked"],
-    ["API account name", userRecord.apiAccountName ?? "Not linked"],
-    ["API account type", userRecord.apiAccountType ?? "Not linked"],
+  const detailRows: Array<{ label: string; value: ReactNode }> = [
+    {
+      label: "User ID",
+      value: <span className="font-mono text-xs">{userRecord.id}</span>,
+    },
+    { label: "Name", value: userRecord.name },
+    { label: "Email", value: userRecord.email },
+    {
+      label: "Email verified",
+      value: (
+        <Badge variant={userRecord.emailVerified ? "success" : "secondary"}>
+          {userRecord.emailVerified ? "Verified" : "Not verified"}
+        </Badge>
+      ),
+    },
+    {
+      label: "Role",
+      value: (
+        <Badge variant="outline">
+          {getRoleLabel(normalizeRoleCode(userRecord.role))}
+        </Badge>
+      ),
+    },
+    {
+      label: "Status",
+      value: (
+        <Badge variant={normalizedStatus === "active" ? "success" : "secondary"}>
+          {normalizedStatus === "active" ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    {
+      label: "Two-factor authentication",
+      value: (
+        <Badge variant={userRecord.twoFactorEnabled ? "success" : "secondary"}>
+          {userRecord.twoFactorEnabled ? "Enabled" : "Disabled"}
+        </Badge>
+      ),
+    },
+    { label: "Created", value: formatDateTime(userRecord.createdAt) },
+    { label: "Updated", value: formatDateTime(userRecord.updatedAt) },
+    { label: "Last login", value: formatDateTime(userRecord.lastLoginAt) },
+    {
+      label: "API account ID",
+      value: userRecord.apiAccountId ?? "Not linked",
+    },
+    {
+      label: "API account slug",
+      value: userRecord.apiAccountSlug ?? "Not linked",
+    },
+    {
+      label: "API account name",
+      value: userRecord.apiAccountName ?? "Not linked",
+    },
+    {
+      label: "API account type",
+      value: userRecord.apiAccountType ?? "Not linked",
+    },
   ]
   const metrics = [
     {
-      description: `${activeSessionCount} currently active`,
-      footer: "Sign-in sessions",
-      icon: MonitorSmartphoneIcon,
-      title: "Sessions",
+      label: "Sessions",
+      meta: `${activeSessionCount} currently active`,
       value: totalSessionCount,
     },
     {
-      description: "External sign-in methods",
-      footer: "Sign-in connections",
-      icon: Link2Icon,
-      title: "Connected accounts",
+      label: "Connected accounts",
+      meta: "External sign-in methods",
       value: externalAccounts.length,
     },
     {
-      description: "Registered secure credentials",
-      footer: "Registered passkeys",
-      icon: KeyRoundIcon,
-      title: "Passkeys",
+      label: "Passkeys",
+      meta: "Registered secure credentials",
       value: passkeyItems.length,
     },
     {
-      description: formatDateTime(sessionItems[0]?.updatedAt),
-      footer: "Last account activity",
-      icon: ActivityIcon,
-      title: "Latest activity",
+      label: "Latest activity",
+      meta: formatDateTime(sessionItems[0]?.updatedAt),
       value: sessionItems.length > 0 ? "Seen" : "None",
     },
   ]
@@ -248,179 +275,187 @@ export default async function UserDetailPage({
         </div>
       </div>
 
-      <RouteTabs items={routeTabs} value={tab} />
-
-      {tab === "overview" ? (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {metrics.map((metric) => (
-              <AnalyticsMetricCard
-                detail={metric.description}
-                footer={metric.footer}
-                icon={metric.icon}
-                key={metric.title}
-                title={metric.title}
-                value={String(metric.value)}
-              />
-            ))}
-          </div>
-          <Frame>
-            <FramePanel className="grid gap-x-8 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
-              {detailRows.map(([label, value]) => (
-                <div className="min-w-0" key={label}>
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {label}
-                  </div>
-                  <div className="mt-1 break-all text-sm font-medium">
-                    {value}
-                  </div>
-                </div>
+      <RouteTabs items={routeTabs} value={tab}>
+        {tab === "overview" ? (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {metrics.map((metric) => (
+                <AnalyticsMetricCard
+                  key={metric.label}
+                  label={metric.label}
+                  meta={metric.meta}
+                  value={String(metric.value)}
+                />
               ))}
-            </FramePanel>
-          </Frame>
-        </>
-      ) : null}
+            </div>
+            <Frame>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-64">Field</TableHead>
+                    <TableHead>Value</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detailRows.map((row) => (
+                    <TableRow key={row.label}>
+                      <TableCell className="w-64 font-medium">
+                        {row.label}
+                      </TableCell>
+                      <TableCell className="whitespace-normal break-all text-muted-foreground">
+                        {row.value}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Frame>
+          </>
+        ) : null}
 
-      {tab === "sessions" ? (
-        <Frame>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Device</TableHead>
-              <TableHead>IP address</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead>Last activity</TableHead>
-              <TableHead>Expires</TableHead>
-              <TableHead>Status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sessionItems.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  className="h-24 text-center text-muted-foreground"
-                  colSpan={6}
-                >
-                  No sessions found.
-                </TableCell>
-              </TableRow>
-            ) : (
-              sessionItems.map((item) => {
-                const isActive = item.expiresAt > now
-
-                return (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-medium">
-                      {deviceLabel(item.userAgent)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {item.ipAddress ?? "Unavailable"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatDateTime(item.createdAt)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatDateTime(item.updatedAt)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatDateTime(item.expiresAt)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={isActive ? "success" : "secondary"}>
-                        {isActive ? "Active" : "Expired"}
-                      </Badge>
+        {tab === "sessions" ? (
+          <Frame>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Device</TableHead>
+                  <TableHead>IP address</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Last activity</TableHead>
+                  <TableHead>Expires</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sessionItems.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      className="h-24 text-center text-muted-foreground"
+                      colSpan={6}
+                    >
+                      No sessions found.
                     </TableCell>
                   </TableRow>
-                )
-              })
-            )}
-          </TableBody>
-        </Table>
-        </Frame>
-      ) : null}
+                ) : (
+                  sessionItems.map((item) => {
+                    const isActive = item.expiresAt > now
 
-      {tab === "security" ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-        <Frame>
-          <FrameHeader>
-            <FrameTitle>Authentication</FrameTitle>
-          </FrameHeader>
-          <FramePanel className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                Email verification
-              </div>
-              <div className="mt-1 font-medium">
-                {userRecord.emailVerified ? "Verified" : "Not verified"}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                Two-factor authentication
-              </div>
-              <div className="mt-1 font-medium">
-                {userRecord.twoFactorEnabled ? "Enabled" : "Disabled"}
-              </div>
-            </div>
-          </FramePanel>
-        </Frame>
-        <Frame>
-          <FrameHeader>
-            <FrameTitle>Sign-in methods</FrameTitle>
-          </FrameHeader>
-          <FramePanel className="space-y-3">
-            {accountItems.length === 0 && passkeyItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No sign-in methods found.
-              </p>
-            ) : null}
-            {accountItems.map((item) => (
-                <div
-                  className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
-                  key={item.id}
-                >
-                  <span className="font-medium">
-                    {providerLabel(item.providerId)}
-                  </span>
-                  <span className="text-sm text-muted-foreground">
-                    {formatDateTime(item.createdAt)}
-                  </span>
-                </div>
-              ))}
-            {passkeyItems.map((item) => (
-              <div
-                className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
-                key={item.id}
-              >
+                    return (
+                      <TableRow key={item.id}>
+                        <TableCell className="font-medium">
+                          {deviceLabel(item.userAgent)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {item.ipAddress ?? "Unavailable"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {formatDateTime(item.createdAt)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {formatDateTime(item.updatedAt)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {formatDateTime(item.expiresAt)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={isActive ? "success" : "secondary"}
+                          >
+                            {isActive ? "Active" : "Expired"}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </Frame>
+        ) : null}
+
+        {tab === "security" ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Frame>
+              <FrameHeader>
+                <FrameTitle>Authentication</FrameTitle>
+              </FrameHeader>
+              <FramePanel className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <p className="font-medium">{item.name || "Passkey"}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {item.deviceType || "Security key"}
-                  </p>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                    Email verification
+                  </div>
+                  <div className="mt-1 font-medium">
+                    {userRecord.emailVerified ? "Verified" : "Not verified"}
+                  </div>
                 </div>
-                <span className="text-sm text-muted-foreground">
-                  {formatDateTime(item.createdAt)}
-                </span>
-              </div>
-            ))}
-          </FramePanel>
-        </Frame>
-        </div>
-      ) : null}
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                    Two-factor authentication
+                  </div>
+                  <div className="mt-1 font-medium">
+                    {userRecord.twoFactorEnabled ? "Enabled" : "Disabled"}
+                  </div>
+                </div>
+              </FramePanel>
+            </Frame>
+            <Frame>
+              <FrameHeader>
+                <FrameTitle>Sign-in methods</FrameTitle>
+              </FrameHeader>
+              <FramePanel className="space-y-3">
+                {accountItems.length === 0 && passkeyItems.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No sign-in methods found.
+                  </p>
+                ) : null}
+                {accountItems.map((item) => (
+                  <div
+                    className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
+                    key={item.id}
+                  >
+                    <span className="font-medium">
+                      {providerLabel(item.providerId)}
+                    </span>
+                    <span className="text-sm text-muted-foreground">
+                      {formatDateTime(item.createdAt)}
+                    </span>
+                  </div>
+                ))}
+                {passkeyItems.map((item) => (
+                  <div
+                    className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
+                    key={item.id}
+                  >
+                    <div>
+                      <p className="font-medium">{item.name || "Passkey"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {item.deviceType || "Security key"}
+                      </p>
+                    </div>
+                    <span className="text-sm text-muted-foreground">
+                      {formatDateTime(item.createdAt)}
+                    </span>
+                  </div>
+                ))}
+              </FramePanel>
+            </Frame>
+          </div>
+        ) : null}
 
-      {tab === "activity" ? (
-        <Frame>
-          <FrameHeader>
-            <FrameTitle>Content activity</FrameTitle>
-          </FrameHeader>
-          <FramePanel>
-            <p className="text-sm text-muted-foreground">
-              Page views, structure selections, and engagement will appear here
-              after first-party event storage is enabled.
-            </p>
-          </FramePanel>
-        </Frame>
-      ) : null}
+        {tab === "activity" ? (
+          <Frame>
+            <FrameHeader>
+              <FrameTitle>Content activity</FrameTitle>
+            </FrameHeader>
+            <FramePanel>
+              <p className="text-sm text-muted-foreground">
+                Page views, structure selections, and engagement will appear
+                here after first-party event storage is enabled.
+              </p>
+            </FramePanel>
+          </Frame>
+        ) : null}
+      </RouteTabs>
     </div>
   )
 }
