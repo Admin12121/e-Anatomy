@@ -15,6 +15,8 @@ import { TransitionRouter } from "next-transition-router"
 
 import { cn } from "@/lib/utils"
 import { markNonRootClientRouteVisited } from "./preloader-session"
+import { ROUTE_TRANSITION_SETTLED_EVENT } from "./transition-events"
+import { acquireScrollLock, forceReleaseScrollLocks, setLockedScrollPosition, type ScrollLockHandle } from "./scroll-lock"
 
 gsap.registerPlugin(CustomEase)
 
@@ -32,7 +34,8 @@ const PAGE_Z_INDEX = 2147483001
 const CHROME_Z_INDEX = 2147483002
 const REVEALER_Z_INDEX = 2147483003
 
-const PUBLIC_STATIC_ROUTES = new Set(["/", "/account", "/login"])
+const LEGAL_ROUTES = new Set(["/terms", "/privacy", "/about"])
+const PUBLIC_STATIC_ROUTES = new Set(["/", "/account", "/login", ...LEGAL_ROUTES])
 const ADMIN_ROUTE_SEGMENTS = new Set([
   "analytics",
   "content",
@@ -72,7 +75,25 @@ function shouldAnimateRouteTransition(
   from: string | undefined,
   to: string | undefined,
 ) {
-  return isPublicAnimatedRoute(from) && isPublicAnimatedRoute(to)
+  const fromPath = normalizeRoutePath(from)
+  const toPath = normalizeRoutePath(to)
+
+  if (!fromPath || !toPath || fromPath === toPath) {
+    return false
+  }
+
+  const fromLegal = LEGAL_ROUTES.has(fromPath)
+  const toLegal = LEGAL_ROUTES.has(toPath)
+
+  // Legal pages are one application surface. Moving between Terms, Privacy,
+  // and About should be immediate and should never acquire the full-page
+  // transition scroll lock. Only crossings between Home and that legal
+  // surface use the cinematic route transition.
+  if (fromLegal || toLegal) {
+    return (fromPath === "/" && toLegal) || (fromLegal && toPath === "/")
+  }
+
+  return isPublicAnimatedRoute(fromPath) && isPublicAnimatedRoute(toPath)
 }
 
 const BACKDROP_ROWS = [
@@ -101,6 +122,7 @@ const BACKDROP_ROWS = [
 
 type TransitionRefs = {
   backdrop: HTMLDivElement
+  stage: HTMLDivElement
   chrome: HTMLDivElement
   labelLine: HTMLSpanElement
   outroLine: HTMLSpanElement
@@ -271,6 +293,7 @@ function TransitionChrome({
 
 export default function TransitionProvider({ children }: TransitionProviderProps) {
   const pathname = usePathname()
+  const stageRef = useRef<HTMLDivElement | null>(null)
   const pageRef = useRef<HTMLDivElement | null>(null)
   const backdropRef = useRef<HTMLDivElement | null>(null)
   const chromeRef = useRef<HTMLDivElement | null>(null)
@@ -282,12 +305,11 @@ export default function TransitionProvider({ children }: TransitionProviderProps
   const progressRef = useRef<SVGCircleElement | null>(null)
   const timelineRef = useRef<gsap.core.Timeline | null>(null)
   const isTransitionActiveRef = useRef(false)
-  const scrollLockRef = useRef<{
-    bodyOverflow: string
-    htmlOverflow: string
-  } | null>(null)
+  const scrollLockRef = useRef<ScrollLockHandle | null>(null)
+  const transitionOriginRef = useRef({ x: 0, y: 0 })
 
   const getRefs = useCallback((): TransitionRefs | null => {
+    const stage = stageRef.current
     const page = pageRef.current
     const backdrop = backdropRef.current
     const chrome = chromeRef.current
@@ -299,6 +321,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
     const progress = progressRef.current
 
     if (
+      !stage ||
       !page ||
       !backdrop ||
       !chrome ||
@@ -314,6 +337,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
 
     return {
       backdrop,
+      stage,
       chrome,
       labelLine,
       outroLine,
@@ -327,73 +351,159 @@ export default function TransitionProvider({ children }: TransitionProviderProps
 
   const lockScroll = useCallback(() => {
     if (scrollLockRef.current) {
-      return
+      return scrollLockRef.current
     }
 
-    scrollLockRef.current = {
-      bodyOverflow: document.body.style.overflow,
-      htmlOverflow: document.documentElement.style.overflow,
+    const scrollLock = acquireScrollLock()
+    transitionOriginRef.current = {
+      x: scrollLock.initialX,
+      y: scrollLock.initialY,
     }
-    document.body.style.overflow = "hidden"
-    document.documentElement.style.overflow = "hidden"
+    scrollLockRef.current = scrollLock
+
+    return scrollLock
   }, [])
 
-  const unlockScroll = useCallback(() => {
+  const unlockScroll = useCallback((x?: number, y?: number) => {
     const scrollLock = scrollLockRef.current
 
     if (!scrollLock) {
       return
     }
 
-    document.body.style.overflow = scrollLock.bodyOverflow
-    document.documentElement.style.overflow = scrollLock.htmlOverflow
     scrollLockRef.current = null
+    scrollLock.release({
+      x: x ?? transitionOriginRef.current.x,
+      y: y ?? transitionOriginRef.current.y,
+    })
   }, [])
 
-  const setPageShell = useCallback((page: HTMLDivElement) => {
-    gsap.set(page, {
-      clipPath: FULL_CLIP,
+  const pinStage = useCallback((refs: TransitionRefs, scrollY: number) => {
+    gsap.set(refs.stage, {
+      backgroundColor: "#000",
+      height: "100dvh",
+      inset: 0,
       isolation: "isolate",
       overflow: "hidden",
-      position: "relative",
+      pointerEvents: "none",
+      position: "fixed",
       scale: 1,
       transformOrigin: "50% 50%",
-      willChange: "transform, clip-path",
+      width: "100vw",
+      willChange: "transform",
       zIndex: PAGE_Z_INDEX,
+    })
+    gsap.set(refs.page, {
+      left: 0,
+      minHeight: "100%",
+      overflow: "visible",
+      position: "absolute",
+      top: -scrollY,
+      width: "100%",
     })
   }, [])
 
-  const resetTransition = useCallback(() => {
-    const refs = getRefs()
+  const unpinStage = useCallback((refs: TransitionRefs) => {
+    // Defensive cleanup for interrupted transitions. The legal pages use an
+    // internal scroll container, so a stale pointer-events/position style on
+    // this persistent wrapper makes them look correct but completely blocks
+    // scrolling and interaction. Clear with GSAP and then directly remove the
+    // properties as a browser-level failsafe.
+    refs.page.inert = false
+    refs.page.removeAttribute("inert")
+    gsap.killTweensOf([refs.stage, refs.page])
+    gsap.set(refs.page, {
+      clearProps: "left,minHeight,overflow,position,top,width",
+    })
+    gsap.set(refs.stage, {
+      clearProps:
+        "backgroundColor,height,inset,isolation,overflow,pointerEvents,position,transform,transformOrigin,width,willChange,zIndex",
+    })
 
-    timelineRef.current?.kill()
-    timelineRef.current = null
-    isTransitionActiveRef.current = false
-    unlockScroll()
-
-    if (!refs) {
-      return
+    for (const property of [
+      "left",
+      "min-height",
+      "overflow",
+      "position",
+      "top",
+      "width",
+    ]) {
+      refs.page.style.removeProperty(property)
     }
 
-    gsap.set(refs.page, {
-      clearProps:
-        "clipPath,isolation,overflow,position,transform,willChange,zIndex",
-    })
-    gsap.set(refs.chrome, {
-      autoAlpha: 0,
-      clearProps: "clipPath,transform,willChange",
-      display: "none",
-    })
-    gsap.set(refs.backdrop, {
-      autoAlpha: 0,
-      display: "none",
-    })
-    gsap.set(refs.revealer, {
-      autoAlpha: 0,
-      clipPath: FULL_CLIP,
-      display: "none",
-    })
-  }, [getRefs, unlockScroll])
+    for (const property of [
+      "background-color",
+      "height",
+      "inset",
+      "isolation",
+      "overflow",
+      "pointer-events",
+      "position",
+      "transform",
+      "transform-origin",
+      "width",
+      "will-change",
+      "z-index",
+    ]) {
+      refs.stage.style.removeProperty(property)
+    }
+  }, [])
+
+  const resetTransition = useCallback(
+    (
+      destination?: { x: number; y: number },
+      notifySettled = false,
+    ) => {
+      const refs = getRefs()
+
+      timelineRef.current?.kill()
+      timelineRef.current = null
+      isTransitionActiveRef.current = false
+
+      if (refs) {
+        unpinStage(refs)
+        gsap.set(refs.chrome, {
+          autoAlpha: 0,
+          clearProps: "clipPath,transform,willChange",
+          display: "none",
+        })
+        gsap.set(refs.backdrop, {
+          autoAlpha: 0,
+          display: "none",
+        })
+        gsap.set(refs.revealer, {
+          autoAlpha: 0,
+          clipPath: FULL_CLIP,
+          display: "none",
+        })
+      }
+
+      unlockScroll(destination?.x, destination?.y)
+
+      // A public route transition never overlaps the first-load home
+      // preloader. If the transition was interrupted during a route swap and
+      // a stale lock survived, clear it here so Lenis cannot remain stopped
+      // after returning from Terms/Privacy to the home page.
+      if (document.documentElement.dataset.scrollLocked === "true") {
+        forceReleaseScrollLocks({
+          x: destination?.x ?? transitionOriginRef.current.x,
+          y: destination?.y ?? transitionOriginRef.current.y,
+        })
+      }
+
+      if (notifySettled) {
+        // The destination page can mount while the transition stage is fixed
+        // and removed from normal document flow. Consumers such as the reveal
+        // footer must measure only after that geometry has been restored.
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            window.dispatchEvent(new Event(ROUTE_TRANSITION_SETTLED_EVENT))
+          })
+        })
+      }
+    },
+    [getRefs, unlockScroll, unpinStage],
+  )
 
   const handleLeave = useCallback(
     (next: () => void, from?: string, to?: string) => {
@@ -414,23 +524,16 @@ export default function TransitionProvider({ children }: TransitionProviderProps
       }
 
       const pathLength = refs.track.getTotalLength()
+      const scrollLock = lockScroll()
 
       timelineRef.current?.kill()
       isTransitionActiveRef.current = true
-      lockScroll()
+      pinStage(refs, scrollLock.initialY)
       gsap.set(refs.backdrop, {
         autoAlpha: 1,
         display: "flex",
       })
-      gsap.set(refs.page, {
-        isolation: "isolate",
-        overflow: "hidden",
-        position: "relative",
-        scale: 1,
-        transformOrigin: "50% 50%",
-        willChange: "transform",
-        zIndex: PAGE_Z_INDEX,
-      })
+      gsap.set(refs.stage, { scale: 1 })
       gsap.set(refs.chrome, {
         autoAlpha: 1,
         clipPath: FULL_CLIP,
@@ -464,7 +567,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
 
       timelineRef.current = timeline
       timeline
-        .to([refs.page, refs.chrome], {
+        .to([refs.stage, refs.chrome], {
           scale: 0.75,
           duration: 1.25,
           ease: "route-transition-hop",
@@ -501,7 +604,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
         timeline.kill()
       }
     },
-    [getRefs, lockScroll, resetTransition],
+    [getRefs, lockScroll, pinStage, resetTransition],
   )
 
   const handleEnter = useCallback(
@@ -515,11 +618,13 @@ export default function TransitionProvider({ children }: TransitionProviderProps
       }
 
       timelineRef.current?.kill()
-      setPageShell(refs.page)
 
-      gsap.set(refs.page, {
-        scale: 0.75,
-      })
+      // The transition stage is already pinned to the viewport. Reset the
+      // destination document behind the opaque chrome so no visible jump can
+      // occur, then reveal the new route from its real top position.
+      setLockedScrollPosition(0, 0)
+      gsap.set(refs.page, { top: 0 })
+      gsap.set(refs.stage, { scale: 0.75 })
       gsap.set(refs.backdrop, {
         autoAlpha: 1,
         display: "flex",
@@ -540,7 +645,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
 
       const timeline = gsap.timeline({
         onComplete: () => {
-          resetTransition()
+          resetTransition({ x: 0, y: 0 }, true)
           next()
         },
       })
@@ -564,7 +669,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
           },
           "-=1.45",
         )
-        .to(refs.page, {
+        .to(refs.stage, {
           scale: 1,
           duration: 1.25,
           ease: "route-transition-hop",
@@ -574,7 +679,7 @@ export default function TransitionProvider({ children }: TransitionProviderProps
         timeline.kill()
       }
     },
-    [getRefs, resetTransition, setPageShell],
+    [getRefs, resetTransition],
   )
 
   useEffect(() => {
@@ -591,8 +696,10 @@ export default function TransitionProvider({ children }: TransitionProviderProps
 
   return (
     <TransitionRouter auto enter={handleEnter} leave={handleLeave}>
-      <div ref={pageRef} data-route-transition-page="">
-        {children}
+      <div ref={stageRef} data-route-transition-stage="" className="relative">
+        <div ref={pageRef} data-route-transition-page="">
+          {children}
+        </div>
         <div
           ref={revealerRef}
           data-route-transition-revealer=""

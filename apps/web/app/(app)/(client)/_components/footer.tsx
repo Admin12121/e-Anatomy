@@ -2,6 +2,7 @@
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
+import { ROUTE_TRANSITION_SETTLED_EVENT } from "@/components/layout/transition-events";
 
 export type RevealFooterLink = {
   label: ReactNode;
@@ -58,7 +59,7 @@ const defaultColumns: RevealFooterColumn[] = [
     links: [
       { label: "Create account", href: "/login" },
       { label: "Sign in", href: "/login" },
-      { label: "About us", href: "/aboutus" },
+      { label: "About us", href: "/about" },
       {
         label: "Plans",
         href: "#soon",
@@ -88,11 +89,11 @@ function useFooterReveal(
     const root = rootRef.current;
     if (!root) return;
 
+    const readDocumentLimit = (height = window.innerHeight) =>
+      Math.max(1, document.documentElement.scrollHeight - height);
+
     let viewportHeight = window.innerHeight;
-    let documentLimit = Math.max(
-      1,
-      document.documentElement.scrollHeight - viewportHeight,
-    );
+    let documentLimit = readDocumentLimit(viewportHeight);
     let naturalTop = 0;
     let overlap = 0;
     let targetScroll = window.scrollY;
@@ -150,17 +151,11 @@ function useFooterReveal(
       raf = window.requestAnimationFrame(tick);
     };
 
-    const requestTick = () => {
-      targetScroll = window.scrollY;
-      if (!raf) raf = window.requestAnimationFrame(tick);
-    };
-
     const measure = () => {
+      if (disposed) return;
+
       viewportHeight = window.innerHeight;
-      documentLimit = Math.max(
-        1,
-        document.documentElement.scrollHeight - viewportHeight,
-      );
+      documentLimit = readDocumentLimit(viewportHeight);
       const marginTop =
         Number.parseFloat(window.getComputedStyle(root).marginTop) || 0;
       overlap = Math.max(0, -marginTop);
@@ -170,11 +165,38 @@ function useFooterReveal(
       update(animatedScroll);
     };
 
+    const requestTick = () => {
+      // The footer can mount while the route-transition stage is fixed and
+      // therefore outside normal document flow. Once the stage is unpinned,
+      // scrollHeight changes without necessarily producing a resize event.
+      // Detect that geometry change before using stale reveal measurements.
+      const nextLimit = readDocumentLimit();
+      if (Math.abs(nextLimit - documentLimit) > 1) {
+        measure();
+        return;
+      }
+
+      targetScroll = window.scrollY;
+      if (!raf) raf = window.requestAnimationFrame(tick);
+    };
+
     const onResize = () => window.requestAnimationFrame(measure);
+    const onTransitionSettled = () => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(measure);
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      window.requestAnimationFrame(measure);
+    });
 
     measure();
+    resizeObserver.observe(root);
+    resizeObserver.observe(document.body);
     window.addEventListener("scroll", requestTick, { passive: true });
     window.addEventListener("resize", onResize);
+    window.addEventListener(ROUTE_TRANSITION_SETTLED_EVENT, onTransitionSettled);
     document.fonts?.ready.then(() => !disposed && measure());
 
     const image = root.querySelector<HTMLImageElement>("[data-footer-hero-image]");
@@ -185,8 +207,10 @@ function useFooterReveal(
     return () => {
       disposed = true;
       if (raf) window.cancelAnimationFrame(raf);
+      resizeObserver.disconnect();
       window.removeEventListener("scroll", requestTick);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener(ROUTE_TRANSITION_SETTLED_EVENT, onTransitionSettled);
       image?.removeEventListener("load", measure);
     };
   }, [animationLerp, liftDecay, revealRangeVh, revealStartVh, rootRef]);
@@ -431,7 +455,8 @@ export function Footer({
               className="absolute inset-0 block h-full w-full select-none object-cover object-top [-webkit-user-drag:none]"
               decoding="async"
               draggable={false}
-              loading="lazy"
+              fetchPriority="high"
+              loading="eager"
               src={heroImageSrc}
             />
             <div

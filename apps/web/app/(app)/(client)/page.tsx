@@ -43,6 +43,7 @@ import {
   useGetPublicZonesQuery,
 } from "@/lib/store/services/public-playground-api";
 import ShinyText from "@/components/shiny-text";
+import { acquireScrollLock, setLockedScrollPosition } from "@/components/layout/scroll-lock";
 import { Footer } from "./_components";
 
 const loadAnatomyStage = () => import("@/components/anatomy/anatomy-stage");
@@ -416,6 +417,24 @@ export default function Page() {
       return;
     }
 
+    // Freeze scrolling at the document level for the entire preloader. The
+    // full-screen preloader is already covering the viewport, so normalize the
+    // hidden document to the real hero position without exposing a visible
+    // scroll-to-top jump. This also prevents browser scroll restoration or
+    // Lenis momentum from moving the footer underneath the 75% reveal frame.
+    const scrollLock = acquireScrollLock();
+    setLockedScrollPosition(0, 0);
+
+    let scrollLockReleased = false;
+    const releasePreloaderScroll = () => {
+      if (scrollLockReleased) {
+        return;
+      }
+
+      scrollLockReleased = true;
+      scrollLock.release({ x: 0, y: 0 });
+    };
+
     const svgPathLength = btnOutlineTrack.getTotalLength();
     const preloaderSplits = Array.from(preloaderTexts).map(
       (paragraph) =>
@@ -446,6 +465,7 @@ export default function Page() {
     });
     gsap.set(hero, {
       clearProps: "all",
+      pointerEvents: "none",
       scale: 0.75,
     });
     gsap.set(heroRevealer, {
@@ -555,6 +575,8 @@ export default function Page() {
           ease: "hop",
           onComplete: () => {
             gsap.set([preloaderBackdrop, heroRevealer], { display: "none" });
+            gsap.set(hero, { pointerEvents: "auto" });
+            releasePreloaderScroll();
           },
         });
 
@@ -702,6 +724,7 @@ export default function Page() {
       }
       introTimeline?.kill();
       exitTimeline?.kill();
+      releasePreloaderScroll();
       heroSplit?.revert();
       preloaderSplits.forEach((split) => split.revert());
     };

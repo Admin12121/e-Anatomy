@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type WheelEvent } from "react";
 
 import { cn } from "@/lib/utils";
 
-type LegalKind = "terms" | "privacy";
+type LegalKind = "about" | "terms" | "privacy";
 
 type PortalLegalShellProps = {
   kind: LegalKind;
@@ -24,6 +24,13 @@ const TermsIcon = () => (
 const PrivacyIcon = () => (
   <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor">
     <path d="M4 2h16v2H4zM2 4h2v10H2zm18 0h2v10h-2zM4 14h2v2H4zm2 2h2v2H6zm4 4h4v2h-4zm10-6h-2v2h2zm-2 2h-2v2h2zm-2 2h-2v2h2zm-6 0H8v2h2z" />
+  </svg>
+);
+
+
+const AboutIcon = () => (
+  <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M10 2h4v2h-4zM8 4h8v2H8zM6 6h12v12H6zM8 8v8h8V8zm3 1h2v2h-2zm0 4h2v3h-2zM8 18h8v2H8zM10 20h4v2h-4z" />
   </svg>
 );
 
@@ -193,13 +200,12 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
+    // Legal pages own their scroll position inside `mainRef`. Never move the
+    // document itself here: doing so fights the home/legal transition lock and
+    // can leave the persistent route wrapper in a stale state.
     const frame = window.requestAnimationFrame(() => {
       mainRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       setContentScrolled(false);
-
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
     });
 
     return () => window.cancelAnimationFrame(frame);
@@ -228,6 +234,16 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
       // Local storage is optional; keep the expanded default when unavailable.
     }
   }, []);
+
+  const handleSidebarWheel = (event: WheelEvent<HTMLElement>) => {
+    const main = mainRef.current;
+    if (!main || event.deltaY === 0) return;
+
+    // The sidebar is intentionally fixed. Forward wheel input from it to the
+    // legal content so the page still feels scrollable no matter where the
+    // pointer is, while only the right-hand content actually moves.
+    main.scrollBy({ top: event.deltaY, left: 0, behavior: "auto" });
+  };
 
   const toggleSidebar = () => {
     setCollapsed((value) => {
@@ -282,6 +298,7 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
           >
             <aside
               aria-label="Legal navigation"
+              onWheel={handleSidebarWheel}
               className={cn(
                 "group/sidebar fixed bottom-[5px] left-[5px] top-[5px] z-[100] hidden flex-col overflow-hidden bg-[#000061] text-[#f2f2f2] transition-[width] duration-200 ease-out dark:bg-[#000030] lg:flex",
                 collapsed ? "w-[72px]" : "w-[320px]",
@@ -365,6 +382,7 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
 
                 <nav
                   aria-label="Legal pages"
+                  data-lenis-prevent=""
                   className="flex min-h-0 flex-1 flex-col gap-[7px] overflow-x-hidden overflow-y-auto overscroll-contain px-5 pb-5 pt-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                 >
                   <LegalNavItem
@@ -380,6 +398,13 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
                     href="/privacy"
                     icon={<PrivacyIcon />}
                     label="Privacy"
+                  />
+                  <LegalNavItem
+                    active={kind === "about"}
+                    collapsed={collapsed}
+                    href="/about"
+                    icon={<AboutIcon />}
+                    label="About Us"
                   />
                 </nav>
 
@@ -417,6 +442,7 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
 
               <div
                 className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-[var(--inner-offset)] pb-[calc(var(--inner-offset)+calc(76*var(--u)))] pt-[var(--space-24)] [scrollbar-gutter:stable] max-[500px]:px-[max(16px,var(--inner-offset))] lg:pb-[calc(var(--inner-offset)+24px)]"
+                data-lenis-prevent=""
                 id="legal-main"
                 onScroll={(event) => setContentScrolled(event.currentTarget.scrollTop > 1)}
                 ref={mainRef}
@@ -479,6 +505,7 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
               </div>
 
               <div
+                data-lenis-prevent=""
                 className={cn(
                   "flex min-h-0 flex-1 flex-col gap-[calc(7*var(--u))] overflow-y-auto overscroll-contain px-[5px] pb-[calc(20*var(--u))] pt-[calc(11*var(--u))] transition-opacity duration-200",
                   mobileNavOpen ? "opacity-100 delay-100" : "opacity-0",
@@ -509,6 +536,20 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
                 >
                   <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full"><PrivacyIcon /></span>
                   <span>Privacy</span>
+                  <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
+                </Link>
+
+                <Link
+                  aria-current={kind === "about" ? "page" : undefined}
+                  className={cn(
+                    "relative flex min-h-[44px] items-center gap-4 px-5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline [font-variation-settings:'wdth'_50]",
+                    kind === "about" && "before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-current",
+                  )}
+                  href="/about"
+                  onClick={() => setMobileNavOpen(false)}
+                >
+                  <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full"><AboutIcon /></span>
+                  <span>About Us</span>
                   <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
                 </Link>
               </div>

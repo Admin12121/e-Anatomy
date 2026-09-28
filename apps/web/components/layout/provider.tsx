@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { ReactNode } from "react"
 import type { LenisOptions } from "lenis"
-import { ReactLenis } from "lenis/react"
+import { ReactLenis, useLenis } from "lenis/react"
 import { usePathname } from "next/navigation"
 
 import {
@@ -11,6 +11,7 @@ import {
   type PreloaderStartMode,
 } from "./preloader-state"
 import { cn } from "@/lib/utils"
+import { SCROLL_LOCK_EVENT } from "./scroll-lock"
 
 type LayoutProviderProps = {
   children: ReactNode
@@ -45,6 +46,34 @@ const LENIS_DESKTOP = {
   lerp: 0.1,
 } satisfies LenisOptions
 
+
+function LenisScrollGate({ enabled }: { enabled: boolean }) {
+  const lenis = useLenis()
+
+  useEffect(() => {
+    const sync = () => {
+      const transitionLocked =
+        document.documentElement.dataset.scrollLocked === "true"
+
+      if (!enabled || transitionLocked) {
+        lenis?.stop()
+        return
+      }
+
+      lenis?.start()
+    }
+
+    sync()
+    window.addEventListener(SCROLL_LOCK_EVENT, sync)
+
+    return () => {
+      window.removeEventListener(SCROLL_LOCK_EVENT, sync)
+    }
+  }, [enabled, lenis])
+
+  return null
+}
+
 function isPublicViewerPath(pathname: string) {
   const segments = pathname.split("/").filter(Boolean)
 
@@ -68,7 +97,7 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
   const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
   const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
   const isPublicViewerRoute = isPublicViewerPath(pathname)
-  const isLegalRoute = pathname === "/terms" || pathname === "/privacy"
+  const isLegalRoute = pathname === "/terms" || pathname === "/privacy" || pathname === "/about"
   const usesNativeDocumentScroll = isPublicViewerRoute || isLegalRoute
   const preloaderStateValue = useMemo(
     () => ({
@@ -102,13 +131,10 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
 
   return (
     <PreloaderStateProvider value={preloaderStateValue}>
-      {usesNativeDocumentScroll ? (
-        content
-      ) : (
-        <ReactLenis root options={lenisOptions}>
-          {content}
-        </ReactLenis>
-      )}
+      <ReactLenis root options={lenisOptions}>
+        <LenisScrollGate enabled={!usesNativeDocumentScroll} />
+        {content}
+      </ReactLenis>
     </PreloaderStateProvider>
   )
 }
