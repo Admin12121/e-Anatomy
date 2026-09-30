@@ -25,6 +25,7 @@ struct ContentContext {
     content_id: Uuid,
     modality_id: Uuid,
     zone_id: Uuid,
+    structure_id: Option<Uuid>,
 }
 
 impl AnalyticsService {
@@ -78,6 +79,22 @@ impl AnalyticsService {
         } else {
             None
         };
+
+        if supplied_modality_id.is_some() && context.is_none() {
+            return Err(AppError::bad_request("Analytics modality not found"));
+        }
+        let structure_id = input
+            .property_uuid("structureId")
+            .or_else(|| context.as_ref().and_then(|value| value.structure_id));
+        if let Some(id) = structure_id {
+            let matches: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM anatomy_structures WHERE id=$1 AND modality_id=$2)")
+                .bind(id).bind(context.as_ref().map(|value| value.modality_id)).fetch_one(&self.pool).await?;
+            if !matches {
+                return Err(AppError::bad_request(
+                    "Analytics label does not match the modality",
+                ));
+            }
+        }
 
         if let (Some(expected), Some(supplied)) = (
             context.as_ref().map(|value| value.content_id),
@@ -141,7 +158,7 @@ impl AnalyticsService {
                 .map(|value| value.modality_id)
                 .or(supplied_modality_id),
         )
-        .bind(input.property_uuid("structureId"))
+        .bind(structure_id)
         .bind(
             context
                 .as_ref()
@@ -342,7 +359,7 @@ impl AnalyticsService {
         Ok(sqlx::query_as::<_, ContentContext>(
             r#"
             SELECT zone.account_id, modality.family_id AS content_id,
-                   modality.id AS modality_id, zone.id AS zone_id
+                   modality.id AS modality_id, zone.id AS zone_id, NULL::uuid AS structure_id
             FROM anatomy_zone_modalities AS modality
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
             WHERE modality.id = $1
@@ -365,6 +382,17 @@ impl AnalyticsService {
             .trim_matches('/')
             .split('/')
             .collect::<Vec<_>>();
+        if segments.first() == Some(&"structures") && matches!(segments.len(), 3 | 4) {
+            return Ok(sqlx::query_as::<_, ContentContext>(r#"
+                SELECT z.account_id, f.id AS content_id, m.id AS modality_id, z.id AS zone_id, s.id AS structure_id
+                FROM anatomy_zone_modality_families f JOIN anatomy_zones z ON z.id=f.zone_id
+                JOIN LATERAL (SELECT id FROM anatomy_zone_modalities WHERE family_id=f.id
+                    ORDER BY (id=f.primary_modality_id) DESC NULLS LAST, (processing_status='ready') DESC, created_at, id LIMIT 1) m ON true
+                LEFT JOIN anatomy_structures s ON s.modality_id=m.id AND s.slug=$3
+                WHERE z.slug=$1 AND f.slug=$2 AND ($3::text IS NULL OR s.id IS NOT NULL)
+                LIMIT 1
+            "#).bind(segments[1]).bind(segments[2]).bind(segments.get(3).copied()).fetch_optional(&self.pool).await?);
+        }
         if segments.len() != 2 {
             return Ok(None);
         }
@@ -372,7 +400,7 @@ impl AnalyticsService {
         Ok(sqlx::query_as::<_, ContentContext>(
             r#"
             SELECT zone.account_id, modality.family_id AS content_id,
-                   modality.id AS modality_id, zone.id AS zone_id
+                   modality.id AS modality_id, zone.id AS zone_id, NULL::uuid AS structure_id
             FROM anatomy_zone_modalities AS modality
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
             WHERE zone.slug = $1 AND modality.slug = $2

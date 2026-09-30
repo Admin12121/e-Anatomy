@@ -169,9 +169,14 @@ export function AnnotationNoteCard({
       }}
       onPointerEnter={(event) => onHoverChange(true, event.pointerType)}
       onPointerLeave={(event) => onHoverChange(false, event.pointerType)}
-      onClick={(event) => {
+      onPointerDown={(event) => {
+        if (!event.isPrimary || event.button !== 0) {
+          return;
+        }
+
+        event.preventDefault();
         event.stopPropagation();
-        onSelect();
+        window.setTimeout(onSelect, 0);
       }}
     >
       {geometry.vertical === "below" ? (

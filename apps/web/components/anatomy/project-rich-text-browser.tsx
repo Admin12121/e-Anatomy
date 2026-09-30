@@ -55,6 +55,15 @@ function blockHasContent(block: PartialBlock | undefined): boolean {
     return false;
   }
 
+  if (
+    block.props &&
+    "url" in block.props &&
+    typeof block.props.url === "string" &&
+    block.props.url.trim()
+  ) {
+    return true;
+  }
+
   if (inlineContentHasText(block.content)) {
     return true;
   }
@@ -113,7 +122,7 @@ function parseStoredDocument(
     const parsed = JSON.parse(value);
 
     if (Array.isArray(parsed)) {
-      return parsed as PartialBlock[];
+      return parsed.length ? (parsed as PartialBlock[]) : EMPTY_DOCUMENT;
     }
   } catch {
     // Legacy support: fallback to paragraph blocks from plain text markdown.
@@ -138,6 +147,8 @@ function getEditorTheme(resolvedTheme: string | undefined) {
 }
 
 export type ProjectRichTextProps = {
+  disabled?: boolean;
+  storageFormat?: "markdown" | "json";
   value: string | null | undefined;
   title?: string;
   className?: string;
@@ -145,6 +156,8 @@ export type ProjectRichTextProps = {
 };
 
 export function ProjectRichTextEditorBrowser({
+  disabled = false,
+  storageFormat = "markdown",
   value,
   title,
   onChange,
@@ -198,7 +211,7 @@ export function ProjectRichTextEditorBrowser({
         const parsed = JSON.parse(incomingValue);
 
         if (Array.isArray(parsed)) {
-          nextBlocks = parsed as PartialBlock[];
+          nextBlocks = parsed.length ? (parsed as PartialBlock[]) : EMPTY_DOCUMENT;
         } else {
           const markdownBlocks = editor.tryParseMarkdownToBlocks(incomingValue);
           nextBlocks =
@@ -217,7 +230,12 @@ export function ProjectRichTextEditorBrowser({
 
     editor.replaceBlocks(editor.document, nextBlocks);
     lastAppliedExternalValueRef.current = incomingValue;
-  }, [editor, title, value]);
+    if (storageFormat === "json") {
+      const serialized = JSON.stringify(editor.document);
+      lastEmittedValueRef.current = serialized;
+      onChange(serialized);
+    }
+  }, [editor, title, value, storageFormat, onChange]);
 
   return (
     <div
@@ -254,17 +272,21 @@ export function ProjectRichTextEditorBrowser({
         <BlockNoteView
           editor={editor}
           theme={theme}
+          editable={!disabled}
           sideMenu={false}
           slashMenu={false}
           emojiPicker={false}
-          formattingToolbar={true}
-          linkToolbar={true}
-          filePanel={true}
-          tableHandles={true}
+          formattingToolbar={!disabled}
+          linkToolbar={!disabled}
+          filePanel={!disabled}
+          tableHandles={!disabled}
           onChange={(currentEditor) => {
-            const nextValue = documentHasContent(currentEditor.document)
-              ? currentEditor.blocksToMarkdownLossy(currentEditor.document).trim()
-              : "";
+            const nextValue =
+              storageFormat === "json"
+                ? JSON.stringify(currentEditor.document)
+                : documentHasContent(currentEditor.document)
+                  ? currentEditor.blocksToMarkdownLossy(currentEditor.document).trim()
+                  : "";
             lastEmittedValueRef.current = nextValue;
             onChange(nextValue);
           }}
@@ -302,6 +324,17 @@ export function ProjectRichTextViewerBrowser({
     [initialContent],
   );
   const theme = getEditorTheme(resolvedTheme);
+
+  useEffect(() => {
+    if (!value?.trim()) return;
+    try {
+      if (Array.isArray(JSON.parse(value))) return;
+    } catch {
+      // Legacy Markdown is parsed by the editor, not displayed as plain text.
+    }
+    const blocks = editor.tryParseMarkdownToBlocks(value);
+    editor.replaceBlocks(editor.document, blocks.length ? blocks : EMPTY_DOCUMENT);
+  }, [editor, value]);
 
   if (!documentHasContent(initialContent)) {
     return <div className="text-sm text-muted-foreground">{emptyMessage}</div>;

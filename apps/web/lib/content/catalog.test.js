@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import {
-  buildContentCatalog,
-  findContentBySlug,
-} from "@/lib/content/catalog"
+import { buildContentCatalog, findContentBySlug } from "@/lib/content/catalog"
 
 function family(id, variants) {
   return {
@@ -50,6 +47,68 @@ const zone = {
 }
 
 describe("content catalog", () => {
+  test("canonical URLs take priority over another family's variant alias", () => {
+    const items = buildContentCatalog([
+      {
+        families: [
+          {
+            ...family("alias-owner", [
+              variant("alias", "brain", "2026-02-01T00:00:00.000Z"),
+            ]),
+            slug: "another-topic",
+          },
+          {
+            ...family("brain", [
+              variant("brain-primary", "brain-t1", "2026-01-01T00:00:00.000Z"),
+            ]),
+            slug: "brain",
+          },
+        ],
+        zone,
+      },
+    ])
+    expect(findContentBySlug(items, "brain")?.id).toBe("brain")
+  })
+
+  test("fallback primary matches the API: ready, oldest creation, then identifier", () => {
+    const items = buildContentCatalog([
+      {
+        families: [
+          family("brain", [
+            {
+              ...variant("a-pending", "pending", "2026-02-01T00:00:00.000Z"),
+              processingStatus: "processing",
+            },
+            {
+              ...variant("b-new", "new", "2026-02-01T00:00:00.000Z"),
+              createdAt: "2026-02-01T00:00:00.000Z",
+            },
+            variant("z-original", "original", "2026-02-01T00:00:00.000Z"),
+          ]),
+        ],
+        zone,
+      },
+    ])
+    expect(items[0].viewerSlug).toBe("original")
+  })
+
+  test("keeps the family URL and explicit primary variant stable", () => {
+    const brain = {
+      ...family("brain", [
+        variant("brain-t1", "brain-t1", "2026-01-02T00:00:00.000Z"),
+        variant("brain-t2", "brain-t2", "2026-01-03T00:00:00.000Z"),
+      ]),
+      slug: "brain",
+      primaryModalityId: "brain-t2",
+    }
+    const items = buildContentCatalog([{ families: [brain], zone }])
+    expect(items[0].primarySlug).toBe("brain")
+    expect(items[0].primaryModalityId).toBe("brain-t2")
+    expect(items[0].viewerSlug).toBe("brain-t2")
+    expect(findContentBySlug(items, "brain")?.id).toBe("brain")
+    expect(findContentBySlug(items, "brain-t1")?.id).toBe("brain")
+  })
+
   test("builds content rows from modality families and sorts by latest update", () => {
     const older = family("older", [
       variant("older-t1", "brain-mri-t1", "2026-01-02T00:00:00.000Z"),

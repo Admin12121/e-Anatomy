@@ -98,7 +98,8 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
   const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
   const isPublicViewerRoute = isPublicViewerPath(pathname)
   const isLegalRoute = pathname === "/terms" || pathname === "/privacy" || pathname === "/about"
-  const usesNativeDocumentScroll = isPublicViewerRoute || isLegalRoute
+  const isStructuresRoute = pathname.startsWith("/structures/")
+  const usesNativeDocumentScroll = isPublicViewerRoute || isLegalRoute || isStructuresRoute
   const preloaderStateValue = useMemo(
     () => ({
       isPreloaderActive: false,
@@ -113,7 +114,7 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
       className={cn(
         "relative",
         isPublicViewerRoute && "min-h-dvh overflow-x-hidden overflow-y-auto",
-        isLegalRoute && "min-h-dvh overflow-x-hidden",
+        (isLegalRoute || isStructuresRoute) && "min-h-dvh overflow-x-hidden",
       )}
     >
       <div
@@ -121,7 +122,7 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
           "opacity-100",
           isPublicViewerRoute &&
             "h-dvh min-h-0 overflow-x-hidden overflow-y-auto dark:bg-[#171717]",
-          isLegalRoute && "min-h-dvh",
+          (isLegalRoute || isStructuresRoute) && "min-h-dvh",
         )}
       >
         {children}

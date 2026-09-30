@@ -97,6 +97,8 @@ export type ZoneModality = {
 };
 
 export type ZoneModalityFamily = {
+  slug: string
+  primaryModalityId: string | null
   id: string;
   name: string;
   modalityType: ModalityType;

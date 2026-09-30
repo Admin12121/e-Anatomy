@@ -90,6 +90,8 @@ pub struct ZoneModality {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoneModalityFamily {
+    pub slug: String,
+    pub primary_modality_id: Option<String>,
     pub id: String,
     pub name: String,
     pub modality_type: String,

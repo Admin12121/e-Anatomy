@@ -8,6 +8,7 @@ import type {
   ZoneModalityAsset,
 } from "@/lib/playground/types";
 import { cn } from "@/lib/utils";
+import { ProjectRichTextViewer } from "@/components/anatomy/project-rich-text";
 import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Pencil, Trash2, X } from "lucide-react";
@@ -484,6 +485,11 @@ function MarkdownContent({
   className?: string;
   content: string;
 }) {
+  try {
+    if (Array.isArray(JSON.parse(content))) {
+      return <ProjectRichTextViewer value={content} className={className} />;
+    }
+  } catch { /* Existing descriptions remain Markdown. */ }
   return (
     <div
       className={cn(

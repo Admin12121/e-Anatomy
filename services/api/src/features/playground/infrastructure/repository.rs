@@ -327,6 +327,8 @@ impl PlaygroundRepository {
             r#"
             SELECT
                 family.id::text AS family_id,
+                family.slug AS family_slug,
+                family.primary_modality_id::text AS family_primary_modality_id,
                 family.name AS family_name,
                 family.modality_type AS family_modality_type,
                 family.thumbnail_url AS family_thumbnail_url,
@@ -2533,6 +2535,8 @@ impl From<ZoneModalityRow> for ZoneModality {
 
 #[derive(Debug, sqlx::FromRow)]
 struct ZoneModalityFamilyVariantRow {
+    family_slug: String,
+    family_primary_modality_id: Option<String>,
     family_id: String,
     family_name: String,
     family_modality_type: String,
@@ -2604,6 +2608,8 @@ fn group_zone_modality_family_rows(
 
         family_indices.insert(family_id.clone(), families.len());
         families.push(ZoneModalityFamily {
+            slug: row.family_slug,
+            primary_modality_id: row.family_primary_modality_id,
             id: family_id,
             name: row.family_name,
             modality_type: row.family_modality_type,

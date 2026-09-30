@@ -2013,7 +2013,7 @@ impl PlaygroundService {
                 lookup.modality_id,
             )
             .await?;
-        let structures = self
+        let mut structures = self
             .repo
             .list_viewer_structures(
                 &self.pool,
@@ -2022,6 +2022,15 @@ impl PlaygroundService {
                 lookup.modality_id,
             )
             .await?;
+        // Subscription descriptions are never an anonymous API payload, even if
+        // an older editing path still stores them on the structure itself.
+        for structure in &mut structures {
+            if structure.access_level != "free" {
+                structure.short_description = None;
+                structure.long_description = None;
+                structure.learning_points.clear();
+            }
+        }
         let annotations = self
             .repo
             .list_viewer_annotations(

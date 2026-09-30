@@ -55,6 +55,11 @@ async fn main() -> Result<()> {
     }
 
     let app = Router::new()
+        .nest("/api/v1/content", features::content::routes::routes())
+        .nest(
+            "/api/v1/public/content",
+            features::content::routes::public_routes(),
+        )
         .nest("/api/v1/health", health_routes())
         .nest("/api/v1/public/analytics", public_analytics_routes())
         .nest("/api/v1/analytics", analytics_routes())

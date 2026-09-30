@@ -61,7 +61,9 @@ impl AnalyticsEventInput {
             "content_engaged" => {
                 required_uuid(&self.properties, "contentId")?;
                 required_uuid(&self.properties, "modalityId")?;
-                required_uuid(&self.properties, "structureId")?;
+                if self.properties.get("structureId").is_some() {
+                    required_uuid(&self.properties, "structureId")?;
+                }
                 required_uuid(&self.properties, "zoneId")?;
                 let duration = self
                     .properties

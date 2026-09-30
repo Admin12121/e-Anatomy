@@ -1,12 +1,10 @@
-import type {
-  ZoneModalityFamily,
-  ZoneSummary,
-} from "@/lib/playground/types"
+import type { ZoneModalityFamily, ZoneSummary } from "@/lib/playground/types"
 
 export type ContentCatalogItem = ZoneModalityFamily & {
   latestUpdatedAt: string
   primaryModalityId: string
   primarySlug: string
+  viewerSlug: string
   zoneId: string
   zoneName: string
   zoneSlug: string
@@ -23,7 +21,17 @@ export function buildContentCatalog(
   return groups
     .flatMap(({ families, zone }) =>
       families.flatMap((family) => {
-        const primaryModality = family.variants[0]
+        const primaryModality =
+          family.variants.find(
+            (variant) => variant.id === family.primaryModalityId,
+          ) ??
+          [...family.variants].sort(
+            (a, b) =>
+              Number(b.processingStatus === "ready") -
+                Number(a.processingStatus === "ready") ||
+              a.createdAt.localeCompare(b.createdAt) ||
+              a.id.localeCompare(b.id),
+          )[0]
 
         if (!primaryModality) {
           return []
@@ -42,7 +50,8 @@ export function buildContentCatalog(
             ...family,
             latestUpdatedAt,
             primaryModalityId: primaryModality.id,
-            primarySlug: primaryModality.slug,
+            primarySlug: family.slug ?? primaryModality.slug,
+            viewerSlug: primaryModality.slug,
             zoneId: zone.id,
             zoneName: zone.name,
             zoneSlug: zone.slug,
@@ -55,13 +64,12 @@ export function buildContentCatalog(
     )
 }
 
-export function findContentBySlug(
-  items: ContentCatalogItem[],
-  slug: string,
-) {
+export function findContentBySlug(items: ContentCatalogItem[], slug: string) {
   return (
+    items.find((item) => item.primarySlug === slug) ??
     items.find((item) =>
       item.variants.some((variant) => variant.slug === slug),
-    ) ?? null
+    ) ??
+    null
   )
 }

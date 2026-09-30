@@ -26,7 +26,7 @@ export type AnalyticsEventProperties = {
     contentId: string
     durationSeconds: number
     modalityId: string
-    structureId: string
+    structureId?: string
     threshold: "30_seconds" | "50_percent" | "completed"
     zoneId: string
   }

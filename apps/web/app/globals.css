@@ -288,6 +288,18 @@
   }
 }
 
+/* Unlayered overrides match BlockNote's unlayered defaults, only in this canvas. */
+.resource-document[data-layout="workspace"] .bn-container {
+  --bn-colors-editor-background: transparent;
+  --bn-colors-editor-text: var(--foreground);
+}
+
+.resource-document[data-layout="workspace"] .bn-editor {
+  background-color: transparent;
+  border-radius: 0;
+  padding: 2rem clamp(1.5rem, 4vw, 4rem);
+}
+
 .preloader-backdrop,
 .preloader,
 .hero {

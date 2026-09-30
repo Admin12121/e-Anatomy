@@ -68,6 +68,8 @@ function RichTextLoadingState({
 }
 
 export function ProjectRichTextEditor({
+  disabled = false,
+  storageFormat = "markdown",
   value,
   onChange,
   className,
@@ -83,6 +85,8 @@ export function ProjectRichTextEditor({
 
   return (
     <ProjectRichTextEditorDynamic
+      disabled={disabled}
+      storageFormat={storageFormat}
       value={value}
       onChange={onChange}
       className={className}
