@@ -17,7 +17,7 @@ import { SplitText } from "gsap/SplitText";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ArrowLeftIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowUpRightIcon } from "lucide-react";
 import {
   markHomePreloaderSeen,
   shouldRunHomePreloader,
@@ -45,6 +45,7 @@ import {
 import ShinyText from "@/components/shiny-text";
 import { acquireScrollLock, setLockedScrollPosition } from "@/components/layout/scroll-lock";
 import { Footer } from "./_components";
+import { HomeCatalog } from "./_components/home-catalog";
 
 const loadAnatomyStage = () => import("@/components/anatomy/anatomy-stage");
 
@@ -186,6 +187,7 @@ const MOBILE_PANEL_VARIANTS = {
 };
 
 type HomePreloaderMode = "checking" | "show" | "skip";
+type HomeView = "atlas" | "catalog";
 
 function subscribeToPreloaderPolicy() {
   return () => {};
@@ -244,8 +246,14 @@ function getApiErrorMessage(error: unknown, fallbackMessage: string) {
 
 export default function Page() {
   const pageRef = useRef<HTMLDivElement | null>(null);
+  const stageModelRef = useRef<HTMLDivElement | null>(null);
+  const viewTransitionLockRef = useRef(false);
   const preloaderMode = useHomePreloaderMode();
   const shouldRunInitialPreloader = preloaderMode === "show";
+  const [homeView, setHomeView] = useState<HomeView>("atlas");
+  const [atlasUiVisible, setAtlasUiVisible] = useState(true);
+  const [catalogMounted, setCatalogMounted] = useState(false);
+  const [catalogLayoutActive, setCatalogLayoutActive] = useState(false);
   const [isStageActivated, setIsStageActivated] = useState(false);
   const shouldRenderStage = preloaderMode === "skip" || isStageActivated;
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
@@ -301,8 +309,70 @@ export default function Page() {
         ? "empty"
         : "ready";
 
+  useLayoutEffect(() => {
+    const stageModel = stageModelRef.current;
+
+    if (!stageModel) {
+      return;
+    }
+
+    const desktopCatalogOffset =
+      homeView === "catalog" && window.innerWidth >= 768 ? 35 : 0;
+
+    const finishTransition = () => {
+      viewTransitionLockRef.current = false;
+
+      if (homeView === "atlas") {
+        setAtlasUiVisible(true);
+        setCatalogMounted(false);
+        setCatalogLayoutActive(false);
+      }
+    };
+
+    if (prefersReducedMotion) {
+      gsap.set(stageModel, { xPercent: desktopCatalogOffset });
+      finishTransition();
+      return;
+    }
+
+    const tween = gsap.to(stageModel, {
+      xPercent: desktopCatalogOffset,
+      duration: 1.05,
+      ease: "glide",
+      force3D: true,
+      overwrite: "auto",
+      onComplete: finishTransition,
+    });
+
+    return () => tween.kill();
+  }, [homeView, prefersReducedMotion]);
+
   function handleSelectZone(zoneId: string) {
     setSelectedZoneId(zoneId);
+  }
+
+  function handleViewAll() {
+    if (homeView === "catalog" || viewTransitionLockRef.current) {
+      return;
+    }
+
+    viewTransitionLockRef.current = true;
+    window.scrollTo(0, 0);
+    setSelectedZoneId(null);
+    setAtlasUiVisible(false);
+    setCatalogMounted(true);
+    setCatalogLayoutActive(true);
+    setHomeView("catalog");
+  }
+
+  function handleBackToAtlas() {
+    if (homeView === "atlas" || viewTransitionLockRef.current) {
+      return;
+    }
+
+    viewTransitionLockRef.current = true;
+    window.scrollTo(0, 0);
+    setHomeView("atlas");
   }
 
   const markStageReady = useCallback(() => {
@@ -738,7 +808,10 @@ export default function Page() {
     <div
       ref={pageRef}
       data-preloader-shell={shouldRunInitialPreloader ? "" : undefined}
-      style={{ minHeight: "100svh", backgroundColor: "#000" }}
+      style={{
+        minHeight: "100svh",
+        backgroundColor: catalogLayoutActive ? "#141414" : "#000",
+      }}
     >
       {shouldRunInitialPreloader ? (
         <>
@@ -865,51 +938,65 @@ export default function Page() {
         </>
       ) : null}
 
-      <section className={heroClassName}>
-        {shouldRenderStage ? (
-          <div className="absolute inset-0 z-0">
-            <AnatomyStage
-              backgroundColor="#141414"
-              className="h-full! w-full!"
-              onReady={markStageReady}
-              onZoneSelect={handleSelectZone}
-              selectedZoneId={activeSelectedZoneId}
-              showBackdrop={false}
-              zones={stageZones}
-            />
-            <span className="absolute md:w-67.5 w-50 inset-x-4 z-10 md:inset-x-auto top-1 md:top-5 left-1/2 transform -translate-x-1/2 md:translate-x-0 md:left-5 md:bottom-auto h-14 flex items-center">
-              <div className="flex size-14 items-center justify-center rounded-md">
-                <Image
-                  src="/logo.webp"
-                  alt="Anatomy"
-                  height={35}
-                  width={35}
-                  className="rounded-md dark:rounded-none"
+      <div
+        className={
+          catalogLayoutActive
+            ? "relative z-10 min-h-[100svh] bg-[#141414]"
+            : ""
+        }
+      >
+        <section
+          className={
+            catalogLayoutActive
+              ? "sticky top-0 h-[100svh] w-full overflow-hidden bg-[#141414] text-white"
+              : heroClassName
+          }
+          data-home-view={homeView}
+        >
+          {shouldRenderStage ? (
+            <div
+              className="absolute inset-0 z-0 overflow-hidden bg-[#141414]"
+              data-home-stage
+            >
+              <div
+                ref={stageModelRef}
+                className="absolute inset-0 will-change-transform"
+                data-home-stage-model
+              >
+                <AnatomyStage
+                  backgroundColor="#141414"
+                  className="h-full! w-full!"
+                  onReady={markStageReady}
+                  onZoneSelect={handleSelectZone}
+                  selectedZoneId={activeSelectedZoneId}
+                  showBackdrop={false}
+                  zones={stageZones}
                 />
               </div>
-              <ShinyText
-                text="Voxel Anatomy"
-                duration={2}
-                delay={1}
-                className="text-xl md:text-3xl"
-              />
-            </span>
-            <PublicAccountMenu
-              className="absolute right-4 top-4 z-20 md:right-5 md:top-5"
-            />
-            <span className="absolute inset-x-4 bottom-2 left-1/2 transform -translate-x-1/2 z-10 text-xs flex justify-center gap-1">
-              <p className="font-light opacity-50">Designed and Developed by </p>
-              <Link href={"https://admin12121.com"} target="_blank">
+
+              <span className="absolute md:w-67.5 w-50 inset-x-4 z-20 md:inset-x-auto top-1 md:top-5 left-1/2 transform -translate-x-1/2 md:translate-x-0 md:left-5 md:bottom-auto h-14 flex items-center">
+                <div className="flex size-14 items-center justify-center rounded-md">
+                  <Image
+                    src="/logo.webp"
+                    alt="Anatomy"
+                    height={35}
+                    width={35}
+                    className="rounded-md dark:rounded-none"
+                  />
+                </div>
                 <ShinyText
-                  text="Admin12121"
+                  text="Voxel Anatomy"
                   duration={2}
                   delay={1}
-                  className="text-xs"
+                  className="text-xl md:text-3xl"
                 />
-              </Link>
-            </span>
+              </span>
+              <PublicAccountMenu
+                className="absolute right-4 top-4 z-30 md:right-5 md:top-5"
+              />
+
             <AnimatePresence>
-              {selectedZone ? (
+              {atlasUiVisible && selectedZone ? (
                 <motion.div
                   animate="visible"
                   className="absolute z-10 hidden md:top-20 md:right-5 md:block md:w-80"
@@ -924,52 +1011,48 @@ export default function Page() {
                 >
                   <Frame className="w-full">
                     <Table>
-                  <TableHeader>
-                    <TableRow className="text-left">
-                      <TableHead>Modalities</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {isModalitiesLoading ? (
-                      <TableRow>
-                        <TableCell className="text-left text-muted-foreground">
-                          Loading modalities...
-                        </TableCell>
-                      </TableRow>
-                    ) : isModalitiesError ? (
-                      <TableRow>
-                        <TableCell className="text-left text-destructive">
-                          {getApiErrorMessage(
-                            modalitiesQueryError,
-                            "Unable to load modalities.",
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ) : selectedZoneModalities.length === 0 ? (
-                      <TableRow>
-                        <TableCell className="text-left text-muted-foreground">
-                          No modalities are attached to this zone yet.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      selectedZoneModalities.map((modality) => (
-                        <TableRow key={modality.id}>
-                          <TableCell className="font-medium text-left">
-                            {selectedZone ? (
-                              <Link
-                                className="inline-flex items-center underline-offset-4 hover:underline"
-                                href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
-                              >
-                                {modality.name}
-                              </Link>
-                            ) : (
-                              modality.name
-                            )}
-                          </TableCell>
+                      <TableHeader>
+                        <TableRow className="text-left">
+                          <TableHead>Modalities</TableHead>
                         </TableRow>
-                      ))
-                    )}
-                  </TableBody>
+                      </TableHeader>
+                      <TableBody>
+                        {isModalitiesLoading ? (
+                          <TableRow>
+                            <TableCell className="text-left text-muted-foreground">
+                              Loading modalities...
+                            </TableCell>
+                          </TableRow>
+                        ) : isModalitiesError ? (
+                          <TableRow>
+                            <TableCell className="text-left text-destructive">
+                              {getApiErrorMessage(
+                                modalitiesQueryError,
+                                "Unable to load modalities.",
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ) : selectedZoneModalities.length === 0 ? (
+                          <TableRow>
+                            <TableCell className="text-left text-muted-foreground">
+                              No modalities are attached to this zone yet.
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          selectedZoneModalities.map((modality) => (
+                            <TableRow key={modality.id}>
+                              <TableCell className="font-medium text-left">
+                                <Link
+                                  className="inline-flex items-center underline-offset-4 hover:underline"
+                                  href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
+                                >
+                                  {modality.name}
+                                </Link>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
                     </Table>
                   </Frame>
                 </motion.div>
@@ -977,210 +1060,278 @@ export default function Page() {
             </AnimatePresence>
 
             <AnimatePresence>
-              <motion.div
-                animate="visible"
-                className="absolute z-10 hidden md:top-20 md:left-5 md:block md:w-80"
-                exit="hidden"
-                initial={prefersReducedMotion ? false : "hidden"}
-                key={`${desktopRegionsState}-${activeSelectedZoneId ?? "none"}`}
-                transition={{
-                  duration: prefersReducedMotion ? 0 : 0.28,
-                  ease: "easeOut",
-                }}
-                variants={DESKTOP_PANEL_VARIANTS}
-              >
-                <Frame className="w-full">
-                  <Table>
-                <TableHeader>
-                  <TableRow className="text-left">
-                    <TableHead>Regions / Zone</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {isZonesLoading ? (
-                    <TableRow>
-                      <TableCell className="text-left text-muted-foreground">
-                        Loading zones...
-                      </TableCell>
-                    </TableRow>
-                  ) : isZonesError ? (
-                    <TableRow>
-                      <TableCell className="text-left text-destructive">
-                        {getApiErrorMessage(
-                          zonesQueryError,
-                          "Unable to load zones.",
+              {atlasUiVisible ? (
+                <motion.div
+                  animate="visible"
+                  className="absolute z-10 hidden md:top-20 md:left-5 md:block md:w-80"
+                  exit="hidden"
+                  initial={prefersReducedMotion ? false : "hidden"}
+                  key={`${desktopRegionsState}-${activeSelectedZoneId ?? "none"}`}
+                  transition={{
+                    duration: prefersReducedMotion ? 0 : 0.24,
+                    ease: "easeOut",
+                  }}
+                  variants={DESKTOP_PANEL_VARIANTS}
+                >
+                  <Frame className="w-full">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="text-left">
+                          <TableHead>
+                            <div className="flex items-center justify-between gap-3">
+                              <span>Regions / Zone</span>
+                              <button
+                                className="group/view-all inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                onClick={handleViewAll}
+                                type="button"
+                              >
+                                View all
+                                <ArrowUpRightIcon
+                                  aria-hidden="true"
+                                  className="size-3 transition-transform duration-300 group-hover/view-all:translate-x-0.5 group-hover/view-all:-translate-y-0.5"
+                                />
+                              </button>
+                            </div>
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {isZonesLoading ? (
+                          <TableRow>
+                            <TableCell className="text-left text-muted-foreground">
+                              Loading zones...
+                            </TableCell>
+                          </TableRow>
+                        ) : isZonesError ? (
+                          <TableRow>
+                            <TableCell className="text-left text-destructive">
+                              {getApiErrorMessage(
+                                zonesQueryError,
+                                "Unable to load zones.",
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ) : zones.length === 0 ? (
+                          <TableRow>
+                            <TableCell className="text-left text-muted-foreground">
+                              No zones are available yet.
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          zones.map((zone) => (
+                            <TableRow
+                              key={zone.id}
+                              className="cursor-pointer"
+                              data-state={
+                                activeSelectedZoneId === zone.id
+                                  ? "selected"
+                                  : undefined
+                              }
+                              onClick={() => handleSelectZone(zone.id)}
+                            >
+                              <TableCell className="font-medium text-left">
+                                {zone.name}
+                              </TableCell>
+                            </TableRow>
+                          ))
                         )}
-                      </TableCell>
-                    </TableRow>
-                  ) : zones.length === 0 ? (
-                    <TableRow>
-                      <TableCell className="text-left text-muted-foreground">
-                        No zones are available yet.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    zones.map((zone) => (
-                      <TableRow
-                        key={zone.id}
-                        className="cursor-pointer"
-                        data-state={
-                          activeSelectedZoneId === zone.id
-                            ? "selected"
-                            : undefined
-                        }
-                        onClick={() => handleSelectZone(zone.id)}
-                      >
-                        <TableCell className="font-medium text-left ">
-                          {zone.name}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-                  </Table>
-                </Frame>
-              </motion.div>
+                      </TableBody>
+                    </Table>
+                  </Frame>
+                </motion.div>
+              ) : null}
             </AnimatePresence>
 
-            <Frame className="absolute inset-x-4 bottom-4 z-10 flex max-h-[40svh] overflow-y-auto md:hidden">
-              <motion.div
-                className="relative overflow-hidden rounded-xl"
-                layout={!prefersReducedMotion}
-                transition={{
-                  duration: prefersReducedMotion ? 0 : 0.24,
-                  ease: "easeOut",
-                }}
-              >
-                <AnimatePresence
-                  custom={mobilePanelDirection}
-                  initial={false}
-                  mode="popLayout"
+            {atlasUiVisible ? (
+              <Frame className="absolute inset-x-4 bottom-4 z-10 flex max-h-[40svh] overflow-y-auto md:hidden">
+                <motion.div
+                  className="relative overflow-hidden rounded-xl"
+                  layout={!prefersReducedMotion}
+                  transition={{
+                    duration: prefersReducedMotion ? 0 : 0.24,
+                    ease: "easeOut",
+                  }}
                 >
-                  <motion.div
-                    animate="center"
+                  <AnimatePresence
                     custom={mobilePanelDirection}
-                    exit="exit"
-                    initial={prefersReducedMotion ? false : "enter"}
-                    key={selectedZone ? `modalities-${selectedZone.id}` : "regions"}
-                    transition={{
-                      duration: prefersReducedMotion ? 0 : 0.24,
-                      ease: "easeOut",
-                    }}
-                    variants={MOBILE_PANEL_VARIANTS}
+                    initial={false}
+                    mode="popLayout"
                   >
-                    <Table>
-                <TableHeader>
-                  <TableRow className="text-left">
-                    <TableHead>
-                      {selectedZone ? (
-                        <span className="flex items-center gap-1.5">
-                          <Button
-                            aria-label="Back to regions"
-                            className="-ml-1"
-                            onClick={() => setSelectedZoneId(null)}
-                            size="icon-xs"
-                            variant="ghost"
-                          >
-                            <ArrowLeftIcon aria-hidden="true" />
-                          </Button>
-                          Modalities
-                        </span>
-                      ) : (
-                        "Regions / Zone"
-                      )}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {selectedZone ? (
-                    isModalitiesLoading ? (
-                      <TableRow>
-                        <TableCell className="text-left text-muted-foreground">
-                          Loading modalities...
-                        </TableCell>
-                      </TableRow>
-                    ) : isModalitiesError ? (
-                      <TableRow>
-                        <TableCell className="text-left text-destructive">
-                          {getApiErrorMessage(
-                            modalitiesQueryError,
-                            "Unable to load modalities.",
+                    <motion.div
+                      animate="center"
+                      custom={mobilePanelDirection}
+                      exit="exit"
+                      initial={prefersReducedMotion ? false : "enter"}
+                      key={selectedZone ? `modalities-${selectedZone.id}` : "regions"}
+                      transition={{
+                        duration: prefersReducedMotion ? 0 : 0.24,
+                        ease: "easeOut",
+                      }}
+                      variants={MOBILE_PANEL_VARIANTS}
+                    >
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="text-left">
+                            <TableHead>
+                              {selectedZone ? (
+                                <span className="flex items-center gap-1.5">
+                                  <Button
+                                    aria-label="Back to regions"
+                                    className="-ml-1"
+                                    onClick={() => setSelectedZoneId(null)}
+                                    size="icon-xs"
+                                    variant="ghost"
+                                  >
+                                    <ArrowLeftIcon aria-hidden="true" />
+                                  </Button>
+                                  Modalities
+                                </span>
+                              ) : (
+                                <span className="flex items-center justify-between gap-3">
+                                  <span>Regions / Zone</span>
+                                  <button
+                                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:text-foreground"
+                                    onClick={handleViewAll}
+                                    type="button"
+                                  >
+                                    View all
+                                    <ArrowUpRightIcon aria-hidden="true" className="size-3" />
+                                  </button>
+                                </span>
+                              )}
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {selectedZone ? (
+                            isModalitiesLoading ? (
+                              <TableRow>
+                                <TableCell className="text-left text-muted-foreground">
+                                  Loading modalities...
+                                </TableCell>
+                              </TableRow>
+                            ) : isModalitiesError ? (
+                              <TableRow>
+                                <TableCell className="text-left text-destructive">
+                                  {getApiErrorMessage(
+                                    modalitiesQueryError,
+                                    "Unable to load modalities.",
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            ) : selectedZoneModalities.length === 0 ? (
+                              <TableRow>
+                                <TableCell className="text-left text-muted-foreground">
+                                  No modalities are attached to this zone yet.
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              selectedZoneModalities.map((modality) => (
+                                <TableRow key={modality.id}>
+                                  <TableCell className="font-medium text-left">
+                                    <Link
+                                      className="inline-flex items-center underline-offset-4 hover:underline"
+                                      href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
+                                    >
+                                      {modality.name}
+                                    </Link>
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            )
+                          ) : isZonesLoading ? (
+                            <TableRow>
+                              <TableCell className="text-left text-muted-foreground">
+                                Loading zones...
+                              </TableCell>
+                            </TableRow>
+                          ) : isZonesError ? (
+                            <TableRow>
+                              <TableCell className="text-left text-destructive">
+                                {getApiErrorMessage(
+                                  zonesQueryError,
+                                  "Unable to load zones.",
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ) : zones.length === 0 ? (
+                            <TableRow>
+                              <TableCell className="text-left text-muted-foreground">
+                                No zones are available yet.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            zones.map((zone) => (
+                              <TableRow key={zone.id}>
+                                <TableCell className="text-left">
+                                  <Button
+                                    className="h-auto w-full justify-start rounded-none border-0 p-0 font-medium shadow-none"
+                                    onClick={() => handleSelectZone(zone.id)}
+                                    variant="ghost"
+                                  >
+                                    {zone.name}
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))
                           )}
-                        </TableCell>
-                      </TableRow>
-                    ) : selectedZoneModalities.length === 0 ? (
-                      <TableRow>
-                        <TableCell className="text-left text-muted-foreground">
-                          No modalities are attached to this zone yet.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      selectedZoneModalities.map((modality) => (
-                        <TableRow key={modality.id}>
-                          <TableCell className="font-medium text-left">
-                            <Link
-                              className="inline-flex items-center underline-offset-4 hover:underline"
-                              href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
-                            >
-                              {modality.name}
-                            </Link>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )
-                  ) : isZonesLoading ? (
-                    <TableRow>
-                      <TableCell className="text-left text-muted-foreground">
-                        Loading zones...
-                      </TableCell>
-                    </TableRow>
-                  ) : isZonesError ? (
-                    <TableRow>
-                      <TableCell className="text-left text-destructive">
-                        {getApiErrorMessage(
-                          zonesQueryError,
-                          "Unable to load zones.",
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ) : zones.length === 0 ? (
-                    <TableRow>
-                      <TableCell className="text-left text-muted-foreground">
-                        No zones are available yet.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    zones.map((zone) => (
-                      <TableRow key={zone.id}>
-                        <TableCell className="text-left">
-                          <Button
-                            className="h-auto w-full justify-start rounded-none border-0 p-0 font-medium shadow-none"
-                            onClick={() => handleSelectZone(zone.id)}
-                            variant="ghost"
-                          >
-                            {zone.name}
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-                    </Table>
-                  </motion.div>
-                </AnimatePresence>
-              </motion.div>
-            </Frame>
+                        </TableBody>
+                      </Table>
+                    </motion.div>
+                  </AnimatePresence>
+                </motion.div>
+              </Frame>
+            ) : null}
           </div>
         ) : null}
+
         {shouldRunInitialPreloader ? (
           <div className="preloader-revealer z-10" />
         ) : null}
       </section>
 
-      {/* Keep the reveal footer in normal document flow. On desktop the
-          component intentionally overlaps the hero by one viewport and sits
-          behind it, so scrolling lifts the AnatomyStage away and reveals the
-          footer image instead of placing the footer inside the 3D canvas. */}
+        {catalogMounted ? (
+          <motion.main
+            animate={
+              homeView === "catalog"
+                ? { opacity: 1, x: 0 }
+                : { opacity: 0, x: prefersReducedMotion ? 0 : -10 }
+            }
+            className="relative z-10 -mt-[100svh] min-h-[100svh] w-full pt-[42svh] text-white md:w-[58vw] md:pt-0"
+            initial={
+              prefersReducedMotion ? false : { opacity: 0, x: -10 }
+            }
+            key="home-catalog"
+            style={{
+              pointerEvents: homeView === "catalog" ? "auto" : "none",
+            }}
+            transition={
+              homeView === "catalog"
+                ? {
+                    delay: prefersReducedMotion ? 0 : 0.34,
+                    duration: prefersReducedMotion ? 0 : 0.42,
+                    ease: [0.22, 1, 0.36, 1],
+                  }
+                : {
+                    duration: prefersReducedMotion ? 0 : 0.2,
+                    ease: [0.4, 0, 1, 1],
+                  }
+            }
+          >
+            <HomeCatalog
+              isZonesError={isZonesError}
+              isZonesLoading={isZonesLoading}
+              onBack={handleBackToAtlas}
+              zones={zones}
+              zonesErrorMessage={getApiErrorMessage(
+                zonesQueryError,
+                "Unable to load zones.",
+              )}
+            />
+          </motion.main>
+        ) : null}
+      </div>
+
       <Footer />
     </div>
   );

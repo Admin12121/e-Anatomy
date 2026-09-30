@@ -17,6 +17,12 @@ import { toast } from "sonner";
 
 import { ProcessingProgress } from "@/components/processing-progress";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import type {
   CreateViewerAnnotationInput,
   CreateViewerStructureGroupInput,
@@ -94,6 +100,7 @@ import {
   removeAssetIds,
 } from "./modality-viewer/slice-timeline";
 import { StudyPanel } from "./modality-viewer/study-panel";
+import { StructureDrawer } from "./modality-viewer/study-sidebar";
 import { MprViewerCanvas } from "./modality-viewer/mpr-viewer-canvas";
 import { useViewerManifest } from "./modality-viewer/use-viewer-manifest";
 import {
@@ -111,6 +118,7 @@ import {
   type AreaEditTool,
   type MainInteractionTool,
 } from "./modality-viewer/viewer-canvas";
+import { resolveAnnotationDetailsSurface } from "./modality-viewer/viewer-canvas/helpers";
 import {
   buildImmediatePreloadOrder,
   buildStackWarmupOrder,
@@ -353,6 +361,8 @@ function ModalityViewerShell({
   const [mainInteractionTool, setMainInteractionTool] =
     useState<MainInteractionTool>("layers");
   const [showStudyPanel, setShowStudyPanel] = useState(true);
+  const [mprStructureDetailsOpen, setMprStructureDetailsOpen] =
+    useState(false);
   const [showControlPanel, setShowControlPanel] = useState(false);
   const [canvasRotationQuarterTurns, setCanvasRotationQuarterTurns] =
     useState(0);
@@ -1278,6 +1288,9 @@ function ModalityViewerShell({
   const selectedStructure = selectedStructureId
     ? (structuresById.get(selectedStructureId) ?? null)
     : null;
+  const showMprStructureDetails = Boolean(
+    isMprViewer && readOnly && selectedStructure && mprStructureDetailsOpen,
+  );
   const analyticsModalityId = data?.modality.id;
   const analyticsContentId = data?.modality.familyId;
   const analyticsZoneId = data?.zone.id;
@@ -2728,6 +2741,29 @@ function ModalityViewerShell({
     commitCurrentAssetId(assetId);
   }
 
+  function handleViewerAnnotationSelect(
+    annotationId: string,
+    structureId: string,
+  ) {
+    setHoveredAnnotationId(null);
+    setSelectedAnnotationId(annotationId);
+    setSelectedStructureId(structureId);
+
+    const detailsSurface = resolveAnnotationDetailsSurface({
+      isMprViewer,
+      readOnly,
+    });
+
+    if (detailsSurface === "mpr-drawer") {
+      setMprStructureDetailsOpen(true);
+    } else if (detailsSurface === "study-panel") {
+      setShowStudyPanel(true);
+    }
+
+    const structure = structuresById.get(structureId);
+    setSelectedGroupId(structure?.groupId ?? null);
+  }
+
   function handleDisplayedFilmstripSelect(assetIndex: number) {
     if (!isMprViewer) {
       navigateToAsset(assetIndex, "click");
@@ -3503,6 +3539,52 @@ function ModalityViewerShell({
         />
       ) : null}
 
+      <Sheet
+        open={showMprStructureDetails}
+        onOpenChange={(open) => {
+          setMprStructureDetailsOpen(open);
+          if (!open) {
+            setHoveredAnnotationId(null);
+          }
+        }}
+      >
+        {selectedStructure ? (
+          <SheetContent
+            side="left"
+            showCloseButton={false}
+            className="w-[min(92vw,24rem)] border-white/10 bg-[#18191b]/95 p-0 text-white duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] sm:max-w-[24rem] motion-reduce:duration-100 motion-reduce:[--tw-enter-translate-x:0px] motion-reduce:[--tw-exit-translate-x:0px]"
+            onAnimationEnd={(event) => {
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+
+              if (event.currentTarget.dataset.state === "closed") {
+                setSelectedAnnotationId(null);
+                setSelectedStructureId(null);
+              }
+            }}
+          >
+            <SheetTitle className="sr-only">
+              {selectedStructure.title}
+            </SheetTitle>
+            <SheetDescription className="sr-only">
+              Structure details and learning notes.
+            </SheetDescription>
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-5">
+              <StructureDrawer
+                readOnly={readOnly}
+                selectedAnnotation={selectedAnnotation}
+                selectedStructure={selectedStructure}
+                onClose={() => {
+                  setHoveredAnnotationId(null);
+                  setMprStructureDetailsOpen(false);
+                }}
+              />
+            </div>
+          </SheetContent>
+        ) : null}
+      </Sheet>
+
       <main className={mainClassName}>
         {isMprViewer ? (
           mprWorkingSpec ? (
@@ -3535,12 +3617,7 @@ function ModalityViewerShell({
               visibleAnnotations={mprVisibleAnnotations}
               onActivateAsset={handleMprActivateAsset}
               onAnnotationHover={setHoveredAnnotationId}
-              onAnnotationSelect={(annotationId, structureId) => {
-                setSelectedAnnotationId(annotationId);
-                setSelectedStructureId(structureId);
-                const structure = structuresById.get(structureId);
-                setSelectedGroupId(structure?.groupId ?? null);
-              }}
+              onAnnotationSelect={handleViewerAnnotationSelect}
               onCanvasClick={handleMprCanvasClick}
               onDraftAnchorMove={handleDraftAnchorMove}
               onDraftDisconnectedPolygonsChange={
@@ -3602,13 +3679,7 @@ function ModalityViewerShell({
           visibleAnnotations={visibleAnnotations}
           draftDisconnectedPolygons={draftDisconnectedPolygons}
           onAnnotationHover={setHoveredAnnotationId}
-          onAnnotationSelect={(annotationId, structureId) => {
-            setSelectedAnnotationId(annotationId);
-            setSelectedStructureId(structureId);
-            setShowStudyPanel(true);
-            const structure = structuresById.get(structureId);
-            setSelectedGroupId(structure?.groupId ?? null);
-          }}
+          onAnnotationSelect={handleViewerAnnotationSelect}
           onCanvasClick={handleCanvasClick}
           onDraftAnchorMove={handleDraftAnchorMove}
           onDraftDisconnectedPolygonsChange={

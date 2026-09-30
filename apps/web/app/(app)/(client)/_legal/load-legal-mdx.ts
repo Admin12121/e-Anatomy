@@ -11,19 +11,19 @@ export type LegalMdxDocument = {
   updated: string | null;
 };
 
+const LEGAL_CONTENT_DIR = path.join(
+  process.cwd(),
+  "app",
+  "(app)",
+  "(client)",
+  "_legal",
+  "content",
+);
+
 const LEGAL_CONTENT_FILES: Record<LegalMdxSlug, string> = {
-  about: path.join(
-    process.cwd(),
-    "app/(app)/(client)/_legal/content/about.mdx",
-  ),
-  privacy: path.join(
-    process.cwd(),
-    "app/(app)/(client)/_legal/content/privacy.mdx",
-  ),
-  terms: path.join(
-    process.cwd(),
-    "app/(app)/(client)/_legal/content/terms.mdx",
-  ),
+  about: path.join(LEGAL_CONTENT_DIR, "about.mdx"),
+  privacy: path.join(LEGAL_CONTENT_DIR, "privacy.mdx"),
+  terms: path.join(LEGAL_CONTENT_DIR, "terms.mdx"),
 };
 
 function unquote(value: string) {

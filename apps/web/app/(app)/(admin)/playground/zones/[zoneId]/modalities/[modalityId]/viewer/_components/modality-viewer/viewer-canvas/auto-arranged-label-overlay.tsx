@@ -8,6 +8,7 @@ import {
   type AnnotationFormState,
 } from "../../modality-viewer.types";
 import type { PlacedAnnotationLabel } from "./annotation-layout";
+import { VIEWER_ANNOTATION_INTERACTION_PROPS } from "./helpers";
 
 type ViewerCanvasAutoArrangedLabelOverlayProps = {
   annotationForm: AnnotationFormState;
@@ -22,7 +23,10 @@ type ViewerCanvasAutoArrangedLabelOverlayProps = {
   labelLayout: {
     labels: Map<string, PlacedAnnotationLabel>;
   };
-  onAnnotationHover: (annotationId: string | null) => void;
+  onAnnotationHover: (
+    annotationId: string | null,
+    pointerType?: string,
+  ) => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   selectedAnnotationId: string | null;
   showLabels: boolean;
@@ -142,14 +146,19 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
         return (
           <g
             key={`rail-label-${annotation.id}`}
+            {...VIEWER_ANNOTATION_INTERACTION_PROPS}
             className="pointer-events-auto"
             style={{
               opacity: interactionBlocked ? 0.35 : 1,
               pointerEvents: interactionBlocked ? "none" : undefined,
               transition: "opacity 140ms ease",
             }}
-            onMouseEnter={() => onAnnotationHover(annotation.id)}
-            onMouseLeave={() => onAnnotationHover(null)}
+            onPointerEnter={(event) =>
+              onAnnotationHover(annotation.id, event.pointerType)
+            }
+            onPointerLeave={(event) =>
+              onAnnotationHover(null, event.pointerType)
+            }
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();

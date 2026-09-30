@@ -3,6 +3,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { ROUTE_TRANSITION_SETTLED_EVENT } from "@/components/layout/transition-events";
+import ShinyText from "@/components/shiny-text";
+import Link from "next/link";
 
 export type RevealFooterLink = {
   label: ReactNode;
@@ -362,7 +364,6 @@ export function Footer({
   className = "",
   brand = "The Voxel Anatomy",
   tagline = "Interactive Anatomy Atlases.",
-  email = "info@thevoxelanatomy.com",
   heroWord = brand,
   heroImageSrc = DEFAULT_HERO_IMAGE,
   brandMarkSrc = DEFAULT_BRAND_MARK,
@@ -521,12 +522,11 @@ export function Footer({
               width={60}
             />
             <p className="m-0">{tagline}</p>
-            <a
+            <p
               className={`${plainLinkClass} opacity-60`}
-              href={`mailto:${email}`}
             >
-              {email}
-            </a>
+              {copyright}
+            </p>
           </div>
 
           {columns.slice(0, 4).map((column, index) => (
@@ -575,7 +575,17 @@ export function Footer({
             </a>
           </div>
 
-          <p className="order-1 md:order-none text-center">{copyright}</p>
+          <span className="order-1 md:order-none text-center flex items-center gap-[3px]">
+            <p className="font-light opacity-50">Designed and Developed by </p>
+              <Link href={"https://admin12121.com"} target="_blank">
+                <ShinyText
+                  text="Admin12121"
+                  duration={2}
+                  delay={1}
+                  className="text-xs font-[600]"
+                />
+              </Link>
+          </span>
           <p className="order-1 md:order-none text-right">
             <a className={plainLinkClass} href={termsHref}>
               Terms

@@ -194,7 +194,7 @@ function PageHeader({ title, scrolled }: { title: string; scrolled: boolean }) {
 
 export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShellProps) {
   const router = useRouter();
-  const mainRef = useRef<HTMLElement | null>(null);
+  const mainRef = useRef<HTMLDivElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [contentScrolled, setContentScrolled] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);

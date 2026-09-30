@@ -1,12 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Link2, Mail, Unlink2, UserRound } from "lucide-react";
+import {
+  Link2,
+  LoaderCircleIcon,
+  Mail,
+  Unlink2,
+  UploadIcon,
+  UserRound,
+} from "lucide-react";
 import { RiGoogleFill } from "@remixicon/react";
 import { toast } from "sonner";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/account/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -50,16 +57,6 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function getInitials(name: string, email: string) {
-  const source = name.trim() || email;
-  return source
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("");
-}
-
 function getProviderLabel(providerId: string) {
   switch (providerId) {
     case "google":
@@ -79,6 +76,7 @@ export function ProfileSettingsPanel({
   user,
 }: ProfileSettingsPanelProps) {
   const router = useRouter();
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState(false);
   const [displayName, setDisplayName] = useState(user.name);
   const [savedName, setSavedName] = useState(user.name);
@@ -128,6 +126,55 @@ export function ProfileSettingsPanel({
       );
     } finally {
       setPending(false);
+    }
+  }
+
+  async function handleAvatarUpload(file: File) {
+    setPending(true);
+
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+
+      const response = await fetch("/api/account/avatar", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: { message?: string }; url?: string }
+        | null;
+
+      if (!response.ok || !payload?.url) {
+        throw new Error(
+          payload?.error?.message || "Unable to upload the profile photo.",
+        );
+      }
+
+      const result = await authClient.updateUser({
+        image: payload.url,
+      });
+
+      if (result.error) {
+        toast.error(
+          getErrorMessage(result.error, "Unable to save the profile photo."),
+        );
+        return;
+      }
+
+      setProfileImage(payload.url);
+      toast.success("Profile photo updated.");
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Unable to upload the profile photo.",
+      );
+    } finally {
+      setPending(false);
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = "";
+      }
     }
   }
 
@@ -328,29 +375,60 @@ export function ProfileSettingsPanel({
     <Frame>
       <FramePanel className="space-y-8 pt-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <Avatar size="lg" className="size-16">
-            <AvatarImage src={profileImage ?? undefined} alt={displayName} />
-            <AvatarFallback>
-              {getInitials(displayName, currentEmail)}
-            </AvatarFallback>
-          </Avatar>
+          <UserAvatar
+            alt={`${displayName || "User"} profile photo`}
+            className="size-16"
+            image={profileImage}
+            seed={user.id}
+            size="lg"
+          />
           <div className="space-y-3">
             <div>
               <p className="text-sm font-medium">Profile picture</p>
               <p className="text-xs text-muted-foreground">
-                Your current avatar is synced from your account profile.
+                Upload your own photo, or use your account's stable Blobatar by
+                default.
               </p>
             </div>
-            {profileImage ? (
+            <input
+              ref={avatarInputRef}
+              accept="image/png,image/jpeg,image/gif,image/webp,image/avif"
+              aria-label="Choose profile photo"
+              className="sr-only"
+              disabled={pending}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) {
+                  void handleAvatarUpload(file);
+                }
+              }}
+              type="file"
+            />
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 variant="outline"
                 disabled={pending}
-                onClick={handleRemoveAvatar}
+                onClick={() => avatarInputRef.current?.click()}
               >
-                Remove photo
+                {pending ? (
+                  <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
+                ) : (
+                  <UploadIcon aria-hidden="true" />
+                )}
+                {profileImage ? "Replace photo" : "Upload photo"}
               </Button>
-            ) : null}
+              {profileImage ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={handleRemoveAvatar}
+                >
+                  Use default avatar
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
 

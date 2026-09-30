@@ -96,3 +96,146 @@ describe("getAnnotationFocusOpacity", () => {
     ]).toEqual([1, 0.28, 1, 1]);
   });
 });
+
+describe("annotation hover intent", () => {
+  test("ignores touch entry without blocking a real mouse hover", () => {
+    const createHoverIntent = helpers.createAnnotationHoverIntent;
+
+    expect(createHoverIntent).toBeFunction();
+    if (!createHoverIntent) return;
+
+    let now = 0;
+    let nextHandle = 1;
+    const tasks = new Map();
+    const changes = [];
+    const advanceBy = (duration) => {
+      now += duration;
+
+      while (true) {
+        const due = [...tasks.entries()]
+          .filter(([, task]) => task.at <= now)
+          .sort((left, right) => left[1].at - right[1].at)[0];
+
+        if (!due) break;
+        tasks.delete(due[0]);
+        due[1].callback();
+      }
+    };
+    const hoverIntent = createHoverIntent({
+      bridgeMs: 100,
+      dwellMs: 350,
+      onChange: (annotationId) => changes.push(annotationId),
+      cancel: (handle) => tasks.delete(handle),
+      schedule: (callback, delay) => {
+        const handle = nextHandle++;
+        tasks.set(handle, { at: now + delay, callback });
+        return handle;
+      },
+    });
+
+    hoverIntent.enter("touch-label", "touch");
+    advanceBy(350);
+    expect(changes).toEqual([]);
+
+    hoverIntent.enter("mouse-label", "mouse");
+    advanceBy(350);
+    expect(changes).toEqual(["mouse-label"]);
+  });
+
+  test("shows only a settled label and cancels transient hover targets", () => {
+    const createHoverIntent = helpers.createAnnotationHoverIntent;
+
+    expect(createHoverIntent).toBeFunction();
+    if (!createHoverIntent) return;
+
+    let now = 0;
+    let nextHandle = 1;
+    const tasks = new Map();
+    const changes = [];
+    const advanceBy = (duration) => {
+      now += duration;
+
+      while (true) {
+        const due = [...tasks.entries()]
+          .filter(([, task]) => task.at <= now)
+          .sort((left, right) => left[1].at - right[1].at)[0];
+
+        if (!due) break;
+        tasks.delete(due[0]);
+        due[1].callback();
+      }
+    };
+    const hoverIntent = createHoverIntent({
+      bridgeMs: 100,
+      dwellMs: 350,
+      onChange: (annotationId) => changes.push(annotationId),
+      cancel: (handle) => tasks.delete(handle),
+      schedule: (callback, delay) => {
+        const handle = nextHandle++;
+        tasks.set(handle, { at: now + delay, callback });
+        return handle;
+      },
+    });
+
+    hoverIntent.enter("label-a");
+    advanceBy(200);
+    hoverIntent.enter("label-b");
+    advanceBy(349);
+    expect(changes).toEqual([]);
+
+    advanceBy(1);
+    expect(changes).toEqual(["label-b"]);
+
+    hoverIntent.leave();
+    advanceBy(99);
+    hoverIntent.enter("label-b");
+    advanceBy(1);
+    expect(changes).toEqual(["label-b"]);
+
+    hoverIntent.leave();
+    advanceBy(100);
+    expect(changes).toEqual(["label-b", null]);
+  });
+});
+
+describe("annotation interaction routing", () => {
+  test("identifies annotation UI without treating the surrounding viewport as annotation UI", () => {
+    const isAnnotationInteractionTarget =
+      helpers.isViewerAnnotationInteractionTarget;
+
+    expect(isAnnotationInteractionTarget).toBeFunction();
+    if (!isAnnotationInteractionTarget) return;
+
+    const annotationTarget = {
+      closest: (selector) =>
+        selector === "[data-viewer-annotation-interaction]"
+          ? { dataset: { viewerAnnotationInteraction: "" } }
+          : null,
+    };
+    const viewportTarget = { closest: () => null };
+
+    expect(isAnnotationInteractionTarget(annotationTarget)).toBe(true);
+    expect(isAnnotationInteractionTarget(viewportTarget)).toBe(false);
+    expect(isAnnotationInteractionTarget(null)).toBe(false);
+  });
+
+  test("opens the correct details surface for each viewer mode", () => {
+    const resolveDetailsSurface = helpers.resolveAnnotationDetailsSurface;
+
+    expect(resolveDetailsSurface).toBeFunction();
+    if (!resolveDetailsSurface) return;
+
+    expect(
+      resolveDetailsSurface({ isMprViewer: true, readOnly: true }),
+    ).toBe("mpr-drawer");
+    expect(
+      resolveDetailsSurface({ isMprViewer: false, readOnly: true }),
+    ).toBe("study-panel");
+    expect(
+      resolveDetailsSurface({ isMprViewer: false, readOnly: false }),
+    ).toBe("study-panel");
+    expect(
+      resolveDetailsSurface({ isMprViewer: true, readOnly: false }),
+    ).toBeNull();
+  });
+});

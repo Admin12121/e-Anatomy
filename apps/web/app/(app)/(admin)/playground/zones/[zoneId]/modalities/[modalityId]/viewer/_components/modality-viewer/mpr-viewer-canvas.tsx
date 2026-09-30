@@ -27,6 +27,7 @@ import {
   type AreaEditTool,
   type MainInteractionTool,
 } from "./viewer-canvas";
+import { isViewerAnnotationInteractionTarget } from "./viewer-canvas/helpers";
 import type { ViewerAssetImageSource } from "./viewer-data";
 
 const PLANE_LABELS: Record<MprPlane, string> = {
@@ -552,7 +553,10 @@ function MprViewport({
   return (
     <div
       className={cn("relative min-h-0 overflow-hidden bg-black", className)}
-      onPointerDownCapture={() => onActivateAsset(asset.id)}
+      onPointerDownCapture={(event) => {
+        if (isViewerAnnotationInteractionTarget(event.target)) return;
+        onActivateAsset(asset.id);
+      }}
     >
       <ViewerCanvas
         annotationEditingEnabled={annotationEditingEnabled && activeForEditing}

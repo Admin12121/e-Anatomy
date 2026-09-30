@@ -16,12 +16,13 @@ import { cn } from "@/lib/utils";
 
 import { clamp } from "../utils";
 import type { PlacedAnnotationLabel } from "./annotation-layout";
+import { VIEWER_ANNOTATION_INTERACTION_PROPS } from "./helpers";
 import styles from "./annotation-note-card.module.css";
 
 type AnnotationNoteCardProps = {
   annotation: ViewerAnnotation;
   label: PlacedAnnotationLabel;
-  onHoverChange: (hovered: boolean) => void;
+  onHoverChange: (hovered: boolean, pointerType: string) => void;
   onSelect: () => void;
   stageHeight: number;
   stageWidth: number;
@@ -132,9 +133,12 @@ export function AnnotationNoteCard({
     const preferredWidth = clamp(stageWidth * 0.22, 240, 360);
     const outwardAvailable =
       label.sideResolved === "right"
-        ? Math.max(160, stageWidth - label.tickX - SAFE_GAP)
-        : Math.max(160, label.tickX - SAFE_GAP);
-    const width = Math.min(preferredWidth, outwardAvailable);
+        ? Math.max(0, stageWidth - label.tickX - SAFE_GAP)
+        : Math.max(0, label.tickX - SAFE_GAP);
+    const width = Math.max(
+      1,
+      Math.min(preferredWidth, outwardAvailable, stageWidth - SAFE_GAP * 2),
+    );
     const left =
       label.sideResolved === "right"
         ? clamp(label.tickX, SAFE_GAP, Math.max(SAFE_GAP, stageWidth - width - SAFE_GAP))
@@ -154,18 +158,17 @@ export function AnnotationNoteCard({
   return (
     <article
       ref={cardRef}
+      {...VIEWER_ANNOTATION_INTERACTION_PROPS}
       className={cn(
         styles.card,
-        label.sideResolved === "left" ? styles.left : styles.right,
-        geometry.vertical === "above" ? styles.above : styles.below,
         visible && styles.visible,
       )}
       style={{
         ...geometry.style,
         borderColor: label.color,
       }}
-      onPointerEnter={() => onHoverChange(true)}
-      onPointerLeave={() => onHoverChange(false)}
+      onPointerEnter={(event) => onHoverChange(true, event.pointerType)}
+      onPointerLeave={(event) => onHoverChange(false, event.pointerType)}
       onClick={(event) => {
         event.stopPropagation();
         onSelect();

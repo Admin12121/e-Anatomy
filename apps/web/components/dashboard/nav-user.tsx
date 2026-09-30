@@ -4,11 +4,7 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
 import { authClient } from "@/lib/auth-client"
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from "@/components/ui/avatar"
+import { UserAvatar } from "@/components/account/user-avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,19 +25,13 @@ export function NavUser({
   user,
 }: {
   user: {
+    id: string
     name: string
     email: string
     avatar: string | null
   }
 }) {
   const router = useRouter()
-
-  const initials = user.name
-    .split(" ")
-    .map((value) => value[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase()
 
   async function handleSignOut() {
     try {
@@ -64,10 +54,13 @@ export function NavUser({
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
-              <Avatar className="h-8 w-8 rounded-lg grayscale">
-                <AvatarImage src={user.avatar ?? undefined} alt={user.name} />
-                <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
-              </Avatar>
+              <UserAvatar
+                alt={`${user.name || "User"} profile photo`}
+                className="h-8 w-8 rounded-lg"
+                fallbackClassName="rounded-lg"
+                image={user.avatar}
+                seed={user.id}
+              />
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{user.name}</span>
                 <span className="truncate text-xs text-muted-foreground">
@@ -86,10 +79,13 @@ export function NavUser({
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 p-2 text-left text-sm bg-muted rounded-lg mb-3">
                 <div className="relative">
-                  <Avatar className="h-8 w-8 rounded-lg">
-                    <AvatarImage src={user.avatar ?? undefined} alt={user.name} />
-                    <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
-                  </Avatar>
+                  <UserAvatar
+                    alt={`${user.name || "User"} profile photo`}
+                    className="h-8 w-8 rounded-lg"
+                    fallbackClassName="rounded-lg"
+                    image={user.avatar}
+                    seed={user.id}
+                  />
                 </div>
                 <div className="grid flex-1 text-left text-lg leading-tight">
                   <div className="flex items-center gap-2">

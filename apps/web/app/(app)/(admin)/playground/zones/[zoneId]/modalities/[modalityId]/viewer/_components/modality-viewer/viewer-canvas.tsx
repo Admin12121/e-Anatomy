@@ -44,8 +44,10 @@ import {
   MIN_AREA_STROKE_STEP,
   MIN_ZOOM_SCALE,
   calculateViewerLayout,
+  createAnnotationHoverIntent,
   extractPolygonsFromMask,
   resolveViewerImageDimensions,
+  type AnnotationHoverIntent,
 } from "./viewer-canvas/helpers";
 import { ViewerCanvasMainOverlay } from "./viewer-canvas/main-overlay";
 import { ViewerRegionOverlayCanvas } from "./viewer-canvas/region-overlay-canvas";
@@ -218,9 +220,13 @@ export function ViewerCanvas({
   const pendingMaskPreviewFrameRef = useRef<number | null>(null);
   const skipMaskSyncRef = useRef(false);
   const [isAreaBrushActive, setIsAreaBrushActive] = useState(false);
-  const hoverClearTimerRef = useRef<number | null>(null);
+  const hoverIntentRef = useRef<AnnotationHoverIntent | null>(null);
+  const hoverVisualClearTimerRef = useRef<number | null>(null);
   const popupHideTimerRef = useRef<number | null>(null);
   const popupShowFrameRef = useRef<number | null>(null);
+  const [popupIntentAnnotationId, setPopupIntentAnnotationId] = useState<
+    string | null
+  >(null);
   const [popupRenderId, setPopupRenderId] = useState<string | null>(null);
   const [popupVisible, setPopupVisible] = useState(false);
   const [stageSizePx, setStageSizePx] = useState({ width: 0, height: 0 });
@@ -1082,34 +1088,64 @@ export function ViewerCanvas({
 
   const draftPlacedLabel = labelLayout.labels.get("__draft__") ?? null;
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const hoverIntent = createAnnotationHoverIntent({
+      bridgeMs: 100,
+      dwellMs: 350,
+      onChange: setPopupIntentAnnotationId,
+      cancel: (handle) => window.clearTimeout(handle),
+      schedule: (callback, delay) => window.setTimeout(callback, delay),
+    });
+    hoverIntentRef.current = hoverIntent;
+
+    return () => {
+      hoverIntent.dispose();
+      if (hoverIntentRef.current === hoverIntent) {
+        hoverIntentRef.current = null;
+      }
+    };
+  }, []);
+
   const handleAnnotationHover = useCallback(
-    (annotationId: string | null) => {
-      if (typeof window !== "undefined" && hoverClearTimerRef.current !== null) {
-        window.clearTimeout(hoverClearTimerRef.current);
-        hoverClearTimerRef.current = null;
+    (annotationId: string | null, pointerType?: string) => {
+      if (
+        typeof window !== "undefined" &&
+        hoverVisualClearTimerRef.current !== null
+      ) {
+        window.clearTimeout(hoverVisualClearTimerRef.current);
+        hoverVisualClearTimerRef.current = null;
       }
 
       if (annotationId) {
+        if (pointerType === "touch") {
+          hoverIntentRef.current?.dismiss();
+          onAnnotationHover(null);
+          return;
+        }
+
         onAnnotationHover(annotationId);
+        hoverIntentRef.current?.enter(annotationId, pointerType);
         return;
       }
+
+      hoverIntentRef.current?.leave();
 
       if (typeof window === "undefined") {
         onAnnotationHover(null);
         return;
       }
 
-      hoverClearTimerRef.current = window.setTimeout(() => {
-        hoverClearTimerRef.current = null;
+      hoverVisualClearTimerRef.current = window.setTimeout(() => {
+        hoverVisualClearTimerRef.current = null;
         onAnnotationHover(null);
-      }, 260);
+      }, 100);
     },
     [onAnnotationHover],
   );
 
-  const popupTargetId = editorMode
-    ? null
-    : selectedAnnotationId ?? hoveredAnnotationId;
+  const popupTargetId = editorMode ? null : popupIntentAnnotationId;
 
   const popupTargetHasLabel = Boolean(
     popupTargetId && labelLayout.labels.has(popupTargetId),
@@ -1154,7 +1190,7 @@ export function ViewerCanvas({
     popupHideTimerRef.current = window.setTimeout(() => {
       popupHideTimerRef.current = null;
       setPopupRenderId((current) => (current === null ? current : null));
-    }, 220);
+    }, 130);
   }, [editorMode, popupTargetHasLabel, popupTargetId]);
 
   useEffect(() => {
@@ -1162,8 +1198,8 @@ export function ViewerCanvas({
       if (typeof window === "undefined") {
         return;
       }
-      if (hoverClearTimerRef.current !== null) {
-        window.clearTimeout(hoverClearTimerRef.current);
+      if (hoverVisualClearTimerRef.current !== null) {
+        window.clearTimeout(hoverVisualClearTimerRef.current);
       }
       if (popupHideTimerRef.current !== null) {
         window.clearTimeout(popupHideTimerRef.current);
@@ -1735,18 +1771,22 @@ export function ViewerCanvas({
 
         {!editorMode && popupAnnotation && popupStructure && popupLabel ? (
           <AnnotationNoteCard
-            key={popupAnnotation.id}
             annotation={popupAnnotation}
             label={popupLabel}
-            onHoverChange={(hovered) =>
-              handleAnnotationHover(hovered ? popupAnnotation.id : null)
+            onHoverChange={(hovered, pointerType) =>
+              handleAnnotationHover(
+                hovered ? popupAnnotation.id : null,
+                pointerType,
+              )
             }
-            onSelect={() =>
+            onSelect={() => {
+              hoverIntentRef.current?.dismiss();
+              onAnnotationHover(null);
               onAnnotationSelect(
                 popupAnnotation.id,
                 popupAnnotation.structureId,
-              )
-            }
+              );
+            }}
             stageHeight={Math.max(stageSizePx.height, 1)}
             stageWidth={Math.max(stageSizePx.width, 1)}
             structure={popupStructure}

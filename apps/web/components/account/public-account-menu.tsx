@@ -12,7 +12,6 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -23,20 +22,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { UserAvatar } from "@/components/account/user-avatar"
 import { authClient } from "@/lib/auth-client"
 import { cn } from "@/lib/utils"
 
 type PublicAccountMenuProps = {
   className?: string
-}
-
-function getInitials(name: string, email: string) {
-  return (name.trim() || email)
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("")
 }
 
 export function PublicAccountMenu({ className }: PublicAccountMenuProps) {
@@ -91,37 +82,32 @@ export function PublicAccountMenu({ className }: PublicAccountMenuProps) {
   }
 
   const user = session.user
-  const initials = getInitials(user.name, user.email)
-
   return (
     <div className={cn("flex items-center", className)}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             aria-label="Open account menu"
-            className="rounded-md p-0"
+            className="rounded-md border-0 bg-transparent p-0 shadow-none hover:bg-transparent"
             size="icon-xl"
-            variant="outline"
+            variant="ghost"
           >
-            <Avatar size="lg">
-              <AvatarImage
-                alt={`${user.name || "User"} profile photo`}
-                src={user.image ?? undefined}
-              />
-              <AvatarFallback>{initials}</AvatarFallback>
-            </Avatar>
+            <UserAvatar
+              alt={`${user.name || "User"} profile photo`}
+              image={user.image}
+              seed={user.id}
+              size="lg"
+            />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-64" sideOffset={8}>
           <DropdownMenuLabel className="p-2 font-normal">
             <div className="flex min-w-0 items-center gap-3 rounded-lg bg-muted/60 p-2">
-              <Avatar>
-                <AvatarImage
-                  alt={`${user.name || "User"} profile photo`}
-                  src={user.image ?? undefined}
-                />
-                <AvatarFallback>{initials}</AvatarFallback>
-              </Avatar>
+              <UserAvatar
+                alt={`${user.name || "User"} profile photo`}
+                image={user.image}
+                seed={user.id}
+              />
               <div className="min-w-0 flex-1 text-left">
                 <p className="truncate text-sm font-medium">
                   {user.name || "User"}

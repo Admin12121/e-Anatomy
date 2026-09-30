@@ -38,7 +38,10 @@ type ViewerCanvasMainOverlayProps = {
   draggingAnchorRef: MutableRefObject<AnchorDragState | null>;
   editLockEnabled: boolean;
   isAreaPaintMode: boolean;
-  onAnnotationHover: (annotationId: string | null) => void;
+  onAnnotationHover: (
+    annotationId: string | null,
+    pointerType?: string,
+  ) => void;
   onAnnotationSelect: (annotationId: string, structureId: string) => void;
   onDraftAnchorMove: (point: ViewerAnnotationPoint) => void;
   overlayOpacity: number;
@@ -177,14 +180,14 @@ export function ViewerCanvasMainOverlay({
             style={{
               pointerEvents: interactionBlocked ? "none" : undefined,
             }}
-            onMouseEnter={() => {
+            onPointerEnter={(event) => {
               if (!interactionBlocked) {
-                onAnnotationHover(annotation.id);
+                onAnnotationHover(annotation.id, event.pointerType);
               }
             }}
-            onMouseLeave={() => {
+            onPointerLeave={(event) => {
               if (!interactionBlocked) {
-                onAnnotationHover(null);
+                onAnnotationHover(null, event.pointerType);
               }
             }}
             onClick={(event) => {

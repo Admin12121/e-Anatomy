@@ -26,6 +26,7 @@ export default async function AdminLayout({ children }: AdminLayoutProps) {
       <AppSidebar
         variant="sidebar"
         user={{
+          id: user.id,
           name: user.name,
           email: user.email,
           avatar: user.image,

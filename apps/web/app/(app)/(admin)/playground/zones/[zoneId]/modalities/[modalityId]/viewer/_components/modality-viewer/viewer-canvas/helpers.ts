@@ -23,6 +23,11 @@ export const LABEL_BOX_MIN_WIDTH = 46;
 export const LABEL_BOX_MAX_WIDTH = 180;
 export const LABEL_BOX_PADDING_X = 10;
 export const LABEL_BOX_HEIGHT_PADDING = 10;
+export const VIEWER_ANNOTATION_INTERACTION_ATTRIBUTE =
+  "data-viewer-annotation-interaction";
+export const VIEWER_ANNOTATION_INTERACTION_PROPS = {
+  [VIEWER_ANNOTATION_INTERACTION_ATTRIBUTE]: "",
+} as const;
 
 const VIEWER_COORDINATE_HEIGHT = 1000;
 const VIEWER_LABEL_SCALE_MIN = 0.65;
@@ -75,6 +80,142 @@ type AnnotationFocusInput = {
   hoveredId: string | null;
   selectedId: string | null;
 };
+
+type AnnotationHoverIntentOptions = {
+  bridgeMs: number;
+  cancel: (handle: number) => void;
+  dwellMs: number;
+  onChange: (annotationId: string | null) => void;
+  schedule: (callback: () => void, delay: number) => number;
+};
+
+export type AnnotationHoverIntent = {
+  dismiss: () => void;
+  dispose: () => void;
+  enter: (annotationId: string, pointerType?: string) => void;
+  leave: () => void;
+};
+
+export type AnnotationDetailsSurface = "mpr-drawer" | "study-panel";
+
+export function isViewerAnnotationInteractionTarget(target: unknown): boolean {
+  if (!target || typeof target !== "object" || !("closest" in target)) {
+    return false;
+  }
+
+  const closest = target.closest;
+
+  if (typeof closest !== "function") {
+    return false;
+  }
+
+  return Boolean(
+    closest.call(
+      target,
+      `[${VIEWER_ANNOTATION_INTERACTION_ATTRIBUTE}]`,
+    ),
+  );
+}
+
+export function resolveAnnotationDetailsSurface({
+  isMprViewer,
+  readOnly,
+}: {
+  isMprViewer: boolean;
+  readOnly: boolean;
+}): AnnotationDetailsSurface | null {
+  if (!isMprViewer) {
+    return "study-panel";
+  }
+
+  return readOnly ? "mpr-drawer" : null;
+}
+
+export function createAnnotationHoverIntent({
+  bridgeMs,
+  cancel,
+  dwellMs,
+  onChange,
+  schedule,
+}: AnnotationHoverIntentOptions): AnnotationHoverIntent {
+  let activeAnnotationId: string | null = null;
+  let pendingAnnotationId: string | null = null;
+  let dwellHandle: number | null = null;
+  let leaveHandle: number | null = null;
+
+  const cancelDwell = () => {
+    if (dwellHandle !== null) cancel(dwellHandle);
+    dwellHandle = null;
+    pendingAnnotationId = null;
+  };
+  const cancelLeave = () => {
+    if (leaveHandle !== null) cancel(leaveHandle);
+    leaveHandle = null;
+  };
+  const dismiss = () => {
+    cancelDwell();
+    cancelLeave();
+
+    if (activeAnnotationId !== null) {
+      activeAnnotationId = null;
+      onChange(null);
+    }
+  };
+
+  return {
+    dismiss,
+    dispose: () => {
+      cancelDwell();
+      cancelLeave();
+      activeAnnotationId = null;
+    },
+    enter: (annotationId, pointerType) => {
+      if (pointerType === "touch") {
+        dismiss();
+        return;
+      }
+
+      cancelLeave();
+
+      if (
+        annotationId === activeAnnotationId ||
+        annotationId === pendingAnnotationId
+      ) {
+        return;
+      }
+
+      cancelDwell();
+      if (activeAnnotationId !== null) {
+        activeAnnotationId = null;
+        onChange(null);
+      }
+
+      pendingAnnotationId = annotationId;
+      dwellHandle = schedule(() => {
+        dwellHandle = null;
+        if (pendingAnnotationId !== annotationId) return;
+
+        pendingAnnotationId = null;
+        activeAnnotationId = annotationId;
+        onChange(annotationId);
+      }, dwellMs);
+    },
+    leave: () => {
+      cancelDwell();
+      cancelLeave();
+
+      if (activeAnnotationId === null) return;
+
+      leaveHandle = schedule(() => {
+        leaveHandle = null;
+        if (activeAnnotationId === null) return;
+
+        activeAnnotationId = null;
+        onChange(null);
+      }, bridgeMs);
+    },
+  };
+}
 
 function isValidDimension(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
