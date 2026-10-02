@@ -44,12 +44,12 @@ export type HermesRevealFooterProps = {
   revealStartVh?: number;
   revealRangeVh?: number;
   liftDecay?: number;
+  /** Optional document-frame scroller; home retains its window-based reveal. */
+  scrollContainerSelector?: string;
 };
 
-const DEFAULT_HERO_IMAGE =
-  "./footer.avif";
-const DEFAULT_BRAND_MARK =
-  "/logo.webp";
+const DEFAULT_HERO_IMAGE = "./footer.avif";
+const DEFAULT_BRAND_MARK = "/logo.webp";
 
 const NOISE_BG =
   "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 1 1 0 -1.55'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
@@ -80,25 +80,38 @@ function useFooterReveal(
     revealStartVh,
     revealRangeVh,
     liftDecay,
+    scrollContainerSelector,
   }: Required<
     Pick<
       HermesRevealFooterProps,
       "animationLerp" | "revealStartVh" | "revealRangeVh" | "liftDecay"
     >
-  >,
+  > &
+    Pick<HermesRevealFooterProps, "scrollContainerSelector">,
 ) {
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
+    const scrollContainer = scrollContainerSelector
+      ? root.closest<HTMLElement>(scrollContainerSelector)
+      : null;
+    const scrollTarget = scrollContainer ?? window;
+    const readScroll = () => scrollContainer?.scrollTop ?? window.scrollY;
+    const readHeight = () =>
+      scrollContainer?.clientHeight ?? window.innerHeight;
 
-    const readDocumentLimit = (height = window.innerHeight) =>
-      Math.max(1, document.documentElement.scrollHeight - height);
+    const readDocumentLimit = (height = readHeight()) =>
+      Math.max(
+        1,
+        (scrollContainer?.scrollHeight ??
+          document.documentElement.scrollHeight) - height,
+      );
 
-    let viewportHeight = window.innerHeight;
+    let viewportHeight = readHeight();
     let documentLimit = readDocumentLimit(viewportHeight);
     let naturalTop = 0;
     let overlap = 0;
-    let targetScroll = window.scrollY;
+    let targetScroll = readScroll();
     let animatedScroll = targetScroll;
     let raf = 0;
     let disposed = false;
@@ -126,8 +139,7 @@ function useFooterReveal(
       if (overlap > 0) {
         const progress = clamp(1 - (naturalTop - scroll) / overlap, 0, 1);
         const lift =
-          (overlap * (1 - Math.exp(-liftDecay * (1 - progress)))) /
-          liftDecay;
+          (overlap * (1 - Math.exp(-liftDecay * (1 - progress)))) / liftDecay;
         const nextLift = `${lift.toFixed(1)}px`;
 
         if (nextLift !== lastLift) {
@@ -156,13 +168,19 @@ function useFooterReveal(
     const measure = () => {
       if (disposed) return;
 
-      viewportHeight = window.innerHeight;
+      viewportHeight = readHeight();
+      if (scrollContainer)
+        root.style.setProperty("--hfc-viewport", `${viewportHeight}px`);
       documentLimit = readDocumentLimit(viewportHeight);
       const marginTop =
         Number.parseFloat(window.getComputedStyle(root).marginTop) || 0;
       overlap = Math.max(0, -marginTop);
-      naturalTop = root.getBoundingClientRect().top + window.scrollY + overlap;
-      targetScroll = window.scrollY;
+      naturalTop =
+        root.getBoundingClientRect().top -
+        (scrollContainer?.getBoundingClientRect().top ?? 0) +
+        readScroll() +
+        overlap;
+      targetScroll = readScroll();
       animatedScroll = targetScroll;
       update(animatedScroll);
     };
@@ -178,7 +196,7 @@ function useFooterReveal(
         return;
       }
 
-      targetScroll = window.scrollY;
+      targetScroll = readScroll();
       if (!raf) raf = window.requestAnimationFrame(tick);
     };
 
@@ -196,12 +214,18 @@ function useFooterReveal(
     measure();
     resizeObserver.observe(root);
     resizeObserver.observe(document.body);
-    window.addEventListener("scroll", requestTick, { passive: true });
+    if (scrollContainer) resizeObserver.observe(scrollContainer);
+    scrollTarget.addEventListener("scroll", requestTick, { passive: true });
     window.addEventListener("resize", onResize);
-    window.addEventListener(ROUTE_TRANSITION_SETTLED_EVENT, onTransitionSettled);
+    window.addEventListener(
+      ROUTE_TRANSITION_SETTLED_EVENT,
+      onTransitionSettled,
+    );
     document.fonts?.ready.then(() => !disposed && measure());
 
-    const image = root.querySelector<HTMLImageElement>("[data-footer-hero-image]");
+    const image = root.querySelector<HTMLImageElement>(
+      "[data-footer-hero-image]",
+    );
     if (image && !image.complete) {
       image.addEventListener("load", measure, { once: true });
     }
@@ -210,12 +234,22 @@ function useFooterReveal(
       disposed = true;
       if (raf) window.cancelAnimationFrame(raf);
       resizeObserver.disconnect();
-      window.removeEventListener("scroll", requestTick);
+      scrollTarget.removeEventListener("scroll", requestTick);
       window.removeEventListener("resize", onResize);
-      window.removeEventListener(ROUTE_TRANSITION_SETTLED_EVENT, onTransitionSettled);
+      window.removeEventListener(
+        ROUTE_TRANSITION_SETTLED_EVENT,
+        onTransitionSettled,
+      );
       image?.removeEventListener("load", measure);
     };
-  }, [animationLerp, liftDecay, revealRangeVh, revealStartVh, rootRef]);
+  }, [
+    animationLerp,
+    liftDecay,
+    revealRangeVh,
+    revealStartVh,
+    rootRef,
+    scrollContainerSelector,
+  ]);
 }
 
 function useGhostWordFit(
@@ -274,7 +308,10 @@ function useGhostWordFit(
       probe.remove();
 
       const sourceMarginCompensation = maxPx * 0.059;
-      const effectiveMeasured = Math.max(1, measured - sourceMarginCompensation);
+      const effectiveMeasured = Math.max(
+        1,
+        measured - sourceMarginCompensation,
+      );
       const fitted = Math.min(maxPx, (maxPx * available) / effectiveMeasured);
 
       root.style.setProperty("--hfc-fit-size", `${fitted.toFixed(3)}px`);
@@ -382,6 +419,7 @@ export function Footer({
   revealStartVh = 0.72,
   revealRangeVh = 0.38,
   liftDecay = 3.2,
+  scrollContainerSelector,
 }: HermesRevealFooterProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const ghostTextRef = useRef<HTMLSpanElement>(null);
@@ -392,6 +430,7 @@ export function Footer({
     revealStartVh,
     revealRangeVh,
     liftDecay,
+    scrollContainerSelector,
   });
 
   const style = useMemo(
@@ -428,7 +467,7 @@ export function Footer({
         "relative isolate w-full bg-[var(--hfc-primary)] text-[var(--hfc-fg)]",
         "font-['Rules_Variable',Arial,sans-serif] uppercase antialiased",
         "[font-synthesis:none] [text-rendering:optimizeLegibility]",
-        "md:z-0 md:mt-[-100dvh] md:h-auto md:min-h-0 md:bg-transparent",
+        "md:z-0 md:mt-[calc(-1*var(--hfc-viewport,100dvh))] md:h-auto md:min-h-0 md:bg-transparent",
         className,
       ]
         .filter(Boolean)
@@ -444,7 +483,7 @@ export function Footer({
           "[pointer-events:var(--hfc-footer-pe,none)]",
           "will-change-[opacity,filter,transform]",
           "motion-reduce:opacity-100 motion-reduce:[filter:none] motion-reduce:transform-none",
-          "md:sticky md:top-0 md:z-0 md:flex md:min-h-dvh md:flex-col",
+          "md:sticky md:top-0 md:z-0 md:flex md:min-h-[var(--hfc-viewport,100dvh)] md:flex-col",
           "md:pb-[var(--hfc-frame)] md:[transform:translateY(var(--hfc-footer-lift,0px))]",
         ].join(" ")}
       >
@@ -522,11 +561,7 @@ export function Footer({
               width={60}
             />
             <p className="m-0">{tagline}</p>
-            <p
-              className={`${plainLinkClass} opacity-60`}
-            >
-              {copyright}
-            </p>
+            <p className={`${plainLinkClass} opacity-60`}>{copyright}</p>
           </div>
 
           {columns.slice(0, 4).map((column, index) => (
@@ -577,14 +612,14 @@ export function Footer({
 
           <span className="order-1 md:order-none text-center flex items-center gap-[3px]">
             <p className="font-light opacity-50">Designed and Developed by </p>
-              <Link href={"https://admin12121.com"} target="_blank">
-                <ShinyText
-                  text="Admin12121"
-                  duration={2}
-                  delay={1}
-                  className="text-xs font-[600]"
-                />
-              </Link>
+            <Link href={"https://admin12121.com"} target="_blank">
+              <ShinyText
+                text="Admin12121"
+                duration={2}
+                delay={1}
+                className="text-xs font-[600]"
+              />
+            </Link>
           </span>
           <p className="order-1 md:order-none text-right">
             <a className={plainLinkClass} href={termsHref}>
@@ -598,8 +633,78 @@ export function Footer({
         </div>
       </footer>
 
-      <div aria-hidden="true" className="hidden h-dvh md:block" />
+      <div
+        aria-hidden="true"
+        className="hidden h-[var(--hfc-viewport,100dvh)] md:block"
+      />
     </div>
+  );
+}
+
+/** Structures only need the bottom links, on the document's own background. */
+export function CompactFooter() {
+  return (
+    <footer
+      aria-label="Site footer"
+      data-compact-footer=""
+      className={`${bodyTextClass} grid w-full grid-cols-2 items-center gap-x-4 gap-y-5 bg-transparent text-inherit xl:grid-cols-[auto_minmax(0,1fr)_auto]`}
+    >
+      <div className="flex items-center">
+        <a
+          aria-label="Discord"
+          className="inline-flex items-center justify-center py-2 pr-2 transition-opacity duration-150 hover:opacity-60 [&_svg]:size-6 [&_svg]:fill-current [&_svg]:stroke-current"
+          href="https://discord.gg/nousresearch"
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          <DiscordIcon />
+        </a>
+        <a
+          aria-label="GitHub"
+          className="inline-flex items-center justify-center p-2 transition-opacity duration-150 hover:opacity-60 [&_svg]:size-5 [&_svg]:fill-current [&_svg]:stroke-current"
+          href="https://github.com/NousResearch/hermes-agent"
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          <GithubIcon />
+        </a>
+        <a
+          aria-label="X"
+          className="inline-flex items-center justify-center p-2 transition-opacity duration-150 hover:opacity-60 [&_svg]:size-5 [&_svg]:fill-current [&_svg]:stroke-current"
+          href="https://x.com/NousResearch"
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          <XIcon />
+        </a>
+      </div>
+      <div className="order-last col-span-2 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-center leading-relaxed xl:order-none xl:col-span-1">
+        <span className="font-light opacity-50">Designed and developed by</span>
+        <Link
+          href="https://admin12121.com"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <ShinyText
+            text="Admin12121"
+            duration={2}
+            delay={1}
+            className="text-xs font-[600]"
+          />
+        </Link>
+      </div>
+      <p className="m-0 text-right">
+        <Link className={plainLinkClass} href="/terms">
+          Terms
+        </Link>
+        <span className="mx-2" aria-hidden="true">
+          |
+        </span>
+        <Link className={plainLinkClass} href="/privacy">
+          Privacy
+        </Link>
+      </p>
+    </footer>
   );
 }
 

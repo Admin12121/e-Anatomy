@@ -23,8 +23,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-export function ContentSidebarToggle() {
+export function ContentSidebarToggle({
+  placement,
+}: {
+  placement?: "sidebar" | "content";
+}) {
   const { open, openMobile, isMobile, toggleSidebar } = useSidebar();
+  const expanded = isMobile ? openMobile : open;
+  if (placement === "sidebar" && !expanded) return null;
+  if (placement === "content" && expanded) return null;
   const label = isMobile
     ? openMobile
       ? "Close navigation"
@@ -86,7 +93,7 @@ function NestedSidebarBody({
             </TooltipTrigger>
             <TooltipContent>{backLabel}</TooltipContent>
           </Tooltip>
-          {showLabels ? <ContentSidebarToggle /> : null}
+          {showLabels ? <ContentSidebarToggle placement="sidebar" /> : null}
         </SidebarHeader>
         <SidebarContent
           className="gap-0 overscroll-contain group-data-[collapsible=icon]:overflow-y-auto"
@@ -94,7 +101,7 @@ function NestedSidebarBody({
         >
           {items(showLabels)}
         </SidebarContent>
-        {!showLabels ? (
+        {!showLabels && !editor ? (
           <div className="border-t p-2">
             <ContentSidebarToggle />
           </div>

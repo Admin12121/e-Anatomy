@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   documentValue,
-  documentStatus,
   parseDocumentValue,
   documentSaveInput,
 } from "./documents";
@@ -35,17 +34,6 @@ describe("editorial documents", () => {
     expect(() => parseDocumentValue("## Legacy")).toThrow();
     expect(() => parseDocumentValue('{"type":"paragraph"}')).toThrow();
   });
-  test("distinguishes a never-published draft from pending published edits", () => {
-    expect(documentStatus({ revision: 0, publishedRevision: null })).toBe(
-      "Draft",
-    );
-    expect(documentStatus({ revision: 2, publishedRevision: 2 })).toBe(
-      "Published",
-    );
-    expect(documentStatus({ revision: 3, publishedRevision: 2 })).toBe(
-      "Unpublished changes",
-    );
-  });
   test("body-only saves retain existing metadata and revision with free access", () => {
     const original = {
       id: "article",
@@ -66,7 +54,7 @@ describe("editorial documents", () => {
       publishedAt: "2026-10-01T00:00:00Z",
     };
     const body = [{ type: "paragraph", content: "Updated document" }];
-    const input = documentSaveInput(original, JSON.stringify(body), "save");
+    const input = documentSaveInput(original, JSON.stringify(body));
     expect(input).toEqual({
       revision: 7,
       summary: original.summary,
@@ -78,13 +66,9 @@ describe("editorial documents", () => {
     expect(original.accessLevel).toBe("subscription");
     expect(original.publishedRevision).toBe(6);
   });
-  test("publishing remains an explicit action, not a side effect of saving", () => {
+  test("saving needs no publication option", () => {
     const document = { revision: 1, summary: "", resources: [] };
-    expect(documentSaveInput(document, "[]", "save").action).toBe("save");
-    expect(documentSaveInput(document, "[]", "publish").action).toBe("publish");
-    expect(documentSaveInput(document, "[]", "unpublish").action).toBe(
-      "unpublish",
-    );
-    expect(() => documentSaveInput(document, "not json", "save")).toThrow();
+    expect(documentSaveInput(document, "[]").action).toBe("save");
+    expect(() => documentSaveInput(document, "not json")).toThrow();
   });
 });

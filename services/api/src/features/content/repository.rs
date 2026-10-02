@@ -10,21 +10,33 @@ use uuid::Uuid;
 pub async fn public_topics(pool: &PgPool) -> Result<Vec<PublicTopic>, AppError> {
     Ok(sqlx::query_as::<_, PublicTopic>(r#"
         SELECT f.id, f.slug, f.name, z.slug AS zone_slug, z.name AS zone_name,
-            (d.published_revision IS NOT NULL AND d.published_access_level = 'free') AS has_article,
-            first_label.slug AS first_label_slug
+            COALESCE(d.access_level = 'free', false) AS has_article,
+            f.thumbnail_url, first_label.slug AS first_label_slug,
+            COALESCE(topic_labels.items, '[]'::jsonb) AS labels
         FROM anatomy_zone_modality_families f JOIN anatomy_zones z ON z.id = f.zone_id
         JOIN accounts a ON a.id = z.account_id AND a.status = 'active'
         LEFT JOIN anatomy_content_documents d ON d.family_id = f.id
         LEFT JOIN LATERAL (
-            SELECT s.slug FROM anatomy_structures s JOIN anatomy_content_documents ld ON ld.structure_id = s.id
-            WHERE s.modality_id = COALESCE((SELECT id FROM anatomy_zone_modalities
-                WHERE id = f.primary_modality_id AND family_id = f.id), (
-                SELECT id FROM anatomy_zone_modalities WHERE family_id = f.id
-                ORDER BY (processing_status = 'ready') DESC, created_at, id LIMIT 1
-            )) AND ld.published_revision IS NOT NULL AND ld.published_access_level = 'free'
+            SELECT id FROM anatomy_zone_modalities WHERE family_id = f.id
+            ORDER BY (id = f.primary_modality_id) DESC NULLS LAST,
+                (processing_status = 'ready') DESC, created_at, id LIMIT 1
+        ) primary_variant ON true
+        LEFT JOIN LATERAL (
+            SELECT s.slug FROM anatomy_structures s
+            LEFT JOIN anatomy_content_documents ld ON ld.structure_id = s.id
+            WHERE s.modality_id = primary_variant.id AND COALESCE(ld.access_level, s.access_level) = 'free'
             ORDER BY s.sort_order, s.id LIMIT 1
         ) first_label ON true
-        WHERE (d.published_revision IS NOT NULL AND d.published_access_level = 'free') OR first_label.slug IS NOT NULL
+        LEFT JOIN LATERAL (
+            SELECT jsonb_agg(jsonb_build_object('id', s.id, 'slug', s.slug, 'title', s.title,
+                'thumbnailUrl', g.thumbnail_url) ORDER BY g.sort_order NULLS LAST, s.sort_order, s.id) AS items
+            FROM anatomy_structures s
+            LEFT JOIN anatomy_structure_groups g ON g.id = s.group_id
+            LEFT JOIN anatomy_content_documents ld ON ld.structure_id = s.id
+            WHERE s.modality_id = primary_variant.id AND COALESCE(ld.access_level, s.access_level) = 'free'
+        ) topic_labels ON true
+        WHERE (d.access_level = 'free') OR first_label.slug IS NOT NULL
+            OR EXISTS (SELECT 1 FROM anatomy_zone_modalities m WHERE m.family_id = f.id AND m.processing_status = 'ready')
         ORDER BY z.name, f.name, f.id
     "#).fetch_all(pool).await?)
 }
@@ -38,7 +50,7 @@ pub async fn family(
 ) -> Result<ContentFamily, AppError> {
     sqlx::query_as::<_, ContentFamily>(r#"
         SELECT f.id, f.slug, f.name, z.id AS zone_id, z.slug AS zone_slug, z.name AS zone_name,
-            primary_variant.id AS primary_modality_id, primary_variant.slug AS viewer_slug, f.thumbnail_url
+            primary_variant.id AS primary_modality_id, primary_variant.slug AS viewer_slug, f.thumbnail_url, f.modality_type
         FROM anatomy_zone_modality_families f JOIN anatomy_zones z ON z.id = f.zone_id
         LEFT JOIN LATERAL (
             SELECT id, slug FROM anatomy_zone_modalities WHERE family_id = f.id
@@ -64,14 +76,14 @@ pub async fn labels(
 ) -> Result<Vec<ContentLabel>, AppError> {
     Ok(sqlx::query_as::<_, ContentLabel>(
         r#"
-        SELECT s.id, s.slug, s.title, g.title AS group_name,
+        SELECT s.id, s.slug, s.title, g.title AS group_name, g.thumbnail_url,
             m.id AS modality_id, m.name AS modality_name, m.id = $2 AS is_primary,
             COALESCE(d.revision, 0) AS revision, d.published_revision
         FROM anatomy_structures s JOIN anatomy_zone_modalities m ON m.id = s.modality_id
         LEFT JOIN anatomy_structure_groups g ON g.id = s.group_id
         LEFT JOIN anatomy_content_documents d ON d.structure_id = s.id
         WHERE m.family_id = $1 AND (NOT $3 OR (m.id = $2 AND
-            d.published_revision IS NOT NULL AND d.published_access_level = 'free'))
+            COALESCE(d.access_level, s.access_level) = 'free'))
         ORDER BY m.created_at, m.id, g.sort_order NULLS LAST, s.sort_order, s.id
     "#,
     )
@@ -125,19 +137,15 @@ pub async fn document(
 ) -> Result<ContentDocument, AppError> {
     let row = sqlx::query_as::<_, DocumentRow>(r#"
         SELECT d.id,
-            CASE WHEN $3 THEN d.published_summary ELSE d.summary END AS summary,
-            CASE WHEN $3 THEN d.published_body_json ELSE d.body_json END AS body_json,
-            CASE WHEN $3 THEN d.published_legacy_markdown ELSE d.legacy_markdown END AS legacy_markdown,
-            CASE WHEN $3 THEN d.published_access_level ELSE d.access_level END AS access_level,
-            CASE WHEN $3 THEN d.published_revision ELSE d.revision END AS revision,
+            d.summary, d.body_json, d.legacy_markdown, d.access_level, d.revision,
             d.published_revision, d.published_at,
-            CASE WHEN $3 THEN d.published_resources ELSE COALESCE((
+            COALESCE((
                 SELECT jsonb_agg(jsonb_build_object('kind', r.kind, 'title', r.title, 'url', r.url, 'caption', r.caption)
                     ORDER BY r.sort_order) FROM anatomy_content_resources r WHERE r.document_id = d.id
-            ), '[]'::jsonb) END AS resources
+            ), '[]'::jsonb) AS resources
         FROM anatomy_content_documents d
         WHERE (($2::uuid IS NULL AND d.family_id = $1) OR d.structure_id = $2)
-            AND (NOT $3 OR (d.published_revision IS NOT NULL AND d.published_access_level = 'free'))
+            AND (NOT $3 OR d.access_level = 'free')
     "#).bind(family_id).bind(structure_id).bind(public).fetch_optional(pool).await?;
     if let Some(row) = row {
         return Ok(ContentDocument {
@@ -152,8 +160,10 @@ pub async fn document(
             resources: row.resources.0,
         });
     }
-    if public {
-        return Err(AppError::not_found("This article has not been published"));
+    if public && sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM anatomy_content_documents WHERE (($2::uuid IS NULL AND family_id = $1) OR structure_id = $2) AND access_level <> 'free')"
+    ).bind(family_id).bind(structure_id).fetch_one(pool).await? {
+        return Err(AppError::not_found("Article not found"));
     }
     let legacy = if let Some(id) = structure_id {
         sqlx::query_as::<_, (Option<String>, Option<String>, String)>(
@@ -163,6 +173,9 @@ pub async fn document(
         None
     };
     let (summary, legacy_markdown, access_level) = legacy.unwrap_or((None, None, "free".into()));
+    if public && access_level != "free" {
+        return Err(AppError::not_found("Article not found"));
+    }
     Ok(ContentDocument {
         id: None,
         summary: summary.unwrap_or_default(),
@@ -246,7 +259,7 @@ pub async fn save(
             .bind(id).bind(&resource.kind).bind(resource.title.trim()).bind(&resource.url).bind(&resource.caption).bind(index as i32)
             .execute(&mut *tx).await?;
     }
-    if input.action == "publish" {
+    if matches!(input.action.as_str(), "save" | "publish") {
         sqlx::query(r#"
             UPDATE anatomy_content_documents SET published_revision = revision, published_summary = summary,
                 published_body_json = body_json, published_legacy_markdown = legacy_markdown,
@@ -257,13 +270,11 @@ pub async fn save(
         sqlx::query("UPDATE anatomy_content_documents SET published_revision=NULL, published_summary=NULL, published_body_json=NULL, published_legacy_markdown=NULL, published_access_level=NULL, published_resources='[]', published_at=NULL WHERE id=$1")
             .bind(id).execute(&mut *tx).await?;
     }
-    if matches!(input.action.as_str(), "publish" | "unpublish") {
-        if let Some(structure) = structure_id {
-            let (summary, body) = input.public_viewer_description();
-            sqlx::query("UPDATE anatomy_structures SET short_description=$2, long_description=$3, access_level=$4, updated_by_user_id=$5, updated_at=NOW() WHERE id=$1")
-                .bind(structure).bind(summary).bind(body).bind(&input.access_level).bind(user_id)
-                .execute(&mut *tx).await?;
-        }
+    if let Some(structure) = structure_id {
+        let (summary, body) = input.public_viewer_description();
+        sqlx::query("UPDATE anatomy_structures SET short_description=$2, long_description=$3, access_level=$4, updated_by_user_id=$5, updated_at=NOW() WHERE id=$1")
+            .bind(structure).bind(summary).bind(body).bind(&input.access_level).bind(user_id)
+            .execute(&mut *tx).await?;
     }
     // Capture this transaction's revision before releasing locks. A later writer must
     // not change the response or give this editor a revision for somebody else's body.

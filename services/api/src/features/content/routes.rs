@@ -148,7 +148,7 @@ async fn load_article(
             labels
                 .iter()
                 .find(|item| item.slug == slug)
-                .ok_or_else(|| AppError::not_found("Published label not found"))?,
+                .ok_or_else(|| AppError::not_found("Label not found"))?,
         ),
         None => None,
     };
@@ -157,6 +157,7 @@ async fn load_article(
         .unwrap_or_else(|| family.name.clone());
     let structure_id = selected.map(|label| label.id);
     let structure_slug = selected.map(|label| label.slug.clone());
+    // Free documents are visible at their latest saved revision, without publication.
     let document = repository::document(&state.pool, family.id, structure_id, true).await?;
     Ok(Json(Article {
         family,

@@ -2,17 +2,34 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode, type WheelEvent } from "react";
+import { useTransitionRouter } from "next-transition-router";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type WheelEvent,
+} from "react";
 
 import { cn } from "@/lib/utils";
+import { authClient } from "@/lib/auth-client";
+import theme from "./portal-document.module.css";
 
 type LegalKind = "about" | "terms" | "privacy";
 
 type PortalLegalShellProps = {
   kind: LegalKind;
   title: string;
-  html: string;
+  html?: string;
   updated?: string | null;
+  workspace?: {
+    path: string;
+    navigation: (collapsed: boolean) => ReactNode;
+    content: ReactNode;
+    tools: ReactNode;
+    footer: ReactNode;
+    headerActions?: ReactNode;
+  };
 };
 
 const TermsIcon = () => (
@@ -26,7 +43,6 @@ const PrivacyIcon = () => (
     <path d="M4 2h16v2H4zM2 4h2v10H2zm18 0h2v10h-2zM4 14h2v2H4zm2 2h2v2H6zm4 4h4v2h-4zm10-6h-2v2h2zm-2 2h-2v2h2zm-2 2h-2v2h2zm-6 0H8v2h2z" />
   </svg>
 );
-
 
 const AboutIcon = () => (
   <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor">
@@ -110,7 +126,10 @@ function LegalNavItem({
           className="pointer-events-none absolute left-3 top-1/2 h-4 w-px -translate-y-1/2 bg-current"
         />
       ) : null}
-      <span aria-hidden="true" className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full">
+      <span
+        aria-hidden="true"
+        className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full"
+      >
         {icon}
       </span>
       <span
@@ -152,10 +171,25 @@ function LegalNavItem({
   );
 }
 
-function PageHeader({ title, scrolled }: { title: string; scrolled: boolean }) {
+function PageHeader({
+  title,
+  scrolled,
+  actions,
+  backHref,
+}: {
+  title: string;
+  scrolled: boolean;
+  actions?: ReactNode;
+  backHref?: string;
+}) {
   const router = useRouter();
+  const transitionRouter = useTransitionRouter();
 
   const goBack = () => {
+    if (backHref) {
+      transitionRouter.push(backHref);
+      return;
+    }
     if (window.history.length > 1) {
       router.back();
       return;
@@ -174,26 +208,38 @@ function PageHeader({ title, scrolled }: { title: string; scrolled: boolean }) {
     >
       <div className="flex h-full w-full items-center justify-between">
         <h1 className="m-0 flex min-w-0 items-center gap-2.5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium leading-[1.4] text-[#000061] [font-variation-settings:'wdth'_50] uppercase dark:text-[#f2f2f2]">
-          <span className="shrink-0 opacity-30">//</span>
+          <span className="shrink-0 opacity-30">{"//"}</span>
           <span>{title}</span>
         </h1>
 
-        <button
-          aria-label="Back"
-          className="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-[#000061] opacity-[0.55] transition-[opacity,background-color] duration-150 hover:bg-[#0000f2]/[0.08] hover:opacity-100 focus-visible:bg-[#0000f2]/[0.08] focus-visible:opacity-100 dark:text-[#f2f2f2] dark:hover:bg-[#f2f2f2]/[0.08] dark:focus-visible:bg-[#f2f2f2]/[0.08] [&_svg]:size-4"
-          onClick={goBack}
-          title="Back"
-          type="button"
-        >
-          <BackIcon />
-        </button>
+        <div className="flex items-center gap-3 normal-case">
+          {actions}
+          <button
+            aria-label={backHref ? "Back to home" : "Back"}
+            className="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-sm border-0 bg-transparent p-0 text-[#000061] opacity-[0.55] transition-[opacity,background-color] duration-150 hover:bg-[#0000f2]/[0.08] hover:opacity-100 focus-visible:bg-[#0000f2]/[0.08] focus-visible:opacity-100 dark:text-[#f2f2f2] dark:hover:bg-[#f2f2f2]/[0.08] dark:focus-visible:bg-[#f2f2f2]/[0.08] [&_svg]:size-4"
+            onClick={goBack}
+            title={backHref ? "Back to home" : "Back"}
+            type="button"
+          >
+            <BackIcon />
+          </button>
+        </div>
       </div>
     </header>
   );
 }
 
-export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShellProps) {
-  const router = useRouter();
+/** The legal and structures pages deliberately share one branded document frame. */
+export function PortalLegalShell({
+  kind,
+  title,
+  html = "",
+  updated,
+  workspace,
+}: PortalLegalShellProps) {
+  const { data: session, isPending, error } = authClient.useSession();
+  const showAccountPrompts = !isPending && !error && !session;
+  const pageKey = workspace?.path ?? kind;
   const mainRef = useRef<HTMLDivElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [contentScrolled, setContentScrolled] = useState(false);
@@ -206,14 +252,11 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
     const frame = window.requestAnimationFrame(() => {
       mainRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
       setContentScrolled(false);
+      setMobileNavOpen(false);
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [kind]);
-
-  useEffect(() => {
-    setMobileNavOpen(false);
-  }, [kind]);
+  }, [pageKey]);
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -228,11 +271,16 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
   }, [mobileNavOpen]);
 
   useEffect(() => {
-    try {
-      setCollapsed(window.localStorage.getItem("legal-sidebar-collapsed") === "1");
-    } catch {
-      // Local storage is optional; keep the expanded default when unavailable.
-    }
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        setCollapsed(
+          window.localStorage.getItem("legal-sidebar-collapsed") === "1",
+        );
+      } catch {
+        // Local storage is optional; keep the expanded default when unavailable.
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   const handleSidebarWheel = (event: WheelEvent<HTMLElement>) => {
@@ -249,7 +297,10 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
     setCollapsed((value) => {
       const next = !value;
       try {
-        window.localStorage.setItem("legal-sidebar-collapsed", next ? "1" : "0");
+        window.localStorage.setItem(
+          "legal-sidebar-collapsed",
+          next ? "1" : "0",
+        );
       } catch {
         // Ignore storage failures; the in-memory state still works.
       }
@@ -257,23 +308,16 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
     });
   };
 
-  const goBack = () => {
-    if (window.history.length > 1) {
-      router.back();
-      return;
-    }
-
-    router.push("/");
-  };
-
   return (
     <div
       className={cn(
+        theme.surface,
         "relative h-dvh min-h-0 w-full overflow-hidden bg-[#0000c2] text-[#f2f2f2] font-['Rules_Variable',Arial,sans-serif] [font-synthesis:none] antialiased uppercase",
         "[--u:max(calc(100vw/2360),0.58px)] [--inner-offset:calc(33*var(--u))] [--space-24:calc(24*max(var(--u),1px))] [--space-64:calc(64*max(var(--u),1px))]",
         "max-lg:[--inner-offset:calc(24*var(--u))] max-[500px]:[--u:min(calc(100vw/500),0.696px)]",
         "dark:bg-[#000061]",
       )}
+      data-portal-document={workspace ? "structures" : "legal"}
     >
       <div className="relative h-dvh min-h-0 w-full overflow-hidden bg-[#0000c2] dark:bg-[#000061]">
         <a
@@ -297,7 +341,9 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
             )}
           >
             <aside
-              aria-label="Legal navigation"
+              aria-label={
+                workspace ? "Structures navigation" : "Legal navigation"
+              }
               onWheel={handleSidebarWheel}
               className={cn(
                 "group/sidebar fixed bottom-[5px] left-[5px] top-[5px] z-[100] hidden flex-col overflow-hidden bg-[#000061] text-[#f2f2f2] transition-[width] duration-200 ease-out dark:bg-[#000030] lg:flex",
@@ -314,7 +360,12 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
                   }}
                 />
 
-                <div className={cn("relative z-[1] flex shrink-0 flex-col gap-4 p-5", collapsed && "items-center")}>
+                <div
+                  className={cn(
+                    "relative z-[1] flex shrink-0 flex-col gap-4 p-5",
+                    collapsed && "items-center",
+                  )}
+                >
                   <Link
                     aria-label="Home"
                     className={cn(
@@ -328,7 +379,9 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
                       aria-hidden="true"
                       className={cn(
                         "shrink-0 object-contain",
-                        collapsed ? "h-[45.714px] w-8" : "h-[85.714px] w-[60px]",
+                        collapsed
+                          ? "h-[45.714px] w-8"
+                          : "h-[85.714px] w-[60px]",
                       )}
                       src="/logo.webp"
                     />
@@ -345,7 +398,9 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
 
                   <button
                     aria-expanded={!collapsed}
-                    aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+                    aria-label={
+                      collapsed ? "Expand navigation" : "Collapse navigation"
+                    }
                     className={cn(
                       "z-[3] flex cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-inherit opacity-50 transition-[opacity,transform] duration-150 hover:opacity-100 focus-visible:opacity-100 group-hover/sidebar:opacity-100 [&_svg]:size-4",
                       collapsed
@@ -353,129 +408,181 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
                         : "absolute right-[9px] top-0 h-[50px] w-8",
                     )}
                     onClick={toggleSidebar}
-                    title={collapsed ? "Expand navigation" : "Collapse navigation"}
+                    title={
+                      collapsed ? "Expand navigation" : "Collapse navigation"
+                    }
                     type="button"
                   >
                     <CollapseIcon />
                   </button>
 
-                  <Link
-                    className={cn(
-                      "flex h-8 shrink-0 items-center gap-2 rounded-sm bg-[#f2f2f2] text-[#000061] no-underline outline-none transition-opacity duration-150 hover:opacity-80 focus-visible:opacity-80 active:opacity-80",
-                      collapsed ? "order-2 w-8 justify-center px-0" : "w-full px-3",
-                    )}
-                    href="/login"
-                  >
-                    <span
+                  {!workspace && showAccountPrompts ? (
+                    <Link
                       className={cn(
-                        "min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium leading-[1.4] [font-variation-settings:'wdth'_50] uppercase",
-                        collapsed && "hidden",
+                        "flex h-8 shrink-0 items-center gap-2 rounded-sm bg-[#f2f2f2] text-[#000061] no-underline outline-none transition-opacity duration-150 hover:opacity-80 focus-visible:opacity-80 active:opacity-80",
+                        collapsed
+                          ? "order-2 w-8 justify-center px-0"
+                          : "w-full px-3",
                       )}
+                      href="/login"
                     >
-                      Create Voxel Account
-                    </span>
-                    <span aria-hidden="true" className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full">
-                      <CreateAccountIcon />
-                    </span>
-                  </Link>
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium leading-[1.4] [font-variation-settings:'wdth'_50] uppercase",
+                          collapsed && "hidden",
+                        )}
+                      >
+                        Create Voxel Account
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full"
+                      >
+                        <CreateAccountIcon />
+                      </span>
+                    </Link>
+                  ) : null}
                 </div>
 
                 <nav
-                  aria-label="Legal pages"
+                  aria-label={
+                    workspace ? "Anatomical structures" : "Legal pages"
+                  }
                   data-lenis-prevent=""
-                  className="flex min-h-0 flex-1 flex-col gap-[7px] overflow-x-hidden overflow-y-auto overscroll-contain px-5 pb-5 pt-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  className="flex min-h-0 flex-1 flex-col gap-[7px] overflow-hidden px-5 pb-5 pt-2.5"
                 >
-                  <LegalNavItem
-                    active={kind === "terms"}
-                    collapsed={collapsed}
-                    href="/terms"
-                    icon={<TermsIcon />}
-                    label="Terms"
-                  />
-                  <LegalNavItem
-                    active={kind === "privacy"}
-                    collapsed={collapsed}
-                    href="/privacy"
-                    icon={<PrivacyIcon />}
-                    label="Privacy"
-                  />
-                  <LegalNavItem
-                    active={kind === "about"}
-                    collapsed={collapsed}
-                    href="/about"
-                    icon={<AboutIcon />}
-                    label="About Us"
-                  />
+                  {workspace ? (
+                    workspace.navigation(collapsed)
+                  ) : (
+                    <>
+                      <LegalNavItem
+                        active={kind === "terms"}
+                        collapsed={collapsed}
+                        href="/terms"
+                        icon={<TermsIcon />}
+                        label="Terms"
+                      />
+                      <LegalNavItem
+                        active={kind === "privacy"}
+                        collapsed={collapsed}
+                        href="/privacy"
+                        icon={<PrivacyIcon />}
+                        label="Privacy"
+                      />
+                      <LegalNavItem
+                        active={kind === "about"}
+                        collapsed={collapsed}
+                        href="/about"
+                        icon={<AboutIcon />}
+                        label="About Us"
+                      />
+                    </>
+                  )}
                 </nav>
 
-                <div className="shrink-0 p-5">
-                  <Link
-                    className={cn(
-                      "group/signin flex min-w-0 items-center gap-2 text-inherit no-underline outline-none",
-                      collapsed && "justify-center",
-                    )}
-                    href="/login"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-[#f2f2f2]/[0.08] transition-colors duration-150 group-hover/signin:bg-[#f2f2f2]/20 group-focus-visible/signin:bg-[#f2f2f2]/20 [&_svg]:size-4"
-                    >
-                      <LoginIcon />
-                    </span>
-                    <span
+                {showAccountPrompts ? (
+                  <div className="shrink-0 p-5">
+                    <Link
                       className={cn(
-                        "min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium leading-[1.3] [font-variation-settings:'wdth'_50] uppercase",
-                        collapsed && "hidden",
+                        "group/signin flex min-w-0 items-center gap-2 text-inherit no-underline outline-none",
+                        collapsed && "justify-center",
                       )}
+                      href="/login"
                     >
-                      Member Sign in
-                    </span>
-                  </Link>
-                </div>
+                      <span
+                        aria-hidden="true"
+                        className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-[#f2f2f2]/[0.08] transition-colors duration-150 group-hover/signin:bg-[#f2f2f2]/20 group-focus-visible/signin:bg-[#f2f2f2]/20 [&_svg]:size-4"
+                      >
+                        <LoginIcon />
+                      </span>
+                      <span
+                        className={cn(
+                          "min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium leading-[1.3] [font-variation-settings:'wdth'_50] uppercase",
+                          collapsed && "hidden",
+                        )}
+                      >
+                        Member Sign in
+                      </span>
+                    </Link>
+                  </div>
+                ) : null}
               </div>
             </aside>
 
-            <main
-              className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden text-[#616191] outline-none dark:text-[#f2f2f2]/80"
-            >
-              <PageHeader scrolled={contentScrolled} title={title} />
+            <main className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden text-[#616191] outline-none dark:text-[#f2f2f2]/80">
+              <PageHeader
+                scrolled={contentScrolled}
+                title={title}
+                actions={workspace?.headerActions}
+                backHref={workspace ? "/" : undefined}
+              />
 
-              <div
-                className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-[var(--inner-offset)] pb-[calc(var(--inner-offset)+calc(76*var(--u)))] pt-[var(--space-24)] [scrollbar-gutter:stable] max-[500px]:px-[max(16px,var(--inner-offset))] lg:pb-[calc(var(--inner-offset)+24px)]"
-                data-lenis-prevent=""
-                id="legal-main"
-                onScroll={(event) => setContentScrolled(event.currentTarget.scrollTop > 1)}
-                ref={mainRef}
-                tabIndex={-1}
-              >
-                <div className="flex min-w-0 flex-col gap-[var(--space-64)]">
-                  <article
+              <div className="flex min-h-0 flex-1">
+                <div
+                  className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+                  data-lenis-prevent=""
+                  data-portal-scroll=""
+                  id="legal-main"
+                  onScroll={(event) =>
+                    setContentScrolled(event.currentTarget.scrollTop > 1)
+                  }
+                  ref={mainRef}
+                  tabIndex={-1}
+                >
+                  <div
                     className={cn(
-                      "mx-auto w-full max-w-[calc(1024*var(--u))] font-['Rules_Variable',Arial,sans-serif] text-base font-normal leading-[1.6] normal-case text-[#616191] dark:text-[#f2f2f2]/80 max-[500px]:text-[15px]",
-                      "[&_section]:mb-[2em] [&_p]:m-0 [&_p]:mb-[1em]",
-                      "[&_h1]:font-['Rules_Variable',Arial,sans-serif] [&_h1]:normal-case [&_h1]:text-[#0000f2] dark:[&_h1]:text-[#f2f2f2]",
-                      "[&_h2]:mb-[1em] [&_h2]:mt-[2em] [&_h2]:border-b [&_h2]:border-[#0000f2]/20 [&_h2]:pb-[0.5em] [&_h2]:font-['Rules_Variable',Arial,sans-serif] [&_h2]:text-[1.35em] [&_h2]:font-bold [&_h2]:normal-case [&_h2]:text-[#0000f2] dark:[&_h2]:border-[#f2f2f2]/20 dark:[&_h2]:text-[#f2f2f2]",
-                      "[&_h3]:mb-[0.75em] [&_h3]:mt-[1.5em] [&_h3]:font-['Rules_Variable',Arial,sans-serif] [&_h3]:text-[1.15em] [&_h3]:font-semibold [&_h3]:normal-case [&_h3]:text-[#0000f2] dark:[&_h3]:text-[#f2f2f2]",
-                      "[&_ol]:mb-[1em] [&_ol]:ml-[2em] [&_ol]:list-decimal [&_ol]:p-0 [&_ul]:mb-[1em] [&_ul]:ml-[2em] [&_ul]:list-disc [&_ul]:p-0 [&_li]:mb-[0.5em]",
-                      "[&_ol_ol]:mb-0 [&_ol_ol]:mt-[0.5em] [&_ol_ul]:mb-0 [&_ol_ul]:mt-[0.5em] [&_ul_ol]:mb-0 [&_ul_ol]:mt-[0.5em] [&_ul_ul]:mb-0 [&_ul_ul]:mt-[0.5em]",
-                      "[&_dl]:mb-[1em] [&_dt]:mt-[1em] [&_dt]:font-bold [&_dt]:text-[#0000f2] dark:[&_dt]:text-[#f2f2f2] [&_dd]:mb-[0.5em] [&_dd]:ml-[1em]",
-                      "md:[&_dl]:grid md:[&_dl]:grid-cols-[1fr_3fr] md:[&_dl]:gap-x-[1em] md:[&_dl]:gap-y-[0.5em] md:[&_dt]:col-start-1 md:[&_dt]:mt-0 md:[&_dt]:text-right md:[&_dd]:col-start-2 md:[&_dd]:ml-0 md:[&_dd]:mt-0",
-                      "[&_a]:text-[#0000f2] [&_a]:underline [&_a]:decoration-[#0000f2]/50 [&_a]:underline-offset-2 [&_a:hover]:decoration-[#0000f2] dark:[&_a]:text-[#f2f2f2] dark:[&_a]:decoration-[#f2f2f2]/50 dark:[&_a:hover]:decoration-[#f2f2f2]",
+                      "flex min-w-0 flex-col gap-[var(--space-64)] px-[var(--inner-offset)] pt-[var(--space-24)] max-[500px]:px-[max(16px,var(--inner-offset))]",
+                      workspace
+                        ? "relative z-10 min-h-full bg-[#f2f2f2] pb-[calc(76*var(--u)+24px)] dark:bg-[#000030] lg:pb-8"
+                        : "pb-[calc(var(--inner-offset)+calc(76*var(--u)))] lg:pb-[calc(var(--inner-offset)+24px)]",
                     )}
                   >
-                    {updated ? (
-                      <div className="mb-6 flex justify-end text-[smaller] text-[#616191] dark:text-[#f2f2f2]/80">
-                        {updated}
+                    {workspace ? (
+                      <div className="min-w-0 flex-1">{workspace.content}</div>
+                    ) : (
+                      <article
+                        className={cn(
+                          "mx-auto w-full max-w-[calc(1024*var(--u))] font-['Rules_Variable',Arial,sans-serif] text-base font-normal leading-[1.6] normal-case text-[#616191] dark:text-[#f2f2f2]/80 max-[500px]:text-[15px]",
+                          "[&_section]:mb-[2em] [&_p]:m-0 [&_p]:mb-[1em]",
+                          "[&_h1]:font-['Rules_Variable',Arial,sans-serif] [&_h1]:normal-case [&_h1]:text-[#0000f2] dark:[&_h1]:text-[#f2f2f2]",
+                          "[&_h2]:mb-[1em] [&_h2]:mt-[2em] [&_h2]:border-b [&_h2]:border-[#0000f2]/20 [&_h2]:pb-[0.5em] [&_h2]:font-['Rules_Variable',Arial,sans-serif] [&_h2]:text-[1.35em] [&_h2]:font-bold [&_h2]:normal-case [&_h2]:text-[#0000f2] dark:[&_h2]:border-[#f2f2f2]/20 dark:[&_h2]:text-[#f2f2f2]",
+                          "[&_h3]:mb-[0.75em] [&_h3]:mt-[1.5em] [&_h3]:font-['Rules_Variable',Arial,sans-serif] [&_h3]:text-[1.15em] [&_h3]:font-semibold [&_h3]:normal-case [&_h3]:text-[#0000f2] dark:[&_h3]:text-[#f2f2f2]",
+                          "[&_ol]:mb-[1em] [&_ol]:ml-[2em] [&_ol]:list-decimal [&_ol]:p-0 [&_ul]:mb-[1em] [&_ul]:ml-[2em] [&_ul]:list-disc [&_ul]:p-0 [&_li]:mb-[0.5em]",
+                          "[&_ol_ol]:mb-0 [&_ol_ol]:mt-[0.5em] [&_ol_ul]:mb-0 [&_ol_ul]:mt-[0.5em] [&_ul_ol]:mb-0 [&_ul_ol]:mt-[0.5em] [&_ul_ul]:mb-0 [&_ul_ul]:mt-[0.5em]",
+                          "[&_dl]:mb-[1em] [&_dt]:mt-[1em] [&_dt]:font-bold [&_dt]:text-[#0000f2] dark:[&_dt]:text-[#f2f2f2] [&_dd]:mb-[0.5em] [&_dd]:ml-[1em]",
+                          "md:[&_dl]:grid md:[&_dl]:grid-cols-[1fr_3fr] md:[&_dl]:gap-x-[1em] md:[&_dl]:gap-y-[0.5em] md:[&_dt]:col-start-1 md:[&_dt]:mt-0 md:[&_dt]:text-right md:[&_dd]:col-start-2 md:[&_dd]:ml-0 md:[&_dd]:mt-0",
+                          "[&_a]:text-[#0000f2] [&_a]:underline [&_a]:decoration-[#0000f2]/50 [&_a]:underline-offset-2 [&_a:hover]:decoration-[#0000f2] dark:[&_a]:text-[#f2f2f2] dark:[&_a]:decoration-[#f2f2f2]/50 dark:[&_a:hover]:decoration-[#f2f2f2]",
+                        )}
+                      >
+                        {updated ? (
+                          <div className="mb-6 flex justify-end text-[smaller] text-[#616191] dark:text-[#f2f2f2]/80">
+                            {updated}
+                          </div>
+                        ) : null}
+                        <div dangerouslySetInnerHTML={{ __html: html }} />
+                      </article>
+                    )}
+                    {workspace ? (
+                      <div className="normal-case lg:hidden">
+                        {workspace.tools}
                       </div>
                     ) : null}
-                    <div dangerouslySetInnerHTML={{ __html: html }} />
-                  </article>
+                    {workspace?.footer}
+                  </div>
                 </div>
+                {workspace ? (
+                  <aside
+                    aria-label="Explore this modality"
+                    onWheel={handleSidebarWheel}
+                    className="hidden w-[288px] shrink-0 overflow-hidden px-5 pb-5 pt-[var(--space-24)] normal-case lg:block xl:w-[320px]"
+                  >
+                    {workspace.tools}
+                  </aside>
+                ) : null}
               </div>
             </main>
           </div>
         </div>
-
 
         <div
           aria-hidden="true"
@@ -487,7 +594,7 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
         />
 
         <nav
-          aria-label="Legal navigation"
+          aria-label={workspace ? "Structures navigation" : "Legal navigation"}
           className={cn(
             "fixed inset-x-0 bottom-0 z-[110] flex max-h-[85dvh] flex-col bg-[#000057] text-[#f2f2f2] transition-[border-radius,transform] duration-300 ease-out lg:hidden",
             mobileNavOpen ? "rounded-t-[24px]" : "rounded-t-none",
@@ -501,7 +608,10 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
           >
             <div className="flex min-h-0 flex-col overflow-hidden">
               <div className="flex shrink-0 justify-center pb-[calc(11*var(--u))] pt-[calc(17*var(--u))]">
-                <div aria-hidden="true" className="h-[calc(6*var(--u))] w-[calc(69*var(--u))] bg-[#f2f2f2]" />
+                <div
+                  aria-hidden="true"
+                  className="h-[calc(6*var(--u))] w-[calc(69*var(--u))] bg-[#f2f2f2]"
+                />
               </div>
 
               <div
@@ -511,47 +621,62 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
                   mobileNavOpen ? "opacity-100 delay-100" : "opacity-0",
                 )}
               >
-                <Link
-                  aria-current={kind === "terms" ? "page" : undefined}
-                  className={cn(
-                    "relative flex min-h-[44px] items-center gap-4 px-5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline [font-variation-settings:'wdth'_50]",
-                    kind === "terms" && "before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-current",
-                  )}
-                  href="/terms"
-                  onClick={() => setMobileNavOpen(false)}
-                >
-                  <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full"><TermsIcon /></span>
-                  <span>Terms</span>
-                  <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
-                </Link>
+                {workspace ? (
+                  workspace.navigation(false)
+                ) : (
+                  <>
+                    <Link
+                      aria-current={kind === "terms" ? "page" : undefined}
+                      className={cn(
+                        "relative flex min-h-[44px] items-center gap-4 px-5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline [font-variation-settings:'wdth'_50]",
+                        kind === "terms" &&
+                          "before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-current",
+                      )}
+                      href="/terms"
+                      onClick={() => setMobileNavOpen(false)}
+                    >
+                      <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full">
+                        <TermsIcon />
+                      </span>
+                      <span>Terms</span>
+                      <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
+                    </Link>
 
-                <Link
-                  aria-current={kind === "privacy" ? "page" : undefined}
-                  className={cn(
-                    "relative flex min-h-[44px] items-center gap-4 px-5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline [font-variation-settings:'wdth'_50]",
-                    kind === "privacy" && "before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-current",
-                  )}
-                  href="/privacy"
-                  onClick={() => setMobileNavOpen(false)}
-                >
-                  <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full"><PrivacyIcon /></span>
-                  <span>Privacy</span>
-                  <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
-                </Link>
+                    <Link
+                      aria-current={kind === "privacy" ? "page" : undefined}
+                      className={cn(
+                        "relative flex min-h-[44px] items-center gap-4 px-5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline [font-variation-settings:'wdth'_50]",
+                        kind === "privacy" &&
+                          "before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-current",
+                      )}
+                      href="/privacy"
+                      onClick={() => setMobileNavOpen(false)}
+                    >
+                      <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full">
+                        <PrivacyIcon />
+                      </span>
+                      <span>Privacy</span>
+                      <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
+                    </Link>
 
-                <Link
-                  aria-current={kind === "about" ? "page" : undefined}
-                  className={cn(
-                    "relative flex min-h-[44px] items-center gap-4 px-5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline [font-variation-settings:'wdth'_50]",
-                    kind === "about" && "before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-current",
-                  )}
-                  href="/about"
-                  onClick={() => setMobileNavOpen(false)}
-                >
-                  <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full"><AboutIcon /></span>
-                  <span>About Us</span>
-                  <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
-                </Link>
+                    <Link
+                      aria-current={kind === "about" ? "page" : undefined}
+                      className={cn(
+                        "relative flex min-h-[44px] items-center gap-4 px-5 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline [font-variation-settings:'wdth'_50]",
+                        kind === "about" &&
+                          "before:absolute before:bottom-2 before:left-3 before:top-2 before:w-px before:bg-current",
+                      )}
+                      href="/about"
+                      onClick={() => setMobileNavOpen(false)}
+                    >
+                      <span className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:size-full">
+                        <AboutIcon />
+                      </span>
+                      <span>About Us</span>
+                      <span className="min-w-0 flex-1 border-b border-dotted border-[#f2f2f2]/20" />
+                    </Link>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -562,39 +687,56 @@ export function PortalLegalShell({ kind, title, html, updated }: PortalLegalShel
                 aria-label="Home"
                 className={cn(
                   "col-start-1 row-start-1 flex items-center transition-opacity duration-200",
-                  mobileNavOpen ? "pointer-events-none opacity-0" : "opacity-100",
+                  mobileNavOpen && showAccountPrompts
+                    ? "pointer-events-none opacity-0"
+                    : "opacity-100",
                 )}
                 href="/"
               >
-                <img alt="" aria-hidden="true" className="h-[calc(52*var(--u))] w-auto shrink-0 object-contain" src="/logo.webp" />
+                <img
+                  alt=""
+                  aria-hidden="true"
+                  className="h-[calc(52*var(--u))] w-auto shrink-0 object-contain"
+                  src="/logo.webp"
+                />
               </Link>
 
-              <Link
-                className={cn(
-                  "col-start-1 row-start-1 flex items-center gap-[calc(12*var(--u))] bg-[#f2f2f2]/20 p-[calc(12*var(--u))] font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline transition-[opacity,background-color] duration-200 hover:bg-[#f2f2f2]/60 [font-variation-settings:'wdth'_50]",
-                  mobileNavOpen ? "opacity-100" : "pointer-events-none opacity-0",
-                )}
-                href="/login"
-              >
-                <span>Login</span>
-                <span className="inline-flex size-[calc(28*var(--u))] items-center justify-center [&_svg]:size-full"><LoginIcon /></span>
-              </Link>
+              {showAccountPrompts ? (
+                <Link
+                  className={cn(
+                    "col-start-1 row-start-1 flex items-center gap-[calc(12*var(--u))] bg-[#f2f2f2]/20 p-[calc(12*var(--u))] font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline transition-[opacity,background-color] duration-200 hover:bg-[#f2f2f2]/60 [font-variation-settings:'wdth'_50]",
+                    mobileNavOpen
+                      ? "opacity-100"
+                      : "pointer-events-none opacity-0",
+                  )}
+                  href="/login"
+                >
+                  <span>Login</span>
+                  <span className="inline-flex size-[calc(28*var(--u))] items-center justify-center [&_svg]:size-full">
+                    <LoginIcon />
+                  </span>
+                </Link>
+              ) : null}
             </div>
 
             <div className="flex shrink-0 items-center gap-[calc(18*var(--u))]">
-              {!mobileNavOpen ? (
+              {!mobileNavOpen && showAccountPrompts ? (
                 <Link
                   className="flex items-center justify-center gap-[calc(12*var(--u))] bg-[#f2f2f2]/20 p-[calc(12*var(--u))] font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm font-medium uppercase no-underline transition-colors duration-150 hover:bg-[#f2f2f2]/60 [font-variation-settings:'wdth'_50]"
                   href="/login"
                 >
                   <span>Login</span>
-                  <span className="inline-flex size-[calc(28*var(--u))] items-center justify-center [&_svg]:size-full"><LoginIcon /></span>
+                  <span className="inline-flex size-[calc(28*var(--u))] items-center justify-center [&_svg]:size-full">
+                    <LoginIcon />
+                  </span>
                 </Link>
               ) : null}
 
               <button
                 aria-expanded={mobileNavOpen}
-                aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+                aria-label={
+                  mobileNavOpen ? "Close navigation" : "Open navigation"
+                }
                 className="grid cursor-pointer place-items-center bg-[#f2f2f2]/20 p-[calc(12*var(--u))] text-inherit transition-colors duration-150 hover:bg-[#f2f2f2]/60 focus-visible:outline-none [&_svg]:size-[calc(28*var(--u))]"
                 onClick={() => setMobileNavOpen((open) => !open)}
                 type="button"

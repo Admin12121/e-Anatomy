@@ -1,7 +1,6 @@
-import Link from "next/link";
+import { ResourceEditorLink } from "@/components/content/resource-editor-link";
 import { BrainIcon, ExternalLinkIcon } from "lucide-react";
 import { ResourceFilters } from "@/components/content/resource-filters";
-import { Badge } from "@/components/ui/badge";
 import { Frame } from "@/components/ui/frame";
 import { TablePagination } from "@/components/ui/table-pagination";
 import {
@@ -12,7 +11,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { documentStatus } from "@/lib/content/documents";
 import {
   resourcePage,
   RESOURCE_PAGE_SIZE,
@@ -36,11 +34,6 @@ export default async function ResourcesPage({
     typeof query[key] === "string" ? (query[key] as string) : "";
   const initial = {
     search: text("search").trim(),
-    status: ["draft", "published", "unpublished_changes"].includes(
-      text("status"),
-    )
-      ? text("status")
-      : "all",
   };
   const rows: ResourceRow[] = [
     {
@@ -48,7 +41,6 @@ export default async function ResourcesPage({
       title: content.name,
       href: `${base}/modality`,
       revision: document.revision,
-      publishedRevision: document.publishedRevision,
     },
   ];
   const result = resourcePage(rows, { ...initial, page: text("page") });
@@ -68,7 +60,6 @@ export default async function ResourcesPage({
           <TableHeader>
             <TableRow>
               <TableHead>Modality</TableHead>
-              <TableHead>Status</TableHead>
               <TableHead className="text-right">Revision</TableHead>
               <TableHead className="w-10">
                 <span className="sr-only">Open article</span>
@@ -79,35 +70,32 @@ export default async function ResourcesPage({
             {result.items.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>
-                  <Link
+                  <ResourceEditorLink
                     href={row.href}
                     className="flex min-w-0 items-center gap-2 py-1 font-medium hover:underline"
                   >
                     <BrainIcon className="size-4 shrink-0 text-muted-foreground" />
                     <span>{row.title}</span>
-                  </Link>
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline">{documentStatus(row)}</Badge>
+                  </ResourceEditorLink>
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground">
                   {row.revision}
                 </TableCell>
                 <TableCell>
-                  <Link
+                  <ResourceEditorLink
                     href={row.href}
                     aria-label={`Open ${row.title}`}
                     className="inline-flex rounded-md p-1 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
                   >
                     <ExternalLinkIcon className="size-3.5" />
-                  </Link>
+                  </ResourceEditorLink>
                 </TableCell>
               </TableRow>
             ))}
             {!result.items.length ? (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={3}
                   className="py-10 text-center text-muted-foreground"
                 >
                   No resources match these filters.

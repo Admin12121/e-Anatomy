@@ -1,0 +1,43 @@
+.surface {
+  --background: #f2f2f2;
+  --foreground: #0000f2;
+  --muted: #0000f20f;
+  --muted-foreground: #616191;
+  --primary: #0000f2;
+  --ring: #0000f2;
+  --font-sans: "Rules_Variable", Arial, sans-serif;
+  --font-heading: "Rules_Variable", Arial, sans-serif;
+}
+
+/* Clip the outer document as well as the frame: focus/selection dragging must
+   never pan the viewport. The center's native scroller remains independent. */
+:global(html):has(.surface[data-portal-document="structures"]),
+:global(body):has(.surface[data-portal-document="structures"]) {
+  overflow: clip;
+  overscroll-behavior: none;
+}
+
+:global(.dark) .surface {
+  --background: #000030;
+  --foreground: #f2f2f2;
+  --muted: #f2f2f214;
+  --muted-foreground: #c2c2c9;
+  --primary: #f2f2f2;
+  --ring: #f2f2f2;
+}
+
+.surface :global(.project-rich-text[data-readonly="true"] .bn-container),
+.surface :global(.project-rich-text[data-readonly="true"] .bn-editor) {
+  background: transparent;
+  color: inherit;
+  font-family: "Rules_Variable", Arial, sans-serif;
+  font-size: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .surface *,
+  .surface *::before,
+  .surface *::after {
+    transition-duration: 0s !important;
+  }
+}

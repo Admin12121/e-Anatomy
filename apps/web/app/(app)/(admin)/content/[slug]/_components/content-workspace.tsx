@@ -8,14 +8,13 @@ import {
   BookOpenIcon,
   BrainIcon,
   ChartNoAxesCombinedIcon,
-  ChevronRightIcon,
   FileTextIcon,
-  FolderIcon,
   GlobeIcon,
   SearchIcon,
   UsersIcon,
 } from "lucide-react";
 import { NestedSidebar } from "@/components/content/nested-sidebar";
+import { preloadProjectRichText } from "@/components/anatomy/project-rich-text";
 import {
   InputGroup,
   InputGroupAddon,
@@ -27,9 +26,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar";
 import type { ContentWorkspace as Workspace } from "@/lib/content/types";
@@ -85,6 +81,8 @@ function WorkspaceItems({
           <Link
             href={href}
             onClick={onNavigate}
+            onPointerEnter={editor ? preloadProjectRichText : undefined}
+            onFocus={editor ? preloadProjectRichText : undefined}
             aria-current={pathname === href ? "page" : undefined}
           >
             {icon}
@@ -121,7 +119,7 @@ function WorkspaceItems({
           <InputGroupInput
             type="search"
             placeholder="Search articles…"
-            aria-label="Search article tree"
+            aria-label="Search articles"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -132,80 +130,35 @@ function WorkspaceItems({
       ) : null}
       <SidebarGroupContent>
         <SidebarMenu aria-label="Anatomy articles">
-          {open ? (
-            <SidebarMenuItem>
-              <details open className="group/zone">
-                <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md px-2 py-2 text-sm font-medium hover:bg-sidebar-accent">
-                  <ChevronRightIcon className="size-3.5 shrink-0 group-open/zone:rotate-90" />
-                  <FolderIcon className="size-4 shrink-0" />
-                  <span className="truncate">{workspace.family.zoneName}</span>
-                </summary>
-                <SidebarMenuSub className="mr-0 pr-0">
-                  <SidebarMenuSubItem>
-                    <SidebarMenuSubButton
-                      asChild
-                      isActive={pathname === `${base}/resources/modality`}
-                    >
-                      <Link
-                        href={`${base}/resources/modality`}
-                        onClick={onNavigate}
-                        aria-current={
-                          pathname === `${base}/resources/modality`
-                            ? "page"
-                            : undefined
-                        }
-                      >
-                        <BrainIcon />
-                        <span>{workspace.family.name}</span>
-                      </Link>
-                    </SidebarMenuSubButton>
-                    <SidebarMenuSub className="mr-0 pr-0">
-                      {labels.map((label) => (
-                        <SidebarMenuSubItem key={label.id}>
-                          <SidebarMenuSubButton
-                            asChild
-                            isActive={
-                              pathname ===
-                              `${base}/resources/labels/${label.id}`
-                            }
-                          >
-                            <Link
-                              href={`${base}/resources/labels/${label.id}`}
-                              onClick={onNavigate}
-                              title={`${label.title} · ${label.modalityName}`}
-                              aria-current={
-                                pathname ===
-                                `${base}/resources/labels/${label.id}`
-                                  ? "page"
-                                  : undefined
-                              }
-                            >
-                              <FileTextIcon />
-                              <span>{label.title}</span>
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      ))}
-                    </SidebarMenuSub>
-                  </SidebarMenuSubItem>
-                </SidebarMenuSub>
-              </details>
-            </SidebarMenuItem>
-          ) : (
-            <>
-              {articleLink(
-                `${base}/resources/modality`,
-                workspace.family.name,
-                <BrainIcon />,
-              )}
-              {labels.map((label) =>
-                articleLink(
-                  `${base}/resources/labels/${label.id}`,
-                  label.title,
-                  <FileTextIcon />,
-                ),
-              )}
-            </>
+          {articleLink(
+            `${base}/resources/modality`,
+            workspace.family.name,
+            workspace.family.thumbnailUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={workspace.family.thumbnailUrl}
+                alt=""
+                className="size-4 shrink-0 rounded object-cover"
+              />
+            ) : (
+              <BrainIcon />
+            ),
+          )}
+          {labels.map((label) =>
+            articleLink(
+              `${base}/resources/labels/${label.id}`,
+              label.title,
+              label.thumbnailUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={label.thumbnailUrl}
+                  alt=""
+                  className="size-4 shrink-0 rounded object-cover"
+                />
+              ) : (
+                <FileTextIcon />
+              ),
+            ),
           )}
         </SidebarMenu>
         {open && !labels.length ? (

@@ -46,6 +46,7 @@ import ShinyText from "@/components/shiny-text";
 import { acquireScrollLock, setLockedScrollPosition } from "@/components/layout/scroll-lock";
 import { Footer } from "./_components";
 import { HomeCatalog } from "./_components/home-catalog";
+import { modalityDestination } from "@/lib/content/navigation";
 
 const loadAnatomyStage = () => import("@/components/anatomy/anatomy-stage");
 
@@ -1044,7 +1045,7 @@ export default function Page() {
                               <TableCell className="font-medium text-left">
                                 <Link
                                   className="inline-flex items-center underline-offset-4 hover:underline"
-                                  href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
+                                  href={modalityDestination(selectedZone.slug, modality.slug, "atlas")}
                                 >
                                   {modality.name}
                                 </Link>
@@ -1231,7 +1232,7 @@ export default function Page() {
                                   <TableCell className="font-medium text-left">
                                     <Link
                                       className="inline-flex items-center underline-offset-4 hover:underline"
-                                      href={`/${encodeURIComponent(selectedZone.slug)}/${encodeURIComponent(modality.slug)}`}
+                                      href={modalityDestination(selectedZone.slug, modality.slug, "atlas")}
                                     >
                                       {modality.name}
                                     </Link>

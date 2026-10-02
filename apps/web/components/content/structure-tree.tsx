@@ -1,136 +1,228 @@
-"use client"
+"use client";
 
-import { useId, useState } from "react"
-import Link from "next/link"
-import { Input } from "@/components/ui/input"
-import { cn } from "@/lib/utils"
-import type { ContentArticle, PublicContentTopic } from "@/lib/content/types"
+import { useId, useState } from "react";
+import Link from "next/link";
+import Image from "next/image";
+import {
+  BrainIcon,
+  ChevronRight,
+  FileTextIcon,
+  SearchIcon,
+} from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  SidebarProvider,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuAction,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
+} from "@/components/ui/sidebar";
+import { Input } from "@/components/ui/input";
+import type { PublicContentTopic } from "@/lib/content/types";
+import styles from "./public-article.module.css";
+
+function Thumbnail({
+  src,
+  label = false,
+}: {
+  src?: string | null;
+  label?: boolean;
+}) {
+  return src ? (
+    <Image
+      src={src}
+      alt=""
+      width={24}
+      height={24}
+      unoptimized
+      className="size-6 shrink-0 rounded object-cover"
+    />
+  ) : label ? (
+    <FileTextIcon aria-hidden="true" />
+  ) : (
+    <BrainIcon aria-hidden="true" />
+  );
+}
 
 export function StructureTree({
   article,
   topics,
+  collapsed = false,
 }: {
-  article: ContentArticle
-  topics: PublicContentTopic[]
+  article: {
+    family: { id: string };
+    structureId: string | null;
+    labels: PublicContentTopic["labels"];
+  };
+  topics: PublicContentTopic[];
+  collapsed?: boolean;
 }) {
-  const searchId = useId()
-  const [search, setSearch] = useState("")
-  const query = search.trim().toLowerCase()
-  const zones = [...new Set(topics.map((topic) => topic.zoneSlug))]
-  const visibleLabels = article.labels.filter((label) =>
-    label.title.toLowerCase().includes(query),
-  )
-  const groups = [
-    ...new Set(visibleLabels.map((label) => label.groupName ?? "Labels")),
-  ]
-  const base = `/structures/${article.family.zoneSlug}/${article.family.slug}`
-  function link(href: string, title: string, active: boolean) {
-    return (
-      <Link
-        href={href}
-        aria-current={active ? "page" : undefined}
-        className={cn(
-          "block min-w-0 rounded-md px-2 py-2 text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
-          active && "bg-muted font-medium",
-        )}
-      >
-        {title}
-      </Link>
-    )
-  }
+  const searchId = useId();
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
+  const matches = (name: string) => name.toLowerCase().includes(query);
+  const filtered = topics.filter(
+    (topic) =>
+      !query ||
+      matches(topic.name) ||
+      matches(topic.zoneName) ||
+      topic.labels?.some((label) => matches(label.title)),
+  );
+  const zones = [...new Set(filtered.map((topic) => topic.zoneSlug))];
   return (
-    <nav aria-label="Anatomical structures" className="min-w-0 space-y-4">
-      <label className="sr-only" htmlFor={searchId}>
-        Search anatomical structures
-      </label>
-      <Input
-        id={searchId}
-        type="search"
-        placeholder="Find a structure…"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-      />
-      <div
-        className="max-h-[60dvh] space-y-2 overflow-y-auto overscroll-contain"
-        data-lenis-prevent
+    <div
+      aria-label="Anatomical structures"
+      className={`${styles.navigation} min-w-0`}
+      data-collapsed={collapsed}
+    >
+      <SidebarProvider
+        keyboardShortcut={false}
+        persistOpen={false}
+        className="min-h-0! flex-col gap-5 bg-transparent!"
       >
-        {zones.map((zone) => {
-          const zoneTopics = topics.filter(
-            (topic) =>
-              topic.zoneSlug === zone &&
-              (!query ||
-                topic.name.toLowerCase().includes(query) ||
-                (topic.id === article.family.id && visibleLabels.length)),
-          )
-          if (!zoneTopics.length) return null
-          return (
-            <details
-              key={zone}
-              open={zone === article.family.zoneSlug || Boolean(query)}
+        <div className={collapsed ? "hidden" : "relative mb-2"}>
+          <label className="sr-only" htmlFor={searchId}>
+            Search anatomical structures
+          </label>
+          <Input
+            id={searchId}
+            type="search"
+            placeholder="Search structures…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            className="h-8 rounded-sm border-0 bg-[#f2f2f2]! px-3 pr-9 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm text-[#000061]! uppercase shadow-none placeholder:text-[#000061]/70 [font-variation-settings:'wdth'_50] focus-visible:ring-2 focus-visible:ring-[#f2f2f2]/60"
+          />
+          <SearchIcon
+            aria-hidden="true"
+            className="pointer-events-none absolute right-3 top-2 size-4 text-[#000061]"
+          />
+        </div>
+        {zones.map((zone) => (
+          <SidebarGroup key={zone} className="p-0">
+            <SidebarGroupLabel
+              className={
+                collapsed
+                  ? "sr-only"
+                  : "mb-2 h-auto px-0 text-xs text-inherit opacity-55"
+              }
             >
-              <summary className="cursor-pointer py-2 text-sm font-medium">
-                {zoneTopics[0].zoneName}
-              </summary>
-              <div className="ml-2 space-y-2 border-l pl-2">
-                {zoneTopics.map((topic) => {
-                  const current = topic.id === article.family.id
-                  const href = `/structures/${topic.zoneSlug}/${topic.slug}${topic.hasArticle ? "" : `/${topic.firstLabelSlug}`}`
-                  if (!current)
-                    return (
-                      <div key={topic.id}>{link(href, topic.name, false)}</div>
-                    )
+              {filtered.find((topic) => topic.zoneSlug === zone)?.zoneName}
+            </SidebarGroupLabel>
+            <SidebarMenu className="gap-[7px]">
+              {filtered
+                .filter((topic) => topic.zoneSlug === zone)
+                .map((topic) => {
+                  const current = topic.id === article.family.id;
+                  const base = `/structures/${topic.zoneSlug}/${topic.slug}`;
+                  const labels =
+                    topic.labels ?? (current ? article.labels : []);
+                  const visible =
+                    query && !matches(topic.name) && !matches(topic.zoneName)
+                      ? labels.filter((label) => matches(label.title))
+                      : labels;
                   return (
-                    <div key={topic.id}>
-                      {topic.hasArticle ? (
-                        link(base, topic.name, !article.structureId)
-                      ) : (
-                        <p className="px-2 py-2 text-sm font-medium">
-                          {topic.name}
-                        </p>
-                      )}
-                      <details open>
-                        <summary className="cursor-pointer px-2 py-2 text-xs text-muted-foreground">
-                          Labels ({visibleLabels.length})
-                        </summary>
-                        <div className="ml-2 space-y-1 border-l pl-2">
-                          {groups.map((group) => (
-                            <details key={group} open>
-                              <summary className="cursor-pointer px-2 py-2 text-xs font-medium">
-                                {group}
-                              </summary>
-                              {visibleLabels
-                                .filter(
-                                  (label) =>
-                                    (label.groupName ?? "Labels") === group,
-                                )
-                                .map((label) => (
-                                  <div key={label.id}>
-                                    {link(
-                                      `${base}/${label.slug}`,
-                                      label.title,
-                                      label.id === article.structureId,
-                                    )}
-                                  </div>
+                    <Collapsible
+                      key={`${topic.id}-${current}-${Boolean(query)}`}
+                      asChild
+                      defaultOpen={current || Boolean(query)}
+                      className="group/collapsible"
+                    >
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={current && !article.structureId}
+                          className={`${styles.navLink} h-8 gap-4 text-sm`}
+                        >
+                          <Link
+                            href={base}
+                            aria-current={
+                              current && !article.structureId
+                                ? "page"
+                                : undefined
+                            }
+                            title={topic.name}
+                          >
+                            <Thumbnail src={topic.thumbnailUrl} />
+                            <span>{topic.name}</span>
+                            <span
+                              className={styles.navRule}
+                              aria-hidden="true"
+                            />
+                          </Link>
+                        </SidebarMenuButton>
+                        {!collapsed && visible.length ? (
+                          <>
+                            <CollapsibleTrigger asChild>
+                              <SidebarMenuAction
+                                type="button"
+                                aria-label={`Toggle ${topic.name} labels`}
+                                className={`${styles.navAction} right-0 top-1.5`}
+                              >
+                                <ChevronRight
+                                  aria-hidden="true"
+                                  className="transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90 motion-reduce:transition-none"
+                                />
+                              </SidebarMenuAction>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <SidebarMenuSub className="mx-0 mt-1 gap-[7px] border-0 pl-5">
+                                {visible.map((label) => (
+                                  <SidebarMenuSubItem key={label.id}>
+                                    <SidebarMenuSubButton
+                                      asChild
+                                      isActive={
+                                        label.id === article.structureId
+                                      }
+                                      className={`${styles.navLink} h-8 text-sm!`}
+                                    >
+                                      <Link
+                                        href={`${base}/${label.slug}`}
+                                        aria-current={
+                                          label.id === article.structureId
+                                            ? "page"
+                                            : undefined
+                                        }
+                                        title={label.title}
+                                      >
+                                        <Thumbnail
+                                          src={label.thumbnailUrl}
+                                          label
+                                        />
+                                        <span>{label.title}</span>
+                                        <span
+                                          className={styles.navRule}
+                                          aria-hidden="true"
+                                        />
+                                      </Link>
+                                    </SidebarMenuSubButton>
+                                  </SidebarMenuSubItem>
                                 ))}
-                            </details>
-                          ))}
-                        </div>
-                      </details>
-                    </div>
-                  )
+                              </SidebarMenuSub>
+                            </CollapsibleContent>
+                          </>
+                        ) : null}
+                      </SidebarMenuItem>
+                    </Collapsible>
+                  );
                 })}
-              </div>
-            </details>
-          )
-        })}
-        {query &&
-        !topics.some((topic) => topic.name.toLowerCase().includes(query)) &&
-        !visibleLabels.length ? (
-          <p className="px-2 text-sm text-muted-foreground">
+            </SidebarMenu>
+          </SidebarGroup>
+        ))}
+        {!filtered.length ? (
+          <p className="text-xs normal-case opacity-70">
             No matching structures.
           </p>
         ) : null}
-      </div>
-    </nav>
-  )
+      </SidebarProvider>
+    </div>
+  );
 }

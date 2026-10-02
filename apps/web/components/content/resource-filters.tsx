@@ -9,24 +9,10 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import {
-  Select,
-  SelectItem,
-  SelectPopup,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 type Filters = {
   search: string;
-  status: string;
 };
-const statuses = [
-  { value: "all", label: "All statuses" },
-  { value: "draft", label: "Draft" },
-  { value: "published", label: "Published" },
-  { value: "unpublished_changes", label: "Unpublished changes" },
-];
 
 export function ResourceFilters({
   base,
@@ -80,27 +66,7 @@ export function ResourceFilters({
         </InputGroupAddon>
       </InputGroup>
       <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
-        <Select
-          items={statuses}
-          value={initial.status}
-          onValueChange={(value) => navigate({ status: value ?? "all" })}
-          disabled={pending}
-        >
-          <SelectTrigger
-            className="w-full sm:w-44"
-            aria-label="Filter by publication status"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectPopup>
-            {statuses.map((status) => (
-              <SelectItem key={status.value} value={status.value}>
-                {status.label}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-        {initial.search || initial.status !== "all" ? (
+        {initial.search ? (
           <Button
             type="button"
             variant="ghost"

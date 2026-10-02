@@ -22,28 +22,15 @@ export function parseDocumentValue(value: string): Record<string, unknown>[] {
   }
   return blocks;
 }
-export function documentStatus(document: {
-  revision: number;
-  publishedRevision: number | null;
-}) {
-  if (document.publishedRevision === null) return "Draft";
-  return document.revision === document.publishedRevision
-    ? "Published"
-    : "Unpublished changes";
-}
 
 /** This phase edits only the native document; hidden legacy metadata is retained. */
-export function documentSaveInput(
-  document: ContentDocument,
-  value: string,
-  action: "save" | "publish" | "unpublish",
-) {
+export function documentSaveInput(document: ContentDocument, value: string) {
   return {
     revision: document.revision,
     summary: document.summary,
     bodyJson: parseDocumentValue(value),
     accessLevel: "free" as const,
     resources: document.resources,
-    action,
+    action: "save" as const,
   };
 }

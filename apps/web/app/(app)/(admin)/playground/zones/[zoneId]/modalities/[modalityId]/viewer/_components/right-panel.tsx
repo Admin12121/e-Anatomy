@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import {
   CameraIcon,
   EyeIcon,
@@ -224,6 +224,7 @@ export function ModalityViewerRightPanel({
   onClose,
   handleReset,
 }: RightPanelProps) {
+  const navigatorId = useId();
   const [showAnatomicalPartsPanel, setShowAnatomicalPartsPanel] =
     useState(false);
   const [showCreatePartFrame, setShowCreatePartFrame] = useState(false);
@@ -474,7 +475,7 @@ export function ModalityViewerRightPanel({
         </div>
         <FramePanel className="p-3">
           {weightingOptions.length > 0 ? (
-                <ViewerSidebarSection title="Signal Mode">
+            <ViewerSidebarSection title="Signal Mode">
               <Select
                 disabled={weightingDisabled}
                 value={activeWeighting}
@@ -506,7 +507,7 @@ export function ModalityViewerRightPanel({
           <ViewerSidebarSection
             title="Anatomic Zones"
             actions={
-                  <Group className="rounded-md bg-white/6 p-0.5">
+              <Group className="rounded-md bg-white/6 p-0.5">
                 <Button
                   aria-label={showLabels ? "Hide labels" : "Show labels"}
                   type="button"
@@ -521,8 +522,8 @@ export function ModalityViewerRightPanel({
                   )}
                 </Button>
                 {!readOnly ? (
-                    <Button
-                      aria-label="Show anatomic zones editor"
+                  <Button
+                    aria-label="Show anatomic zones editor"
                     type="button"
                     size="icon"
                     variant={showAnatomicalPartsPanel ? "default" : "secondary"}
@@ -545,81 +546,104 @@ export function ModalityViewerRightPanel({
             }
           >
             <div className="space-y-2">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between px-1 py-1.5 text-sm"
-                onClick={() =>
-                  onVisibleGroupIdsChange(allGroupsVisible ? [] : allGroupIds)
-                }
+              <label
+                htmlFor={`${navigatorId}-all`}
+                className="flex w-full cursor-pointer items-center justify-between rounded-lg px-1 py-1.5 text-sm hover:bg-white/3"
               >
                 <span>Mark all</span>
                 <Switch
+                  id={`${navigatorId}-all`}
                   checked={allGroupsVisible}
                   onCheckedChange={(checked) =>
                     onVisibleGroupIdsChange(checked ? allGroupIds : [])
                   }
                 />
-              </button>
+              </label>
 
               <div className="space-y-1">
                 {groups.map((group) => {
                   const isVisible = visibleGroupIds.includes(group.id);
+                  const GroupRow = readOnly ? "label" : "div";
 
                   return (
-                    <div
+                    <GroupRow
                       key={group.id}
+                      htmlFor={readOnly ? `${navigatorId}-${group.id}` : undefined}
                       className={cn(
                         "flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-left transition",
-                        !readOnly && "hover:bg-white/3",
+                        "hover:bg-white/3",
+                        readOnly && "cursor-pointer",
                       )}
                     >
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex min-w-0 flex-1 items-center gap-2.5 rounded-md pr-3 text-left",
-                          !readOnly && "cursor-pointer",
-                        )}
-                        disabled={readOnly}
-                        aria-label={`Open ${group.title} details`}
-                        onClick={() => {
-                          if (readOnly) {
-                            return;
-                          }
-
-                          // Clicking anywhere in the thumbnail/title row always
-                          // opens this existing zone for editing. It never acts
-                          // as a toggle and never switches into create mode.
-                          setShowAnatomicalPartsPanel(false);
-                          setShowCreatePartFrame(false);
-                          resetPartEditorState();
-                          onResetStructure();
-                          onSelectGroup(group.id);
-                          setSelectedAnatomicalPartId(group.id);
-                        }}
-                      >
-                        <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md transition">
-                          {group.thumbnailUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              alt=""
-                              className="size-6 rounded object-cover"
-                              src={group.thumbnailUrl}
-                            />
-                          ) : (
-                            <ImageIcon className="size-4" />
+                      {readOnly ? (
+                        <span className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md pr-3 text-left">
+                          <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md">
+                            {group.thumbnailUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                alt=""
+                                className="size-6 rounded object-cover"
+                                src={group.thumbnailUrl}
+                              />
+                            ) : (
+                              <ImageIcon className="size-4" />
+                            )}
+                          </span>
+                          <span className="truncate text-[15px] leading-5">
+                            {group.title}
+                          </span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center gap-2.5 rounded-md pr-3 text-left",
+                            !readOnly && "cursor-pointer",
                           )}
-                        </span>
-                        <span className="truncate text-[15px] leading-5">
-                          {group.title}
-                        </span>
-                      </button>
+                          disabled={readOnly}
+                          aria-label={`Open ${group.title} details`}
+                          onClick={() => {
+                            if (readOnly) {
+                              return;
+                            }
+
+                            // Clicking anywhere in the thumbnail/title row always
+                            // opens this existing zone for editing. It never acts
+                            // as a toggle and never switches into create mode.
+                            setShowAnatomicalPartsPanel(false);
+                            setShowCreatePartFrame(false);
+                            resetPartEditorState();
+                            onResetStructure();
+                            onSelectGroup(group.id);
+                            setSelectedAnatomicalPartId(group.id);
+                          }}
+                        >
+                          <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md transition">
+                            {group.thumbnailUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                alt=""
+                                className="size-6 rounded object-cover"
+                                src={group.thumbnailUrl}
+                              />
+                            ) : (
+                              <ImageIcon className="size-4" />
+                            )}
+                          </span>
+                          <span className="truncate text-[15px] leading-5">
+                            {group.title}
+                          </span>
+                        </button>
+                      )}
                       <Switch
+                        id={`${navigatorId}-${group.id}`}
+                        aria-label={`Show ${group.title}`}
                         checked={isVisible}
                         onCheckedChange={(checked) => {
                           onGroupVisibilityChange(group.id, checked);
                         }}
                       />
-                    </div>
+                    </GroupRow>
                   );
                 })}
               </div>
@@ -720,7 +744,7 @@ export function ModalityViewerRightPanel({
               </div>
               <div className="space-y-1.5">
                 <div className="text-xs font-medium">Thumbnail Image</div>
-                  <ImageUploadDropzone
+                <ImageUploadDropzone
                   disabled={isUploadingGroupThumbnail}
                   emptyTitle="Drop thumbnail image here"
                   onClear={() => onGroupFormChange("thumbnailUrl", "")}
@@ -825,7 +849,9 @@ export function ModalityViewerRightPanel({
             <div className="p-1">
               <Frame className="shrink-0 outline-offset-2 outline outline-border/50 rounded-lg p-0">
                 <FrameHeader className="py-1 px-2 flex items-center justify-between flex-row">
-                  <FrameTitle className="text-lg">Anatomic Structure</FrameTitle>
+                  <FrameTitle className="text-lg">
+                    Anatomic Structure
+                  </FrameTitle>
                   <Button
                     type="button"
                     size="icon"
@@ -1061,14 +1087,17 @@ export function ModalityViewerRightPanel({
                         )}
                       </ToggleGroup>
                     </div>
-                    {partInteractionMode === "pointer" && pointerPlacementEditingActive ? (
+                    {partInteractionMode === "pointer" &&
+                    pointerPlacementEditingActive ? (
                       <p className="text-[11px] leading-4 text-white/45">
                         Click to place. Drag to adjust.
                       </p>
                     ) : null}
                     {partInteractionMode === "area" && areaEditingActive ? (
                       <p className="text-[11px] leading-4 text-white/45">
-                        Drag directly on the scan to paint the region. Use the toolbar brush/eraser controls to refine it, then choose Done area.
+                        Drag directly on the scan to paint the region. Use the
+                        toolbar brush/eraser controls to refine it, then choose
+                        Done area.
                       </p>
                     ) : null}
                   </div>
@@ -1108,7 +1137,7 @@ export function ModalityViewerRightPanel({
           ) : null}
         </>
       ) : null}
-      
+
       {readOnly ? (
         <Frame>
           <FrameHeader className="px-3 py-2 text-sm font-semibold">

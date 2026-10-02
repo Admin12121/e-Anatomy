@@ -16,6 +16,7 @@ import { TransitionRouter } from "next-transition-router"
 import { cn } from "@/lib/utils"
 import { markNonRootClientRouteVisited } from "./preloader-session"
 import { ROUTE_TRANSITION_SETTLED_EVENT } from "./transition-events"
+import { shouldAnimateRouteTransition } from "./route-transition-policy"
 import { acquireScrollLock, forceReleaseScrollLocks, setLockedScrollPosition, type ScrollLockHandle } from "./scroll-lock"
 
 gsap.registerPlugin(CustomEase)
@@ -33,68 +34,6 @@ const BACKDROP_Z_INDEX = 2147482999
 const PAGE_Z_INDEX = 2147483001
 const CHROME_Z_INDEX = 2147483002
 const REVEALER_Z_INDEX = 2147483003
-
-const LEGAL_ROUTES = new Set(["/terms", "/privacy", "/about"])
-const PUBLIC_STATIC_ROUTES = new Set(["/", "/account", "/login", ...LEGAL_ROUTES])
-const ADMIN_ROUTE_SEGMENTS = new Set([
-  "analytics",
-  "content",
-  "dashboard",
-  "playground",
-  "settings",
-  "users",
-])
-
-function normalizeRoutePath(path: string | undefined) {
-  if (!path) {
-    return null
-  }
-
-  const pathname = path.split(/[?#]/, 1)[0] || "/"
-
-  return pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname
-}
-
-function isPublicAnimatedRoute(path: string | undefined) {
-  const pathname = normalizeRoutePath(path)
-
-  if (!pathname) {
-    return false
-  }
-
-  if (PUBLIC_STATIC_ROUTES.has(pathname)) {
-    return true
-  }
-
-  const segments = pathname.split("/").filter(Boolean)
-
-  return segments.length === 2 && !ADMIN_ROUTE_SEGMENTS.has(segments[0] ?? "")
-}
-
-function shouldAnimateRouteTransition(
-  from: string | undefined,
-  to: string | undefined,
-) {
-  const fromPath = normalizeRoutePath(from)
-  const toPath = normalizeRoutePath(to)
-
-  if (!fromPath || !toPath || fromPath === toPath) {
-    return false
-  }
-
-  const fromLegal = LEGAL_ROUTES.has(fromPath)
-  const toLegal = LEGAL_ROUTES.has(toPath)
-
-  // Legal pages are one application surface. Moving between Terms, Privacy,
-  // and About should be immediate and should never acquire the full-page
-  // transition scroll lock. Only crossings between Home and that legal
-  // surface use the cinematic route transition.
-  if (fromLegal || toLegal) {
-    return (fromPath === "/" && toLegal) || (fromLegal && toPath === "/")
-  }
-
-  return isPublicAnimatedRoute(fromPath) && isPublicAnimatedRoute(toPath)
-}
 
 const BACKDROP_ROWS = [
   [

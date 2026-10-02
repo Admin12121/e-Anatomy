@@ -16,24 +16,12 @@ test("resource search matches modality titles before pagination", () => {
   expect(resourcePage(rows, { search: "modality" }).total).toBe(43);
   expect(resourcePage(rows, { search: "missing" }).total).toBe(0);
 });
-test("resource filters intersect and preserve unpublished changes", () => {
-  const result = resourcePage(rows, {
-    search: "Modality",
-    status: "unpublished_changes",
-  });
-  expect(result.total).toBe(14);
-  expect(
-    result.items.every((row) => row.revision !== row.publishedRevision),
-  ).toBe(true);
+test("old publication states never hide resources", () => {
+  for (const status of ["draft", "published", "unpublished_changes"]) {
+    expect(resourcePage(rows, { status }).total).toBe(43);
+  }
 });
-test("publication filters distinguish drafts from the current live revision", () => {
-  expect(resourcePage(rows, { status: "draft" }).total).toBe(15);
-  const published = resourcePage(rows, { status: "published" });
-  expect(published.total).toBe(14);
-  expect(
-    published.items.every((row) => row.revision === row.publishedRevision),
-  ).toBe(true);
-});
+
 test("pagination clamps invalid and out-of-range pages", () => {
   expect(resourcePage(rows, { page: "2" }).items[0].id).toBe("20");
   expect(resourcePage(rows, { page: "999" }).items.length).toBe(3);
@@ -41,7 +29,7 @@ test("pagination clamps invalid and out-of-range pages", () => {
   expect(resourcePage(rows, { page: "-1" }).page).toBe(1);
   expect(resourcePage([], { page: "99" }).page).toBe(1);
 });
-test("only article routes receive the editor tree", () => {
+test("only article routes receive article navigation", () => {
   const base = "/content/brain";
   expect(isResourceEditor(`${base}/resources`, base)).toBe(false);
   expect(isResourceEditor(`${base}/overview`, base)).toBe(false);

@@ -2,12 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ChevronDownIcon,
-  ExternalLinkIcon,
-  LoaderCircleIcon,
-  SaveIcon,
-} from "lucide-react";
+import { LoaderCircleIcon, SaveIcon } from "lucide-react";
 import { ContentSidebarToggle } from "@/components/content/nested-sidebar";
 import {
   Tooltip,
@@ -15,22 +10,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   ProjectRichTextEditor,
   ProjectRichTextViewer,
 } from "@/components/anatomy/project-rich-text";
 import { Button } from "@/components/ui/button";
-import {
-  documentValue,
-  documentStatus,
-  documentSaveInput,
-} from "@/lib/content/documents";
+import { documentValue, documentSaveInput } from "@/lib/content/documents";
 import type { ContentDocument } from "@/lib/content/types";
 
 export function ResourceEditor({
@@ -39,30 +23,30 @@ export function ResourceEditor({
   target,
   title,
   canEdit,
-  publicHref,
 }: {
   initialDocument: ContentDocument;
   familyId: string;
   target: string;
   title: string;
   canEdit: boolean;
-  publicHref?: string;
 }) {
   const router = useRouter();
   const [document, setDocument] = useState(initialDocument);
-  const [body, setBody] = useState(() => documentValue(initialDocument));
+  const [initialBody] = useState(() => documentValue(initialDocument));
+  const body = useRef(initialBody);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const initialized = useRef(false);
-  const savedBody = useRef(body);
+  const savedBody = useRef(initialBody);
   const editVersion = useRef(0);
   const saving = useRef(false);
 
   const onBodyChange = useCallback((value: string) => {
-    setBody(value);
+    // BlockNote owns its live state; do not rerender the page on every keystroke.
+    body.current = value;
     if (!initialized.current) {
       initialized.current = true;
       savedBody.current = value;
@@ -103,17 +87,11 @@ export function ResourceEditor({
     };
   }, [dirty]);
 
-  async function save(action: "save" | "publish" | "unpublish") {
+  async function save() {
     if (saving.current || !ready || !canEdit) return;
-    if (
-      action === "unpublish" &&
-      !window.confirm(
-        "Remove this article from public pages and the viewer description panel? Your draft will be kept.",
-      )
-    )
-      return;
     saving.current = true;
     const submittedVersion = editVersion.current;
+    const submittedBody = body.current;
     setBusy(true);
     setError(null);
     setNotice("");
@@ -123,22 +101,16 @@ export function ResourceEditor({
         {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(documentSaveInput(document, body, action)),
+          body: JSON.stringify(documentSaveInput(document, submittedBody)),
         },
       );
       const result = await response.json();
       if (!response.ok)
         throw new Error(result.error?.message ?? "Unable to save article.");
       setDocument(result as ContentDocument);
-      savedBody.current = body;
+      savedBody.current = submittedBody;
       setDirty(editVersion.current !== submittedVersion);
-      setNotice(
-        action === "publish"
-          ? "Article published."
-          : action === "unpublish"
-            ? "Article unpublished."
-            : "Draft saved. Live content is unchanged.",
-      );
+      setNotice("Article saved.");
       router.refresh();
     } catch (reason) {
       setError(
@@ -150,93 +122,26 @@ export function ResourceEditor({
     }
   }
 
-  const publicationLabel =
-    document.publishedRevision === null
-      ? "Draft"
-      : document.publishedRevision === document.revision
-        ? "Published"
-        : "Changes";
-
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <header className="z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background px-3">
-        <ContentSidebarToggle />
+        <ContentSidebarToggle placement="content" />
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
         <span role="status" aria-live="polite" className="sr-only">
           {busy
             ? "Saving article"
-            : notice || (dirty ? "Unsaved changes" : documentStatus(document))}
+            : notice || (dirty ? "Unsaved changes" : "Saved")}
         </span>
         {canEdit ? (
           <>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 shrink-0 px-2 text-xs text-muted-foreground"
-                  aria-label={`Publication options: ${documentStatus(document)}${dirty ? ", unsaved changes" : ""}`}
-                  disabled={busy || !ready}
-                >
-                  {dirty ? "Unsaved" : publicationLabel}
-                  <ChevronDownIcon className="size-3" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  disabled={busy || !ready || !dirty}
-                  onSelect={() => save("save")}
-                >
-                  Save draft
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={
-                    busy ||
-                    !ready ||
-                    (!dirty &&
-                      document.publishedRevision === document.revision &&
-                      document.accessLevel === "free")
-                  }
-                  onSelect={() => save("publish")}
-                >
-                  Publish article
-                </DropdownMenuItem>
-                {publicHref &&
-                document.publishedRevision !== null &&
-                document.accessLevel === "free" ? (
-                  <DropdownMenuItem asChild>
-                    <a
-                      href={publicHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      View published <ExternalLinkIcon />
-                    </a>
-                  </DropdownMenuItem>
-                ) : null}
-                {document.publishedRevision !== null ? (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      variant="destructive"
-                      disabled={busy || !ready}
-                      onSelect={() => save("unpublish")}
-                    >
-                      Unpublish article
-                    </DropdownMenuItem>
-                  </>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   type="button"
-                  aria-label={busy ? "Saving article" : "Save draft"}
+                  aria-label={busy ? "Saving article" : "Save article"}
                   size="icon-sm"
                   disabled={busy || !dirty || !ready}
-                  onClick={() => save("save")}
+                  onClick={() => save()}
                 >
                   {busy ? (
                     <LoaderCircleIcon className="animate-spin" />
@@ -245,14 +150,10 @@ export function ResourceEditor({
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Save draft</TooltipContent>
+              <TooltipContent>Save article</TooltipContent>
             </Tooltip>
           </>
-        ) : (
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {documentStatus(document)}
-          </span>
-        )}
+        ) : null}
       </header>
       {error ? (
         <p
@@ -269,7 +170,7 @@ export function ResourceEditor({
       >
         {canEdit ? (
           <ProjectRichTextEditor
-            value={body}
+            value={initialBody}
             onChange={onBodyChange}
             storageFormat="json"
             variant="workspace"
@@ -278,7 +179,7 @@ export function ResourceEditor({
           />
         ) : (
           <ProjectRichTextViewer
-            value={body}
+            value={initialBody}
             variant="workspace"
             className="resource-document rounded-none border-0 bg-transparent"
           />

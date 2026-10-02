@@ -16,6 +16,7 @@ pub struct ContentFamily {
     pub primary_modality_id: Option<Uuid>,
     pub viewer_slug: Option<String>,
     pub thumbnail_url: Option<String>,
+    pub modality_type: String,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -25,6 +26,7 @@ pub struct ContentLabel {
     pub slug: String,
     pub title: String,
     pub group_name: Option<String>,
+    pub thumbnail_url: Option<String>,
     pub modality_id: Uuid,
     pub modality_name: String,
     pub is_primary: bool,
@@ -42,6 +44,18 @@ pub struct PublicTopic {
     pub zone_name: String,
     pub has_article: bool,
     pub first_label_slug: Option<String>,
+    pub thumbnail_url: Option<String>,
+    #[sqlx(json)]
+    pub labels: Vec<PublicLabel>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicLabel {
+    pub id: Uuid,
+    pub slug: String,
+    pub title: String,
+    pub thumbnail_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -150,9 +164,9 @@ fn collect_rich_text(value: &Value, text: &mut String) {
 }
 
 impl SaveDocumentInput {
-    // Only a free, published snapshot may be mirrored into the anonymous viewer.
+    // Free article saves update the viewer immediately; protected content stays private.
     pub fn public_viewer_description(&self) -> (Option<String>, Option<String>) {
-        if self.action != "publish" || self.access_level != "free" {
+        if !matches!(self.action.as_str(), "save" | "publish") || self.access_level != "free" {
             return (None, None);
         }
         let summary = if self.summary.trim().is_empty() {
@@ -275,5 +289,15 @@ mod tests {
             body.as_deref(),
             Some(document.body_json.to_string().as_str())
         );
+    }
+    #[test]
+    fn free_saves_update_the_viewer_without_a_publish_step() {
+        let mut document = input();
+        document.action = "save".into();
+        let (summary, body) = document.public_viewer_description();
+        assert_eq!(summary.as_deref(), Some("Brain"));
+        assert!(body.is_some());
+        document.access_level = "subscription".into();
+        assert_eq!(document.public_viewer_description(), (None, None));
     }
 }

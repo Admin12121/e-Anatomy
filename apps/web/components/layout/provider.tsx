@@ -1,26 +1,26 @@
-"use client"
+"use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react"
-import type { ReactNode } from "react"
-import type { LenisOptions } from "lenis"
-import { ReactLenis, useLenis } from "lenis/react"
-import { usePathname } from "next/navigation"
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import type { LenisOptions } from "lenis";
+import { ReactLenis, useLenis } from "lenis/react";
+import { usePathname } from "next/navigation";
 
 import {
   PreloaderStateProvider,
   type PreloaderStartMode,
-} from "./preloader-state"
-import { cn } from "@/lib/utils"
-import { SCROLL_LOCK_EVENT } from "./scroll-lock"
+} from "./preloader-state";
+import { cn } from "@/lib/utils";
+import { SCROLL_LOCK_EVENT } from "./scroll-lock";
 
 type LayoutProviderProps = {
-  children: ReactNode
-}
+  children: ReactNode;
+};
 
-const MOBILE_BREAKPOINT = 1000
+const MOBILE_BREAKPOINT = 1000;
 
 const LENIS_EASING: NonNullable<LenisOptions["easing"]> = (t: number) =>
-  Math.min(1, 1.001 - Math.pow(2, -10 * t))
+  Math.min(1, 1.001 - Math.pow(2, -10 * t));
 
 const LENIS_SHARED = {
   easing: LENIS_EASING,
@@ -30,76 +30,78 @@ const LENIS_SHARED = {
   smoothWheel: true,
   syncTouch: true,
   wheelMultiplier: 1,
-} satisfies LenisOptions
+} satisfies LenisOptions;
 
 const LENIS_MOBILE = {
   ...LENIS_SHARED,
   duration: 0.8,
   touchMultiplier: 1.5,
   lerp: 0.09,
-} satisfies LenisOptions
+} satisfies LenisOptions;
 
 const LENIS_DESKTOP = {
   ...LENIS_SHARED,
   duration: 1.2,
   touchMultiplier: 2,
   lerp: 0.1,
-} satisfies LenisOptions
-
+} satisfies LenisOptions;
 
 function LenisScrollGate({ enabled }: { enabled: boolean }) {
-  const lenis = useLenis()
+  const lenis = useLenis();
 
   useEffect(() => {
     const sync = () => {
       const transitionLocked =
-        document.documentElement.dataset.scrollLocked === "true"
+        document.documentElement.dataset.scrollLocked === "true";
 
       if (!enabled || transitionLocked) {
-        lenis?.stop()
-        return
+        lenis?.stop();
+        return;
       }
 
-      lenis?.start()
-    }
+      lenis?.start();
+    };
 
-    sync()
-    window.addEventListener(SCROLL_LOCK_EVENT, sync)
+    sync();
+    window.addEventListener(SCROLL_LOCK_EVENT, sync);
 
     return () => {
-      window.removeEventListener(SCROLL_LOCK_EVENT, sync)
-    }
-  }, [enabled, lenis])
+      window.removeEventListener(SCROLL_LOCK_EVENT, sync);
+    };
+  }, [enabled, lenis]);
 
-  return null
+  return null;
 }
 
 function isPublicViewerPath(pathname: string) {
-  const segments = pathname.split("/").filter(Boolean)
+  const segments = pathname.split("/").filter(Boolean);
 
-  return segments.length === 2
+  return segments.length === 2;
 }
 
 export default function LayoutProvider({ children }: LayoutProviderProps) {
-  const pathname = usePathname()
-  const [isMobile, setIsMobile] = useState(false)
+  const pathname = usePathname();
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
     const handleResize = () =>
-      setIsMobile(window.innerWidth <= MOBILE_BREAKPOINT)
+      setIsMobile(window.innerWidth <= MOBILE_BREAKPOINT);
 
-    handleResize()
-    window.addEventListener("resize", handleResize)
+    handleResize();
+    window.addEventListener("resize", handleResize);
 
-    return () => window.removeEventListener("resize", handleResize)
-  }, [])
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
-  const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP
-  const openPreloader: (mode?: PreloaderStartMode) => void = useCallback(() => {}, [])
-  const isPublicViewerRoute = isPublicViewerPath(pathname)
-  const isLegalRoute = pathname === "/terms" || pathname === "/privacy" || pathname === "/about"
-  const isStructuresRoute = pathname.startsWith("/structures/")
-  const usesNativeDocumentScroll = isPublicViewerRoute || isLegalRoute || isStructuresRoute
+  const lenisOptions: LenisOptions = isMobile ? LENIS_MOBILE : LENIS_DESKTOP;
+  const openPreloader: (mode?: PreloaderStartMode) => void =
+    useCallback(() => {}, []);
+  const isPublicViewerRoute = isPublicViewerPath(pathname);
+  const isLegalRoute =
+    pathname === "/terms" || pathname === "/privacy" || pathname === "/about";
+  const isStructuresRoute = pathname.startsWith("/structures/");
+  const usesNativeDocumentScroll =
+    isPublicViewerRoute || isLegalRoute || isStructuresRoute;
   const preloaderStateValue = useMemo(
     () => ({
       isPreloaderActive: false,
@@ -108,13 +110,16 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
       openPreloader,
     }),
     [openPreloader],
-  )
+  );
   const content = (
     <div
       className={cn(
         "relative",
         isPublicViewerRoute && "min-h-dvh overflow-x-hidden overflow-y-auto",
-        (isLegalRoute || isStructuresRoute) && "min-h-dvh overflow-x-hidden",
+        isLegalRoute && "min-h-dvh overflow-x-hidden",
+        // The document frame owns its content scroller. Do not allow this
+        // outer wrapper to grow or become a second scrolling surface.
+        isStructuresRoute && "h-dvh min-h-0 overflow-hidden",
       )}
     >
       <div
@@ -122,20 +127,25 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
           "opacity-100",
           isPublicViewerRoute &&
             "h-dvh min-h-0 overflow-x-hidden overflow-y-auto dark:bg-[#171717]",
-          (isLegalRoute || isStructuresRoute) && "min-h-dvh",
+          isLegalRoute && "min-h-dvh",
+          isStructuresRoute && "h-dvh min-h-0 overflow-hidden",
         )}
       >
         {children}
       </div>
     </div>
-  )
+  );
 
   return (
     <PreloaderStateProvider value={preloaderStateValue}>
-      <ReactLenis root options={lenisOptions}>
-        <LenisScrollGate enabled={!usesNativeDocumentScroll} />
-        {content}
-      </ReactLenis>
+      {isStructuresRoute ? (
+        content
+      ) : (
+        <ReactLenis root options={lenisOptions}>
+          <LenisScrollGate enabled={!usesNativeDocumentScroll} />
+          {content}
+        </ReactLenis>
+      )}
     </PreloaderStateProvider>
-  )
+  );
 }

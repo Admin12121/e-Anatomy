@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useMemo } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowLeftIcon } from "lucide-react";
 
-import { Frame, FrameHeader } from "@/components/ui/frame";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ModalityPreviewCard } from "@/components/content/modality-preview-card";
 import { authClient } from "@/lib/auth-client";
+import { modalityDestination } from "@/lib/content/navigation";
 import type {
   ModalityType,
   PublicZoneModalitySummary,
@@ -49,7 +48,8 @@ function resolveManifestPreview(
     ) ??
     assets.find(
       (asset) =>
-        asset.assetKind === "overview" && (asset.thumbnailUrl || asset.imageUrl),
+        asset.assetKind === "overview" &&
+        (asset.thumbnailUrl || asset.imageUrl),
     ) ??
     assets.find((asset) => asset.thumbnailUrl || asset.imageUrl);
 
@@ -67,7 +67,8 @@ function findAdminFamily(
       family.id === modality.id ||
       family.name.trim().toLowerCase() === modalityName ||
       family.variants.some(
-        (variant) => variant.id === modality.id || variant.slug === modality.slug,
+        (variant) =>
+          variant.id === modality.id || variant.slug === modality.slug,
       ),
   );
 }
@@ -110,72 +111,18 @@ function CatalogModalityCard({
     previewableModality.modalityType ??
     viewerManifest?.modality.modalityType ??
     modality.slug;
-  const [imageFailed, setImageFailed] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
-
-  useEffect(() => {
-    setImageFailed(false);
-    setImageLoaded(false);
-  }, [previewSrc]);
-
   return (
-    <Link
-      className="block rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#141414]"
-      href={`/${encodeURIComponent(zone.slug)}/${encodeURIComponent(modality.slug)}`}
-    >
-      <Frame className="group w-full bg-white/[0.05] transition-[background-color,transform] duration-300 ease-out hover:-translate-y-0.5 hover:bg-white/[0.07]">
-        <FrameHeader className="flex h-10 shrink-0 flex-row items-center justify-between gap-2 px-2 py-0 text-sm">
-          <p className="min-w-0 truncate font-medium text-white/92">
-            {modality.name}
-          </p>
-          <span className="shrink-0 truncate text-[0.66rem] font-medium uppercase tracking-[0.1em] text-white/34 transition-colors group-hover:text-white/52">
-            {modalityType}
-          </span>
-        </FrameHeader>
-
-        <div className="relative aspect-[1.55] w-full overflow-hidden rounded-xl bg-[#0d0d0d]">
-          {previewSrc && !imageFailed ? (
-            <>
-              {!imageLoaded ? (
-                <Skeleton
-                  aria-label={`Loading ${modality.name} preview`}
-                  className="absolute inset-0 z-10 size-full rounded-xl"
-                  role="status"
-                />
-              ) : null}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                alt={`${modality.name} preview`}
-                className={`absolute inset-0 h-full w-full bg-black object-contain transition-[opacity,transform] duration-500 ease-out group-hover:scale-[1.015] ${
-                  imageLoaded ? "opacity-100" : "opacity-0"
-                }`}
-                loading="lazy"
-                onError={() => {
-                  setImageLoaded(false);
-                  setImageFailed(true);
-                }}
-                onLoad={() => setImageLoaded(true)}
-                src={previewSrc}
-              />
-            </>
-          ) : isManifestFetching || adminPreviewLoading ? (
-            <Skeleton
-              aria-label={`Loading ${modality.name} preview`}
-              className="absolute inset-0 size-full rounded-xl"
-              role="status"
-            />
-          ) : (
-            <div
-              aria-label={`${modality.name} preview is unavailable`}
-              className="absolute inset-0 flex items-center justify-center text-[0.62rem] font-medium uppercase tracking-[0.16em] text-white/20"
-              role="img"
-            >
-              Preview unavailable
-            </div>
-          )}
-        </div>
-      </Frame>
-    </Link>
+    <ModalityPreviewCard
+      name={modality.name}
+      modalityType={modalityType}
+      previewSrc={previewSrc}
+      loading={isManifestFetching || adminPreviewLoading}
+      href={modalityDestination(
+        zone.slug,
+        adminFamily?.slug ?? modality.slug,
+        "catalog",
+      )}
+    />
   );
 }
 
@@ -205,12 +152,10 @@ function CatalogZoneSection({
     isError,
     isLoading,
   } = useGetPublicZoneModalitiesQuery(zone.id);
-  const {
-    data: adminFamiliesResponse,
-    isFetching: isAdminFamiliesFetching,
-  } = useGetZoneModalitiesQuery(zone.id, {
-    skip: !canLoadAdminThumbnails,
-  });
+  const { data: adminFamiliesResponse, isFetching: isAdminFamiliesFetching } =
+    useGetZoneModalitiesQuery(zone.id, {
+      skip: !canLoadAdminThumbnails,
+    });
   const modalities = modalitiesResponse?.items ?? [];
   const adminFamilies = adminFamiliesResponse?.items;
 

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useSyncExternalStore } from "react";
+import { memo } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,7 @@ const ProjectRichTextEditorDynamic = dynamic(
     ),
   {
     ssr: false,
+    loading: () => <RichTextLoadingState />,
   },
 );
 
@@ -24,15 +25,15 @@ const ProjectRichTextViewerDynamic = dynamic(
     ),
   {
     ssr: false,
+    loading: () => <RichTextLoadingState message="Loading document..." />,
   },
 );
 
-function subscribeToHydration() {
-  return () => {};
-}
-
-function useHydrated() {
-  return useSyncExternalStore(subscribeToHydration, () => true, () => false);
+/** Start the browser-only chunk while an article link is hovered or focused. */
+export function preloadProjectRichText() {
+  void import("./project-rich-text-browser").catch(() => {
+    // A failed prefetch must not prevent navigation; the dynamic loader retries.
+  });
 }
 
 function RichTextLoadingState({
@@ -67,7 +68,7 @@ function RichTextLoadingState({
   );
 }
 
-export function ProjectRichTextEditor({
+export const ProjectRichTextEditor = memo(function ProjectRichTextEditor({
   disabled = false,
   storageFormat = "markdown",
   value,
@@ -77,12 +78,6 @@ export function ProjectRichTextEditor({
 }: ProjectRichTextProps & {
   onChange: (value: string) => void;
 }) {
-  const hydrated = useHydrated();
-
-  if (!hydrated) {
-    return <RichTextLoadingState className={className} variant={variant} />;
-  }
-
   return (
     <ProjectRichTextEditorDynamic
       disabled={disabled}
@@ -93,7 +88,7 @@ export function ProjectRichTextEditor({
       variant={variant}
     />
   );
-}
+});
 
 export function ProjectRichTextViewer({
   value,
@@ -103,18 +98,6 @@ export function ProjectRichTextViewer({
 }: ProjectRichTextProps & {
   emptyMessage?: string;
 }) {
-  const hydrated = useHydrated();
-
-  if (!hydrated) {
-    return (
-      <RichTextLoadingState
-        className={className}
-        variant={variant}
-        message="Loading document..."
-      />
-    );
-  }
-
   return (
     <ProjectRichTextViewerDynamic
       value={value}

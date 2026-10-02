@@ -37,12 +37,7 @@ import { cn } from "@/lib/utils";
 installThreeCompatibilityConsoleFilter();
 
 type AnatomyLayerId =
-  | "body"
-  | "skeleton"
-  | "brain"
-  | "lungs"
-  | "heartKidney"
-  | "digestive";
+  "body" | "skeleton" | "brain" | "lungs" | "heartKidney" | "digestive";
 
 export type HighlightableLayerId = Exclude<AnatomyLayerId, "body" | "skeleton">;
 
@@ -95,6 +90,8 @@ type HoverZoneUserData = {
 
 type AnatomySceneProps = {
   backgroundColor: string;
+  loadingFallback: ReactNode;
+  surfaceTone: "light" | "dark";
   createMode: boolean;
   draftAnchor: ZoneAnchor | null;
   focusLayer: HighlightableLayerId | null;
@@ -112,7 +109,10 @@ type AnatomySceneProps = {
   targetModelHeight: number;
 };
 
-type AnatomyAssemblyProps = Omit<AnatomySceneProps, "backgroundColor">;
+type AnatomyAssemblyProps = Omit<
+  AnatomySceneProps,
+  "backgroundColor" | "loadingFallback"
+>;
 
 type AnatomyLayerModelProps = {
   config: AnatomyLayerConfig;
@@ -138,6 +138,8 @@ type LayerRuntimeEntry = {
 
 type AnatomyStageProps = {
   backgroundColor?: string;
+  loadingFallback?: ReactNode;
+  surfaceTone?: "light" | "dark";
   className?: string;
   createMode?: boolean;
   draftAnchor?: ZoneAnchor | null;
@@ -640,6 +642,8 @@ function resolveHoveredLayer(
 
 export function AnatomyStage({
   backgroundColor = "#7e80fc",
+  loadingFallback = <SceneFallback />,
+  surfaceTone = "dark",
   className,
   createMode = false,
   draftAnchor = null,
@@ -708,6 +712,8 @@ export function AnatomyStage({
         >
           <AnatomyScene
             backgroundColor={backgroundColor}
+            loadingFallback={loadingFallback}
+            surfaceTone={surfaceTone}
             createMode={createMode}
             draftAnchor={draftAnchor}
             focusLayer={focusLayer}
@@ -734,6 +740,8 @@ export function AnatomyStage({
 
 function AnatomyScene({
   backgroundColor,
+  loadingFallback,
+  surfaceTone,
   createMode,
   draftAnchor,
   focusLayer,
@@ -775,8 +783,9 @@ function AnatomyScene({
         intensity={0.18}
         position={[0, -3.5, 5]}
       />
-      <Suspense fallback={<SceneFallback />}>
+      <Suspense fallback={loadingFallback}>
         <AnatomyAssembly
+          surfaceTone={surfaceTone}
           createMode={createMode}
           draftAnchor={draftAnchor}
           focusLayer={focusLayer}
@@ -822,6 +831,7 @@ function AnatomySceneReady({ onReady }: { onReady?: () => void }) {
 }
 
 function AnatomyAssembly({
+  surfaceTone,
   createMode,
   draftAnchor,
   focusLayer,
@@ -837,6 +847,17 @@ function AnatomyAssembly({
   modelOffsetY,
   targetModelHeight,
 }: AnatomyAssemblyProps) {
+  const layers = useMemo(
+    () =>
+      surfaceTone === "light"
+        ? ANATOMY_LAYERS.map((layer) =>
+            layer.id === "body" || layer.id === "skeleton"
+              ? { ...layer, material: { ...layer.material, color: "#475569" } }
+              : layer,
+          )
+        : ANATOMY_LAYERS,
+    [surfaceTone],
+  );
   const rotationGroupRef = useRef<Group>(null);
   const normalizedGroupRef = useRef<Group>(null);
   const modelGroupRef = useRef<Group>(null);
@@ -971,7 +992,7 @@ function AnatomyAssembly({
     <group ref={rotationGroupRef}>
       <group ref={normalizedGroupRef}>
         <group ref={modelGroupRef} rotation={[BASE_MODEL_ROTATION_X, 0, 0]}>
-          {ANATOMY_LAYERS.map((layer) => (
+          {layers.map((layer) => (
             <AnatomyLayerModel
               key={layer.id}
               config={layer}
