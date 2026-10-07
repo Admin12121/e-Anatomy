@@ -12,6 +12,7 @@ import {
 } from "./preloader-state";
 import { cn } from "@/lib/utils";
 import { SCROLL_LOCK_EVENT } from "./scroll-lock";
+import { ROUTE_TRANSITION_SETTLED_EVENT } from "./transition-events";
 
 type LayoutProviderProps = {
   children: ReactNode;
@@ -50,6 +51,9 @@ function LenisScrollGate({ enabled }: { enabled: boolean }) {
   const lenis = useLenis();
 
   useEffect(() => {
+    // Keep the original Lenis gate behavior byte-for-byte in spirit: scroll
+    // locks only stop/start Lenis. Do not resize or retarget during a normal
+    // lock release, because doing so changes the perceived momentum.
     const sync = () => {
       const transitionLocked =
         document.documentElement.dataset.scrollLocked === "true";
@@ -62,11 +66,27 @@ function LenisScrollGate({ enabled }: { enabled: boolean }) {
       lenis?.start();
     };
 
+    // Route transitions can temporarily pin the page and report a short
+    // document height. Once that transition is fully settled, refresh only the
+    // limits; the original easing/lerp/velocity state remains untouched.
+    const resyncAfterRoute = () => {
+      sync();
+      window.requestAnimationFrame(() => lenis?.resize());
+    };
+
     sync();
     window.addEventListener(SCROLL_LOCK_EVENT, sync);
+    window.addEventListener(
+      ROUTE_TRANSITION_SETTLED_EVENT,
+      resyncAfterRoute,
+    );
 
     return () => {
       window.removeEventListener(SCROLL_LOCK_EVENT, sync);
+      window.removeEventListener(
+        ROUTE_TRANSITION_SETTLED_EVENT,
+        resyncAfterRoute,
+      );
     };
   }, [enabled, lenis]);
 
@@ -100,6 +120,8 @@ export default function LayoutProvider({ children }: LayoutProviderProps) {
   const isLegalRoute =
     pathname === "/terms" || pathname === "/privacy" || pathname === "/about";
   const isStructuresRoute = pathname.startsWith("/structures/");
+  // The atlas home page intentionally uses Lenis, including View All. Routes
+  // with their own internal document scrollers still use native scrolling.
   const usesNativeDocumentScroll =
     isPublicViewerRoute || isLegalRoute || isStructuresRoute;
   const preloaderStateValue = useMemo(

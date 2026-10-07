@@ -60,10 +60,25 @@ pub async fn family(
         WHERE ($1::uuid IS NULL OR z.account_id = $1)
             AND ($1::uuid IS NOT NULL OR EXISTS(SELECT 1 FROM accounts WHERE id = z.account_id AND status = 'active'))
             AND ($2::uuid IS NULL OR f.id = $2)
-            AND ($3::text IS NULL OR z.slug = $3)
-            AND ($4::text IS NULL OR f.slug = $4 OR EXISTS (
-                SELECT 1 FROM anatomy_zone_modalities WHERE family_id = f.id AND slug = $4
-            ))
+            AND (
+                (($3::text IS NULL OR z.slug = $3) AND
+                 ($4::text IS NULL OR f.slug = $4 OR EXISTS (
+                     SELECT 1 FROM anatomy_zone_modalities m
+                     WHERE m.family_id=f.id AND m.slug=$4
+                 )))
+                OR ($3::text IS NOT NULL AND $4::text IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM anatomy_legacy_modality_routes old
+                    JOIN anatomy_zone_modalities m ON m.id=old.modality_id
+                    WHERE m.family_id=f.id AND old.account_id=z.account_id
+                      AND old.original_zone_slug=$3
+                      AND old.original_modality_slug=$4
+                ))
+                OR ($3::text IS NOT NULL AND $4::text IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM anatomy_legacy_family_routes old
+                    WHERE old.family_id=f.id AND old.account_id=z.account_id
+                      AND old.original_zone_slug=$3 AND old.original_family_slug=$4
+                ))
+            )
         ORDER BY (f.slug = $4) DESC NULLS LAST, f.id LIMIT 1
     "#).bind(account).bind(id).bind(zone).bind(slug).fetch_optional(pool).await?
         .ok_or_else(|| AppError::not_found("Content not found"))
@@ -242,7 +257,7 @@ pub async fn save(
     .await?;
     if revision != input.revision {
         return Err(AppError::Conflict(
-            "This document changed in another session. Reload before saving.".into(),
+            "This document changed in another session. Your draft has not been saved; reload the latest version and review your draft before saving.".into(),
         ));
     }
     sqlx::query(r#"
@@ -259,17 +274,12 @@ pub async fn save(
             .bind(id).bind(&resource.kind).bind(resource.title.trim()).bind(&resource.url).bind(&resource.caption).bind(index as i32)
             .execute(&mut *tx).await?;
     }
-    if matches!(input.action.as_str(), "save" | "publish") {
-        sqlx::query(r#"
-            UPDATE anatomy_content_documents SET published_revision = revision, published_summary = summary,
-                published_body_json = body_json, published_legacy_markdown = legacy_markdown,
-                published_access_level = access_level, published_resources = $2, published_at = NOW() WHERE id = $1
-        "#).bind(id).bind(serde_json::to_value(&input.resources).map_err(|e| AppError::internal(e.to_string()))?)
-            .execute(&mut *tx).await?;
-    } else if input.action == "unpublish" {
-        sqlx::query("UPDATE anatomy_content_documents SET published_revision=NULL, published_summary=NULL, published_body_json=NULL, published_legacy_markdown=NULL, published_access_level=NULL, published_resources='[]', published_at=NULL WHERE id=$1")
-            .bind(id).execute(&mut *tx).await?;
-    }
+    sqlx::query(r#"
+        UPDATE anatomy_content_documents SET published_revision = revision, published_summary = summary,
+            published_body_json = body_json, published_legacy_markdown = legacy_markdown,
+            published_access_level = access_level, published_resources = $2, published_at = NOW() WHERE id = $1
+    "#).bind(id).bind(serde_json::to_value(&input.resources).map_err(|e| AppError::internal(e.to_string()))?)
+        .execute(&mut *tx).await?;
     if let Some(structure) = structure_id {
         let (summary, body) = input.public_viewer_description();
         sqlx::query("UPDATE anatomy_structures SET short_description=$2, long_description=$3, access_level=$4, updated_by_user_id=$5, updated_at=NOW() WHERE id=$1")

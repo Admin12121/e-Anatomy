@@ -29,8 +29,59 @@ export function documentSaveInput(document: ContentDocument, value: string) {
     revision: document.revision,
     summary: document.summary,
     bodyJson: parseDocumentValue(value),
-    accessLevel: "free" as const,
+    accessLevel: document.accessLevel,
     resources: document.resources,
     action: "save" as const,
   };
+}
+
+export class DocumentSaveError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "DocumentSaveError";
+  }
+}
+
+export async function readDocumentSaveResponse(
+  response: Response,
+): Promise<ContentDocument> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new DocumentSaveError(
+      "The content save service returned an invalid response. Your edits are still in the editor; please try again after the service is available.",
+      response.status,
+    );
+  }
+
+  if (!response.ok) {
+    const error =
+      payload && typeof payload === "object" && "error" in payload
+        ? payload.error
+        : null;
+    const message =
+      error &&
+      typeof error === "object" &&
+      "message" in error &&
+      typeof error.message === "string"
+        ? error.message
+        : "Unable to save article.";
+    throw new DocumentSaveError(message, response.status);
+  }
+
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !("revision" in payload) ||
+    typeof payload.revision !== "number" ||
+    !("bodyJson" in payload) ||
+    !Array.isArray(payload.bodyJson)
+  ) {
+    throw new DocumentSaveError(
+      "The content save service returned an invalid document.",
+      response.status,
+    );
+  }
+  return payload as ContentDocument;
 }

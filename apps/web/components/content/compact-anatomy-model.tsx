@@ -130,19 +130,22 @@ export function CompactAnatomyModel({ contentSlug }: { contentSlug: string }) {
     >
       <div
         ref={previewRef}
-        className="relative h-[min(42rem,calc(100dvh-22rem))] min-h-52 overflow-hidden"
+        className="relative h-[min(54rem,calc(100dvh-12rem))] min-h-72 overflow-hidden"
       >
         {requested && !unavailable ? (
           <ModelBoundary key={attempt} onError={markFailed}>
             <div className={styles.model} data-ready={ready}>
               <AnatomyStage
-                className="h-[min(42rem,calc(100dvh-22rem))]! min-h-52!"
+                className="h-[min(54rem,calc(100dvh-12rem))]! min-h-72!"
                 backgroundColor={background}
                 surfaceTone={resolvedTheme === "dark" ? "dark" : "light"}
                 showBackdrop={false}
                 targetModelHeight={6.3}
+                modelZoom={1.3}
+                cameraTargetY={0.67}
                 loadingFallback={null}
                 previewLayer={previewLayer}
+                showPartsToggle={false}
                 onReady={markReady}
               />
             </div>

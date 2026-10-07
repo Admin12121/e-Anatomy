@@ -39,7 +39,7 @@ use crate::features::playground::{
         ReorderZoneModalityAssetsResponse, UpdateViewerAnnotationInput,
         UpdateViewerStructureGroupInput, UpdateViewerStructureInput, UpdateZoneInput,
         UpdateZoneModalityAssetInput, UpdateZoneModalityFamilyInput, UpdateZoneModalityInput,
-        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneDetail, ZoneListResponse,
+        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneAnchor, ZoneDetail, ZoneListResponse,
         ZoneModality, ZoneModalityAsset, ZoneModalityAssetListResponse, ZoneModalityAtlasFrame,
         ZoneModalityAtlasPage, ZoneModalityFamily, ZoneModalityFamilyListResponse,
         ZoneModalityViewerManifest,
@@ -315,7 +315,10 @@ impl PlaygroundService {
     pub async fn list_zones_for_account(
         &self,
         account_id: Uuid,
+        user_id: &str,
     ) -> Result<ZoneListResponse, AppError> {
+        sqlx::query("SELECT anatomy_seed_fixed_zones($1,$2)")
+            .bind(account_id).bind(user_id).execute(&self.pool).await?;
         let items = self
             .repo
             .list_zones_for_account(&self.pool, account_id)
@@ -349,33 +352,11 @@ impl PlaygroundService {
 
     pub async fn create_zone(
         &self,
-        account_id: Uuid,
-        user_id: &str,
-        input: CreateZoneInput,
+        _account_id: Uuid,
+        _user_id: &str,
+        _input: CreateZoneInput,
     ) -> Result<ZoneDetail, AppError> {
-        let name = normalize_required_name(&input.name, "Zone name is required")?;
-        let description = normalize_optional_text(input.description);
-        let body_view = normalize_body_view(input.body_view)?;
-        let anchor = validate_anchor(input.anchor)?;
-        let slug = self.allocate_zone_slug(account_id, &name).await?;
-
-        let zone = self
-            .repo
-            .create_zone(
-                &self.pool,
-                account_id,
-                user_id,
-                &slug,
-                &name,
-                description.as_deref(),
-                &body_view,
-                anchor.x,
-                anchor.y,
-                anchor.z,
-            )
-            .await?;
-
-        Ok(zone)
+        Err(AppError::bad_request("Zones are predefined; choose one of the seven regions"))
     }
 
     pub async fn update_zone(
@@ -385,13 +366,16 @@ impl PlaygroundService {
         zone_id: Uuid,
         input: UpdateZoneInput,
     ) -> Result<ZoneDetail, AppError> {
+        let previous = self.repo.get_zone_detail(&self.pool, account_id, zone_id).await?
+            .ok_or_else(|| AppError::not_found("Canonical zone not found"))?;
+        if input.name.trim() != previous.name || input.anchor.is_some() ||
+            input.body_view.as_deref().is_some_and(|v| v != previous.body_view.as_str()) {
+            return Err(AppError::bad_request("Zone names, regions and coordinates are fixed"));
+        }
         let name = normalize_required_name(&input.name, "Zone name is required")?;
         let description = normalize_optional_text(input.description);
-        let body_view = normalize_body_view(input.body_view)?;
-        let anchor = match input.anchor {
-            Some(anchor) => Some(validate_anchor(anchor)?),
-            None => None,
-        };
+        let body_view = previous.body_view;
+        let anchor: Option<ZoneAnchor> = None;
 
         self.repo
             .update_zone(

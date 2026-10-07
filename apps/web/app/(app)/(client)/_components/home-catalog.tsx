@@ -159,6 +159,10 @@ function CatalogZoneSection({
   const modalities = modalitiesResponse?.items ?? [];
   const adminFamilies = adminFamiliesResponse?.items;
 
+  // No empty placeholder cards or empty zone sections in View All. Keep
+  // loading and error states visible to avoid treating network failures as empty.
+  if (!isLoading && !isError && modalities.length === 0) return null;
+
   return (
     <section
       className="scroll-mt-24 py-7 first:pt-0 md:py-9"
@@ -176,12 +180,6 @@ function CatalogZoneSection({
       {isError ? (
         <div className="rounded-xl bg-red-400/[0.055] px-4 py-5 text-sm text-red-200/70">
           Unable to load modalities for this region.
-        </div>
-      ) : null}
-
-      {!isLoading && !isError && modalities.length === 0 ? (
-        <div className="rounded-xl bg-white/[0.025] px-4 py-7 text-sm text-white/30">
-          No modalities are attached to this zone yet.
         </div>
       ) : null}
 

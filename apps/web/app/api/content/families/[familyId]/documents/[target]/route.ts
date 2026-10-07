@@ -49,6 +49,10 @@ export async function PUT(
         { error: { message: error.message } },
         { status: error.status },
       )
-    throw error
+    console.error("Content document save failed", error)
+    return NextResponse.json(
+      { error: { message: "The content service is unavailable. Please try again." } },
+      { status: 500 },
+    )
   }
 }

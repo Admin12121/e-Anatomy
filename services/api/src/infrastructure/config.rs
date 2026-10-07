@@ -37,14 +37,39 @@ impl AppConfig {
                     .context("DATABASE_URL must be set for the API service")?,
                 max_connections: env_or_parse("DATABASE_MAX_CONNECTIONS", 10)?,
             },
-            internal_web_api_key: env_or(
-                "INTERNAL_WEB_API_KEY",
-                "anatomy-internal-web-key-dev-only",
-            ),
+            internal_web_api_key: required_internal_api_key(
+                std::env::var("INTERNAL_WEB_API_KEY")
+                    .context("INTERNAL_WEB_API_KEY must be set for the API service")?,
+            )?,
             storage: StorageConfig {
                 root_dir: env_or("STORAGE_ROOT_DIR", "./data"),
             },
         })
+    }
+}
+
+fn required_internal_api_key(value: String) -> Result<String> {
+    anyhow::ensure!(
+        value.len() >= 32 && value.trim() == value,
+        "INTERNAL_WEB_API_KEY must be at least 32 characters with no surrounding whitespace"
+    );
+    anyhow::ensure!(
+        cfg!(debug_assertions) || value != "anatomy-internal-web-key-dev-only",
+        "INTERNAL_WEB_API_KEY must not use the known development key in production"
+    );
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_internal_api_key;
+
+    #[test]
+    fn internal_key_must_be_explicit_and_nonempty() {
+        assert!(required_internal_api_key(String::new()).is_err());
+        assert!(required_internal_api_key("short".into()).is_err());
+        assert!(required_internal_api_key(format!(" {}", "x".repeat(32))).is_err());
+        assert!(required_internal_api_key("x".repeat(32)).is_ok());
     }
 }
 

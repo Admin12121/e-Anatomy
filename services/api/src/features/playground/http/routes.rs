@@ -147,9 +147,10 @@ async fn list_zones(
     jar: CookieJar,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
+    let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
     let response = state
         .playground_service
-        .list_zones_for_account(resolve_admin_account_id(&state, &jar, &headers).await?)
+        .list_zones_for_account(actor.account_id, &actor.user_id)
         .await?;
 
     Ok((StatusCode::OK, Json(response)))

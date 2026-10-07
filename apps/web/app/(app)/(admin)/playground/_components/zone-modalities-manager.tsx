@@ -1021,20 +1021,15 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
               return;
             }
 
-            draft.items.unshift({
-              id: createdModality.familyId,
-              modalityType: createdModality.modalityType,
-              name: createdModality.name,
-              notes: createdModality.notes,
-              thumbnailUrl: createdModality.coverImageUrl,
-              readyVariantCount:
-                createdModality.processingStatus === "ready" ? 1 : 0,
-              totalVariantCount: 1,
-              variants: [createdModality],
-            });
-            draft.total += 1;
           },
         ),
+      );
+      // The intake response has no family slug or primary ID. Fetch the
+      // authoritative family instead of inventing incomplete client data.
+      dispatch(
+        playgroundApi.util.invalidateTags([
+          { type: "ZoneModalities", id: `LIST:${zoneId}` },
+        ]),
       );
 
       toast.success(

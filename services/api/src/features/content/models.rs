@@ -119,25 +119,6 @@ fn validate_rich_value(value: &Value, depth: usize) -> bool {
     }
 }
 
-fn rich_content_has_value(value: &Value) -> bool {
-    match value {
-        Value::String(text) => !text.trim().is_empty(),
-        Value::Array(values) => values.iter().any(rich_content_has_value),
-        Value::Object(values) => {
-            values.get("text").is_some_and(rich_content_has_value)
-                || ["content", "children", "rows", "cells"]
-                    .iter()
-                    .any(|key| values.get(*key).is_some_and(rich_content_has_value))
-                || values
-                    .get("props")
-                    .and_then(|props| props.get("url"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|url| !url.trim().is_empty())
-        }
-        _ => false,
-    }
-}
-
 fn collect_rich_text(value: &Value, text: &mut String) {
     match value {
         Value::String(value) => text.push_str(value),
@@ -166,7 +147,7 @@ fn collect_rich_text(value: &Value, text: &mut String) {
 impl SaveDocumentInput {
     // Free article saves update the viewer immediately; protected content stays private.
     pub fn public_viewer_description(&self) -> (Option<String>, Option<String>) {
-        if !matches!(self.action.as_str(), "save" | "publish") || self.access_level != "free" {
+        if self.action != "save" || self.access_level != "free" {
             return (None, None);
         }
         let summary = if self.summary.trim().is_empty() {
@@ -187,7 +168,7 @@ impl SaveDocumentInput {
     pub fn validate(&self) -> Result<(), AppError> {
         if self.revision < 0
             || self.summary.len() > 3000
-            || !matches!(self.action.as_str(), "save" | "publish" | "unpublish")
+            || self.action != "save"
             || !matches!(self.access_level.as_str(), "free" | "subscription")
         {
             return Err(AppError::bad_request("Invalid document settings"));
@@ -219,12 +200,6 @@ impl SaveDocumentInput {
         {
             return Err(AppError::bad_request("Invalid document resources"));
         }
-        if self.action == "publish"
-            && !rich_content_has_value(&self.body_json)
-            && self.summary.trim().is_empty()
-        {
-            return Err(AppError::bad_request("Add content before publishing"));
-        }
         Ok(())
     }
 }
@@ -237,7 +212,7 @@ mod tests {
         serde_json::from_value(json!({"revision":0,"summary":"Brain","bodyJson":[
             {"type":"heading","props":{"level":2},"content":[{"type":"text","text":"Overview","styles":{"bold":true}}]},
             {"type":"image","props":{"url":"https://example.org/brain.png"},"children":[]}
-        ],"accessLevel":"free","action":"publish","resources":[]})).unwrap()
+        ],"accessLevel":"free","action":"save","resources":[]})).unwrap()
     }
     #[test]
     fn accepts_native_blocks_without_flattening_styles_or_media() {
@@ -256,7 +231,7 @@ mod tests {
         assert!(safe_resource_url("/api/v1/public/playground/assets/1"));
     }
     #[test]
-    fn rejects_invalid_revision_action_and_empty_publication() {
+    fn rejects_invalid_revision_and_obsolete_publication_actions() {
         let mut document = input();
         document.revision = -1;
         assert!(document.validate().is_err());
@@ -264,19 +239,14 @@ mod tests {
         document.action = "delete".into();
         assert!(document.validate().is_err());
         document.action = "publish".into();
-        document.summary.clear();
-        document.body_json = json!([]);
         assert!(document.validate().is_err());
-        document.body_json = json!([{"type":"paragraph","content":[],"children":[]}]);
+        document.action = "unpublish".into();
         assert!(document.validate().is_err());
     }
     #[test]
-    fn private_or_unpublished_bodies_never_reach_the_legacy_public_viewer() {
+    fn private_bodies_never_reach_the_legacy_public_viewer() {
         let mut document = input();
         document.access_level = "subscription".into();
-        assert_eq!(document.public_viewer_description(), (None, None));
-        document.access_level = "free".into();
-        document.action = "unpublish".into();
         assert_eq!(document.public_viewer_description(), (None, None));
     }
     #[test]

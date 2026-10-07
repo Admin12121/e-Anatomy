@@ -267,6 +267,7 @@ export default function Page() {
       markHomePreloaderSeen();
     }
   }, [preloaderMode]);
+
   const {
     data: zonesResponse,
     error: zonesQueryError,
@@ -288,6 +289,7 @@ export default function Page() {
     id: zone.id,
     name: zone.name,
     anchor: zone.anchor,
+    slug: zone.slug,
   }));
   const selectedZone = activeSelectedZoneId
     ? (zones.find((zone) => zone.id === activeSelectedZoneId) ?? null)
@@ -345,7 +347,9 @@ export default function Page() {
       onComplete: finishTransition,
     });
 
-    return () => tween.kill();
+    return () => {
+      tween.kill();
+    };
   }, [homeView, prefersReducedMotion]);
 
   function handleSelectZone(zoneId: string) {
@@ -415,7 +419,7 @@ export default function Page() {
           setIsStageActivated(true);
         });
 
-        // Warm the GLB cache in parallel. AnatomyStage calls markStageReady only
+        // Warm the Human Atlas catalogue in parallel. AnatomyStage calls markStageReady only
         // after its Suspense boundary has resolved and the scene has painted.
         void module.preloadAnatomyStageAssets?.().catch(() => null);
       })
@@ -971,6 +975,8 @@ export default function Page() {
                   onZoneSelect={handleSelectZone}
                   selectedZoneId={activeSelectedZoneId}
                   showBackdrop={false}
+                  showPartsToggle={atlasUiVisible}
+                  mobilePanelOffset
                   zones={stageZones}
                 />
               </div>
@@ -997,7 +1003,7 @@ export default function Page() {
               />
 
             <AnimatePresence>
-              {atlasUiVisible && selectedZone ? (
+              {atlasUiVisible && selectedZone && (isModalitiesLoading || isModalitiesError || selectedZoneModalities.length > 0) ? (
                 <motion.div
                   animate="visible"
                   className="absolute z-10 hidden md:top-20 md:right-5 md:block md:w-80"
@@ -1031,12 +1037,6 @@ export default function Page() {
                                 modalitiesQueryError,
                                 "Unable to load modalities.",
                               )}
-                            </TableCell>
-                          </TableRow>
-                        ) : selectedZoneModalities.length === 0 ? (
-                          <TableRow>
-                            <TableCell className="text-left text-muted-foreground">
-                              No modalities are attached to this zone yet.
                             </TableCell>
                           </TableRow>
                         ) : (
@@ -1163,7 +1163,7 @@ export default function Page() {
                       custom={mobilePanelDirection}
                       exit="exit"
                       initial={prefersReducedMotion ? false : "enter"}
-                      key={selectedZone ? `modalities-${selectedZone.id}` : "regions"}
+                      key={selectedZone && (isModalitiesLoading || isModalitiesError || selectedZoneModalities.length > 0) ? `modalities-${selectedZone.id}` : "regions"}
                       transition={{
                         duration: prefersReducedMotion ? 0 : 0.24,
                         ease: "easeOut",
@@ -1174,7 +1174,7 @@ export default function Page() {
                         <TableHeader>
                           <TableRow className="text-left">
                             <TableHead>
-                              {selectedZone ? (
+                              {selectedZone && (isModalitiesLoading || isModalitiesError || selectedZoneModalities.length > 0) ? (
                                 <span className="flex items-center gap-1.5">
                                   <Button
                                     aria-label="Back to regions"
@@ -1204,7 +1204,7 @@ export default function Page() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {selectedZone ? (
+                          {selectedZone && (isModalitiesLoading || isModalitiesError || selectedZoneModalities.length > 0) ? (
                             isModalitiesLoading ? (
                               <TableRow>
                                 <TableCell className="text-left text-muted-foreground">
@@ -1218,12 +1218,6 @@ export default function Page() {
                                     modalitiesQueryError,
                                     "Unable to load modalities.",
                                   )}
-                                </TableCell>
-                              </TableRow>
-                            ) : selectedZoneModalities.length === 0 ? (
-                              <TableRow>
-                                <TableCell className="text-left text-muted-foreground">
-                                  No modalities are attached to this zone yet.
                                 </TableCell>
                               </TableRow>
                             ) : (
@@ -1333,6 +1327,17 @@ export default function Page() {
         ) : null}
       </div>
 
+      {/* In catalogue mode, give the original reveal footer one viewport of
+          runway. Its own -100dvh margin cancels this layout height, so the
+          footer keeps the exact original overlap/reveal math while remaining
+          fully reachable below the long catalogue. */}
+      {catalogLayoutActive ? (
+        <div
+          aria-hidden="true"
+          className="relative z-10 h-[100dvh] bg-[#141414]"
+          data-footer-reveal-runway
+        />
+      ) : null}
       <Footer />
     </div>
   );

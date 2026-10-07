@@ -25,7 +25,8 @@ impl PlaygroundRepository {
                 anchor_y,
                 anchor_z
             FROM anatomy_zones
-            ORDER BY name ASC, created_at ASC
+            WHERE canonical_slug IS NOT NULL
+            ORDER BY array_position(ARRAY['head','neck','chest','abdomen-pelvis','upper-limbs','lower-limbs','backbone'], canonical_slug) ASC, created_at ASC
             "#,
         )
         .fetch_all(pool)
@@ -50,8 +51,8 @@ impl PlaygroundRepository {
                 anchor_y,
                 anchor_z
             FROM anatomy_zones
-            WHERE account_id = $1
-            ORDER BY name ASC, created_at ASC
+            WHERE account_id = $1 AND canonical_slug IS NOT NULL
+            ORDER BY array_position(ARRAY['head','neck','chest','abdomen-pelvis','upper-limbs','lower-limbs','backbone'],canonical_slug) ASC, created_at ASC
             "#,
         )
         .bind(account_id)
@@ -81,7 +82,7 @@ impl PlaygroundRepository {
                 TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
                 TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
             FROM anatomy_zones
-            WHERE account_id = $1 AND id = $2
+            WHERE account_id = $1 AND id = $2 AND canonical_slug IS NOT NULL
             "#,
         )
         .bind(account_id)
@@ -173,7 +174,7 @@ impl PlaygroundRepository {
                 anchor_z = COALESCE($8, anchor_z),
                 updated_by_user_id = $9,
                 updated_at = NOW()
-            WHERE account_id = $1 AND id = $2
+            WHERE account_id = $1 AND id = $2 AND canonical_slug IS NOT NULL
             RETURNING
                 id::text AS id,
                 slug,
@@ -306,7 +307,12 @@ impl PlaygroundRepository {
                 modality.id AS modality_id
             FROM anatomy_zones AS zone
             INNER JOIN anatomy_zone_modalities AS modality ON modality.zone_id = zone.id
-            WHERE zone.slug = $1 AND modality.slug = $2
+            WHERE (zone.slug = $1 AND modality.slug = $2)
+               OR EXISTS (
+                 SELECT 1 FROM anatomy_legacy_modality_routes old
+                 WHERE old.account_id=zone.account_id AND old.modality_id=modality.id
+                   AND old.original_zone_slug=$1 AND old.original_modality_slug=$2
+               )
             ORDER BY zone.created_at ASC, modality.created_at ASC
             LIMIT 1
             "#,
