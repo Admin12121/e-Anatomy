@@ -20,6 +20,9 @@ export type AnnotationLabelCandidate = {
 export type PlacedAnnotationLabel = AnnotationLabelCandidate & {
   fontSize: number;
   height: number;
+  lineHeight: number;
+  /** The label wrapped to the rail width: one or two lines, ellipsized. */
+  lines: string[];
   sideResolved: AnnotationLabelSide;
   textAnchor: "start" | "end";
   textMaxWidth: number;
@@ -34,17 +37,33 @@ const regionInteriorAnchorCache = new WeakMap<
   ViewerAnnotationPoint
 >();
 
+// Sizing follows the reference anatomy viewer: the largest font from fontMin
+// to fontMax at which every label on both rails fits, wrapping to maxLines,
+// then the spare height spread evenly between labels up to maxGap.
 export const ANNOTATION_RAIL_GEOMETRY = {
   bottomPadding: 6,
-  fontMax: 16,
+  fontMax: 20,
   fontMin: 12,
   labelMargin: 10,
-  minGap: 5,
+  lineHeightRatio: 1.2,
+  maxGap: 42,
+  maxLines: 2,
+  minGap: 8,
+  /** A label may run this share past the rail width before it counts as too wide. */
+  overflowAllowance: 0.15,
+  /** At most this share of a rail's labels may be too wide at a given size. */
+  overflowShare: 0.25,
   railRatio: 0.2,
   shoulder: 15,
   textGap: 4,
   topPadding: 64,
 } as const;
+
+/** Width of `text` in px at `fontSize`; the viewer passes a canvas measurer. */
+export type LabelTextMeasurer = (text: string, fontSize: number) => number;
+
+const estimateTextWidth: LabelTextMeasurer = (text, fontSize) =>
+  text.length * fontSize * 0.56;
 
 function pointInPolygon(
   point: ViewerAnnotationPoint,
@@ -237,34 +256,72 @@ export function getAnnotationDisplayAnchor(
   );
 }
 
-function chooseFontSize(count: number, availableHeight: number) {
-  if (count <= 3 && availableHeight >= 430) {
-    return ANNOTATION_RAIL_GEOMETRY.fontMax;
-  }
+type WrappedLabel = {
+  lines: string[];
+  /** Widest line before any ellipsis, to judge overflow. */
+  widest: number;
+};
 
-  if (count <= 6 && availableHeight >= 400) {
-    return 14;
+function ellipsize(
+  text: string,
+  fontSize: number,
+  maxWidth: number,
+  measure: LabelTextMeasurer,
+) {
+  if (measure(text, fontSize) <= maxWidth) return text;
+  let low = 0;
+  let high = text.length;
+  let best = "…";
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = `${text.slice(0, middle).trimEnd()}…`;
+    if (measure(candidate, fontSize) <= maxWidth) {
+      best = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
   }
-
-  return ANNOTATION_RAIL_GEOMETRY.fontMin;
+  return best;
 }
 
-function keepVisibleByPriority(
-  items: AnnotationLabelCandidate[],
-  availableHeight: number,
+/** Greedy word wrap to `maxLines`; the last line is ellipsized if needed. */
+export function wrapLabelText(
+  text: string,
   fontSize: number,
-) {
-  const rowHeight = fontSize + ANNOTATION_RAIL_GEOMETRY.minGap;
-  const maximumVisible = Math.max(1, Math.floor(availableHeight / rowHeight));
+  maxWidth: number,
+  measure: LabelTextMeasurer = estimateTextWidth,
+  maxLines: number = ANNOTATION_RAIL_GEOMETRY.maxLines,
+): WrappedLabel {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return { lines: [""], widest: 0 };
 
-  if (items.length <= maximumVisible) {
-    return items.slice();
+  const lines: string[] = [];
+  let current = words[0]!;
+  for (const word of words.slice(1)) {
+    const candidate = `${current} ${word}`;
+    if (measure(candidate, fontSize) <= maxWidth) {
+      current = candidate;
+    } else {
+      lines.push(current);
+      current = word;
+    }
   }
+  lines.push(current);
 
-  return items
-    .slice()
-    .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))
-    .slice(0, maximumVisible);
+  const widest = Math.max(...lines.map((line) => measure(line, fontSize)));
+  const fitted =
+    lines.length > maxLines
+      ? [...lines.slice(0, maxLines - 1), lines.slice(maxLines - 1).join(" ")]
+      : lines;
+  return {
+    lines: fitted.map((line) => ellipsize(line, fontSize, maxWidth, measure)),
+    widest,
+  };
+}
+
+function lineHeightFor(fontSize: number) {
+  return Math.ceil(fontSize * ANNOTATION_RAIL_GEOMETRY.lineHeightRatio);
 }
 
 function resolveSide(candidate: AnnotationLabelCandidate, width: number) {
@@ -275,25 +332,28 @@ function resolveSide(candidate: AnnotationLabelCandidate, width: number) {
   return candidate.anchorX < width / 2 ? "left" : "right";
 }
 
-function placeSide(
-  sourceItems: AnnotationLabelCandidate[],
+type RailFrame = {
+  availableHeight: number;
+  railX: number;
+  textMaxWidth: number;
+  tickX: number;
+  top: number;
+};
+
+function railFrame(
   side: AnnotationLabelSide,
   width: number,
   height: number,
-) {
-  if (sourceItems.length === 0) {
-    return [];
-  }
-
+): RailFrame {
   const geometry = ANNOTATION_RAIL_GEOMETRY;
   const top = geometry.topPadding;
-  const bottom = geometry.bottomPadding;
-  const availableHeight = Math.max(60, height - top - bottom);
+  const availableHeight = Math.max(60, height - top - geometry.bottomPadding);
   const railX =
     side === "left"
       ? Math.ceil(width * geometry.railRatio)
       : Math.ceil(width * (1 - geometry.railRatio));
-  const tickX = railX + (side === "left" ? -geometry.shoulder : geometry.shoulder);
+  const tickX =
+    railX + (side === "left" ? -geometry.shoulder : geometry.shoulder);
   const textMaxWidth = Math.max(
     56,
     Math.ceil(width * geometry.railRatio) -
@@ -301,46 +361,105 @@ function placeSide(
       geometry.shoulder -
       geometry.textGap,
   );
-  const fontSize = chooseFontSize(sourceItems.length, availableHeight);
-  const items = keepVisibleByPriority(
-    sourceItems,
-    availableHeight,
-    fontSize,
+  return { availableHeight, railX, textMaxWidth, tickX, top };
+}
+
+/** Whether every label of a rail fits at this size, wrapping included. */
+function railFits(
+  items: AnnotationLabelCandidate[],
+  frame: RailFrame,
+  fontSize: number,
+  measure: LabelTextMeasurer,
+) {
+  const geometry = ANNOTATION_RAIL_GEOMETRY;
+  const lineHeight = lineHeightFor(fontSize);
+  let total = 0;
+  let tooWide = 0;
+  for (const item of items) {
+    const wrapped = wrapLabelText(
+      item.label,
+      fontSize,
+      frame.textMaxWidth,
+      measure,
+    );
+    total += wrapped.lines.length * lineHeight + geometry.minGap;
+    if (
+      wrapped.widest >
+      frame.textMaxWidth * (1 + geometry.overflowAllowance)
+    ) {
+      tooWide += 1;
+    }
+  }
+  return (
+    total <= frame.availableHeight &&
+    tooWide <= items.length * geometry.overflowShare
   );
-  const rowHeight = fontSize;
-  const availableGapSpace = Math.max(
-    0,
-    availableHeight - items.length * rowHeight,
+}
+
+function placeRail(
+  sourceItems: AnnotationLabelCandidate[],
+  side: AnnotationLabelSide,
+  frame: RailFrame,
+  fontSize: number,
+  measure: LabelTextMeasurer,
+) {
+  if (sourceItems.length === 0) return [];
+
+  const geometry = ANNOTATION_RAIL_GEOMETRY;
+  const lineHeight = lineHeightFor(fontSize);
+  const wrapped = new Map(
+    sourceItems.map((item) => [
+      item.id,
+      wrapLabelText(item.label, fontSize, frame.textMaxWidth, measure).lines,
+    ]),
   );
+  const heightOf = (item: AnnotationLabelCandidate) =>
+    wrapped.get(item.id)!.length * lineHeight;
+
+  // Highest priority first; labels are dropped only when even the smallest
+  // font cannot fit every one of them.
+  const items: AnnotationLabelCandidate[] = [];
+  let used = 0;
+  for (const item of sourceItems
+    .slice()
+    .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))) {
+    const next = used + heightOf(item) + (items.length ? geometry.minGap : 0);
+    if (items.length && next > frame.availableHeight) continue;
+    items.push(item);
+    used = next;
+  }
+
+  const textHeight = items.reduce((sum, item) => sum + heightOf(item), 0);
   const interline =
     items.length > 1
-      ? clamp(
-          availableGapSpace / (items.length - 1),
-          geometry.minGap,
-          22,
+      ? Math.floor(
+          clamp(
+            (frame.availableHeight - textHeight) / items.length,
+            geometry.minGap,
+            geometry.maxGap,
+          ),
         )
       : 0;
-  const totalHeight =
-    items.length * rowHeight + Math.max(0, items.length - 1) * interline;
+  const totalHeight = textHeight + interline * (items.length - 1);
   const averageAnchorY =
-    items.reduce((sum, item) => sum + item.anchorY, 0) /
-    Math.max(items.length, 1);
-  const maximumStart = top + Math.max(0, availableHeight - totalHeight);
+    items.reduce((sum, item) => sum + item.anchorY, 0) / items.length;
   let currentY = clamp(
     averageAnchorY - totalHeight / 2,
-    top,
-    maximumStart,
+    frame.top,
+    frame.top + Math.max(0, frame.availableHeight - totalHeight),
   );
+
+  // Fill slots top to bottom, each with the anchor whose leader is steepest
+  // in the slot's direction, so leaders do not cross.
   const remaining = items.slice();
   const placed: PlacedAnnotationLabel[] = [];
-
   while (remaining.length > 0) {
     let bestIndex = 0;
     let bestSlope: number | null = null;
 
     for (let index = 0; index < remaining.length; index += 1) {
       const item = remaining[index]!;
-      const denominator = item.anchorX - railX;
+      const denominator = item.anchorX - frame.railX;
       const safeDenominator =
         Math.abs(denominator) < 0.001
           ? denominator < 0
@@ -348,7 +467,7 @@ function placeSide(
             : 0.001
           : denominator;
       const slope =
-        (item.anchorY - currentY - rowHeight / 2) / safeDenominator;
+        (item.anchorY - currentY - heightOf(item) / 2) / safeDenominator;
 
       if (
         bestSlope === null ||
@@ -360,25 +479,26 @@ function placeSide(
     }
 
     const [item] = remaining.splice(bestIndex, 1);
-    const textX =
-      side === "left"
-        ? tickX - geometry.textGap
-        : tickX + geometry.textGap;
-
+    const height = heightOf(item!);
     placed.push({
       ...item!,
       fontSize,
-      height: rowHeight,
+      height,
+      lineHeight,
+      lines: wrapped.get(item!.id)!,
       sideResolved: side,
       textAnchor: side === "left" ? "end" : "start",
-      textMaxWidth,
-      textX,
-      thresholdX: railX,
-      tickX,
+      textMaxWidth: frame.textMaxWidth,
+      textX:
+        side === "left"
+          ? frame.tickX - geometry.textGap
+          : frame.tickX + geometry.textGap,
+      thresholdX: frame.railX,
+      tickX: frame.tickX,
       y: currentY,
     });
 
-    currentY += rowHeight + interline;
+    currentY += height + interline;
   }
 
   return placed;
@@ -388,24 +508,29 @@ export function layoutAnnotationLabels(
   candidates: AnnotationLabelCandidate[],
   width: number,
   height: number,
+  measure: LabelTextMeasurer = estimateTextWidth,
 ) {
-  const resolved = candidates.map((candidate) => ({
-    ...candidate,
-    sideResolved: resolveSide(candidate, width),
+  const geometry = ANNOTATION_RAIL_GEOMETRY;
+  const rails = (["left", "right"] as const).map((side) => ({
+    frame: railFrame(side, width, height),
+    items: candidates.filter(
+      (candidate) => resolveSide(candidate, width) === side,
+    ),
+    side,
   }));
 
-  return [
-    ...placeSide(
-      resolved.filter((candidate) => candidate.sideResolved === "left"),
-      "left",
-      width,
-      height,
-    ),
-    ...placeSide(
-      resolved.filter((candidate) => candidate.sideResolved === "right"),
-      "right",
-      width,
-      height,
-    ),
-  ];
+  // One font size for both rails: the largest at which both fit.
+  let fontSize: number = geometry.fontMin;
+  for (let size = geometry.fontMax; size >= geometry.fontMin; size -= 1) {
+    if (
+      rails.every((rail) => railFits(rail.items, rail.frame, size, measure))
+    ) {
+      fontSize = size;
+      break;
+    }
+  }
+
+  return rails.flatMap((rail) =>
+    placeRail(rail.items, rail.side, rail.frame, fontSize, measure),
+  );
 }

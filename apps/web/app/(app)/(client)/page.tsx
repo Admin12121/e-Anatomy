@@ -188,6 +188,15 @@ const MOBILE_PANEL_VARIANTS = {
   exit: (direction: number) => ({ opacity: 0, x: direction * -24 }),
 };
 
+/** View All zone sections, top to bottom, that have content. */
+function catalogSections() {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "[data-catalog-section][data-zone-slug]",
+    ),
+  );
+}
+
 type HomePreloaderMode = "checking" | "show" | "skip";
 type HomeView = "atlas" | "catalog";
 
@@ -282,6 +291,97 @@ export default function Page() {
     observer.observe(page);
     return () => observer.disconnect();
   }, [lenis]);
+
+  // View All: the region whose section is under the reading line lights up on
+  // the model, and pointing at a region on the model scrolls to its section.
+  const [catalogRegionSlug, setCatalogRegionSlug] = useState<string | null>(
+    null,
+  );
+  const regionHoverTimerRef = useRef<number | undefined>(undefined);
+
+  const scrollCatalogToRegion = useCallback(
+    (slug: string) => {
+      const section = catalogSections().find(
+        (item) => item.dataset.zoneSlug === slug,
+      );
+      if (!section) return;
+      // Clear the sticky header and its fade.
+      const offset = -112;
+      if (lenis) {
+        lenis.scrollTo(section, { offset, duration: 0.9 });
+      } else {
+        window.scrollTo({
+          top: section.getBoundingClientRect().top + window.scrollY + offset,
+          behavior: "smooth",
+        });
+      }
+    },
+    [lenis],
+  );
+
+  useEffect(() => {
+    if (homeView !== "catalog") {
+      return;
+    }
+
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const line = window.innerHeight * 0.4;
+      const sections = catalogSections();
+      let current = sections[0]?.dataset.zoneSlug ?? null;
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top <= line) {
+          current = section.dataset.zoneSlug ?? current;
+        }
+      }
+      setCatalogRegionSlug((previous) =>
+        previous === current ? previous : current,
+      );
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+
+    schedule();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    // Sections appear as each region's modalities load.
+    const observer = new MutationObserver(schedule);
+    if (pageRef.current) {
+      observer.observe(pageRef.current, { childList: true, subtree: true });
+    }
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      observer.disconnect();
+      window.clearTimeout(regionHoverTimerRef.current);
+    };
+  }, [homeView]);
+
+  // Waits for the pointer to settle so sweeping across the body does not
+  // drag the catalogue up and down.
+  const handleStageRegionHover = useCallback(
+    (slug: string | null) => {
+      window.clearTimeout(regionHoverTimerRef.current);
+      if (homeView !== "catalog" || !slug) return;
+      regionHoverTimerRef.current = window.setTimeout(
+        () => scrollCatalogToRegion(slug),
+        260,
+      );
+    },
+    [homeView, scrollCatalogToRegion],
+  );
+
+  const handleStageRegionSelect = useCallback(
+    (slug: string) => {
+      if (homeView !== "catalog") return;
+      window.clearTimeout(regionHoverTimerRef.current);
+      scrollCatalogToRegion(slug);
+    },
+    [homeView, scrollCatalogToRegion],
+  );
 
   const {
     data: zonesResponse,
@@ -1026,6 +1126,11 @@ export default function Page() {
                   className="h-full! w-full!"
                   onReady={markStageReady}
                   onZoneSelect={handleSelectZone}
+                  onRegionHover={handleStageRegionHover}
+                  onRegionSelect={handleStageRegionSelect}
+                  selectedRegionSlug={
+                    homeView === "catalog" ? catalogRegionSlug : undefined
+                  }
                   selectedZoneId={activeSelectedZoneId}
                   showBackdrop={false}
                   showPartsToggle={atlasUiVisible}

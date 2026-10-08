@@ -409,7 +409,11 @@ export function StructureDrawer({
   );
 
   return (
-    <div className="px-2 pb-4 xl:max-h-[calc(100vh-8rem)] xl:overflow-y-auto xl:pb-8">
+    // The only scroller for the explanation; its parent gives it the height.
+    <div
+      className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-4 xl:pb-8"
+      data-lenis-prevent=""
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-2xl font-semibold">

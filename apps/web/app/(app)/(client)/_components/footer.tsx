@@ -395,6 +395,30 @@ function XLink() {
   );
 }
 
+// Verge InfoTech has no site link yet; admin12121 keeps its existing one.
+function Credit({ className }: { className: string }) {
+  return (
+    <div className={className}>
+      <span className="font-light opacity-50">Design and development by</span>
+      <ShinyText
+        text="Verge InfoTech"
+        duration={2}
+        delay={1}
+        className="text-xs font-[600]"
+      />
+      <span className="font-light opacity-50">in collaboration with</span>
+      <Link href="https://admin12121.com" target="_blank" rel="noopener noreferrer">
+        <ShinyText
+          text="admin12121"
+          duration={2}
+          delay={1}
+          className="text-xs font-[600]"
+        />
+      </Link>
+    </div>
+  );
+}
+
 const plainLinkClass =
   "underline [text-decoration-color:color-mix(in_oklab,currentColor_25%,transparent)] [text-decoration-thickness:from-font] transition-[text-decoration-color,opacity] duration-150 ease-out hover:opacity-100 hover:[text-decoration-color:currentColor] hover:duration-0";
 
@@ -585,17 +609,7 @@ export function Footer({
             <XLink />
           </div>
 
-          <span className="order-1 md:order-none text-center flex items-center gap-[3px]">
-            <p className="font-light opacity-50">Designed and Developed by </p>
-            <Link href={"https://admin12121.com"} target="_blank">
-              <ShinyText
-                text="Admin12121"
-                duration={2}
-                delay={1}
-                className="text-xs font-[600]"
-              />
-            </Link>
-          </span>
+          <Credit className="order-1 flex flex-wrap items-center justify-center gap-x-1 gap-y-1 text-center md:order-none" />
           <p className="order-1 md:order-none text-right">
             <a className={plainLinkClass} href={termsHref}>
               Terms
@@ -627,21 +641,7 @@ export function CompactFooter() {
       <div className="flex items-center">
         <XLink />
       </div>
-      <div className="order-last col-span-2 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-center leading-relaxed xl:order-none xl:col-span-1">
-        <span className="font-light opacity-50">Designed and developed by</span>
-        <Link
-          href="https://admin12121.com"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <ShinyText
-            text="Admin12121"
-            duration={2}
-            delay={1}
-            className="text-xs font-[600]"
-          />
-        </Link>
-      </div>
+      <Credit className="order-last col-span-2 flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-center leading-relaxed xl:order-none xl:col-span-1" />
       <p className="m-0 text-right">
         <Link className={plainLinkClass} href="/terms">
           Terms

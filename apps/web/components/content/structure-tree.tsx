@@ -27,6 +27,7 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import { Input } from "@/components/ui/input";
+import { FIXED_REGIONS, regionName } from "@/components/anatomy/regions";
 import type { PublicContentTopic } from "@/lib/content/types";
 import styles from "./public-article.module.css";
 
@@ -57,6 +58,8 @@ export function StructureTree({
   article,
   topics,
   collapsed = false,
+  regionSlug = null,
+  onRegionSelect,
 }: {
   article: {
     family: { id: string };
@@ -65,6 +68,9 @@ export function StructureTree({
   };
   topics: PublicContentTopic[];
   collapsed?: boolean;
+  /** Lists only this region's structures; a search still covers all regions. */
+  regionSlug?: string | null;
+  onRegionSelect?: (regionSlug: string) => void;
 }) {
   const searchId = useId();
   const [search, setSearch] = useState("");
@@ -75,14 +81,21 @@ export function StructureTree({
   const setTopicOpen = (topicId: string, open: boolean) =>
     setOpenChoice((choices) => ({ ...choices, [topicId]: open }));
   const matches = (name: string) => name.toLowerCase().includes(query);
-  const filtered = topics.filter(
-    (topic) =>
-      !query ||
-      matches(topic.name) ||
-      matches(topic.zoneName) ||
-      topic.labels?.some((label) => matches(label.title)),
+  const focused = Boolean(regionSlug) && !query;
+  const filtered = topics.filter((topic) =>
+    query
+      ? matches(topic.name) ||
+        matches(topic.zoneName) ||
+        topic.labels?.some((label) => matches(label.title))
+      : !regionSlug || topic.zoneSlug === regionSlug,
   );
   const zones = [...new Set(filtered.map((topic) => topic.zoneSlug))];
+  // Regions with content other than the focused one, in body order.
+  const otherRegions = FIXED_REGIONS.flatMap((region) => {
+    if (region.slug === regionSlug) return [];
+    const topic = topics.find((item) => item.zoneSlug === region.slug);
+    return topic ? [{ slug: region.slug, name: topic.zoneName }] : [];
+  });
   return (
     <div
       aria-label="Anatomical structures"
@@ -252,8 +265,31 @@ export function StructureTree({
         ))}
         {!filtered.length ? (
           <p className="text-xs normal-case opacity-70">
-            No matching structures.
+            {focused
+              ? `No structures in ${regionName(regionSlug) ?? "this region"} yet.`
+              : "No matching structures."}
           </p>
+        ) : null}
+        {focused && !collapsed && onRegionSelect && otherRegions.length ? (
+          <SidebarGroup className="p-0">
+            <SidebarGroupLabel className="mb-2 h-auto px-0 text-xs text-inherit opacity-55">
+              Other regions
+            </SidebarGroupLabel>
+            <SidebarMenu className="gap-[7px]">
+              {otherRegions.map((region) => (
+                <SidebarMenuItem key={region.slug}>
+                  <SidebarMenuButton
+                    type="button"
+                    onClick={() => onRegionSelect(region.slug)}
+                    className={`${styles.navLink} h-8 text-sm opacity-70 hover:opacity-100`}
+                  >
+                    <span>{region.name}</span>
+                    <span className={styles.navRule} aria-hidden="true" />
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroup>
         ) : null}
       </SidebarProvider>
     </div>

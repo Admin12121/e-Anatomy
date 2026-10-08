@@ -167,6 +167,7 @@ function CatalogZoneSection({
     <section
       className="scroll-mt-24 py-7 first:pt-0 md:py-9"
       data-catalog-section
+      data-zone-slug={zone.slug}
       id={`zone-${zone.id}`}
     >
       <div className="mb-4 flex items-center justify-between gap-4 md:mb-5">

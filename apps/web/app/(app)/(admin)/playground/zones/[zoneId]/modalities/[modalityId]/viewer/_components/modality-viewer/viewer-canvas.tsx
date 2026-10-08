@@ -844,6 +844,11 @@ export function ViewerCanvas({
 
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
+      // Over the information card the wheel must not change slice, or the
+      // card's label (and the card) would vanish under the pointer.
+      if ((event.target as Element | null)?.closest?.("[data-note-card]")) {
+        return;
+      }
       onWheelNavigate(event.deltaY);
     };
 
@@ -1055,6 +1060,7 @@ export function ViewerCanvas({
       candidates,
       stageWidth,
       stageHeight,
+      (text, fontSize) => measureLabelTextWidth(text, fontSize, 500),
     )) {
       labels.set(placed.id, placed);
     }
@@ -1068,6 +1074,7 @@ export function ViewerCanvas({
     draftLabelColor,
     draftLabelText,
     annotationDisplayAnchors,
+    measureLabelTextWidth,
     projectDisplayAnchorToStage,
     selectedAnnotationId,
     shouldAutoArrangeLabels,
@@ -1083,7 +1090,8 @@ export function ViewerCanvas({
     if (typeof window === "undefined") return;
 
     const hoverIntent = createAnnotationHoverIntent({
-      bridgeMs: 100,
+      // Time to cross from a label into its card without the card closing.
+      bridgeMs: 250,
       dwellMs: 350,
       onChange: setPopupIntentAnnotationId,
       cancel: (handle) => window.clearTimeout(handle),
@@ -1745,7 +1753,6 @@ export function ViewerCanvas({
             annotationForm={annotationForm}
             editLockEnabled={editLockEnabled}
             editorMode={editorMode}
-            fitLabelText={fitLabelText}
             labelLayout={labelLayout}
             onAnnotationHover={handleAnnotationHover}
             onAnnotationSelect={onAnnotationSelect}

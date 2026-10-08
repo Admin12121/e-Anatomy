@@ -31,6 +31,9 @@ type AnnotationNoteCardProps = {
 };
 
 const MAX_CARD_HEIGHT = 400;
+// The popup is a preview; the full explanation opens in the sidebar.
+const BODY_PREVIEW_HEIGHT = 168;
+const MORE_BAR_HEIGHT = 34;
 const SAFE_GAP = 10;
 const RESERVED_TOP = 64;
 const LABEL_RENDER_PADDING = 4;
@@ -48,6 +51,7 @@ export function AnnotationNoteCard({
 }: AnnotationNoteCardProps) {
   const cardRef = useRef<HTMLElement | null>(null);
   const [naturalHeight, setNaturalHeight] = useState(240);
+  const [clipped, setClipped] = useState(false);
 
   useLayoutEffect(() => {
     const element = cardRef.current;
@@ -62,16 +66,19 @@ export function AnnotationNoteCard({
         "[data-note-subtitle]",
       );
       const body = element.querySelector<HTMLElement>("[data-note-body]");
+      const bodyHeight = body?.scrollHeight ?? 0;
+      const clipped = bodyHeight > BODY_PREVIEW_HEIGHT;
       const measured =
         10 +
         (header?.offsetHeight ?? 0) +
         (subtitle?.offsetHeight ?? 0) +
-        (body?.scrollHeight ?? 0);
+        Math.min(bodyHeight, BODY_PREVIEW_HEIGHT) +
+        (clipped ? MORE_BAR_HEIGHT : 0);
 
       // ResizeObserver drives subsequent measurements; this initial synchronous
       // measurement avoids a visible card jump on first hover.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setNaturalHeight(Math.max(96, measured));
+      setClipped(clipped);
     };
 
     measure();
@@ -159,6 +166,7 @@ export function AnnotationNoteCard({
     <article
       ref={cardRef}
       {...VIEWER_ANNOTATION_INTERACTION_PROPS}
+      data-note-card=""
       className={cn(
         styles.card,
         visible && styles.visible,
@@ -197,7 +205,12 @@ export function AnnotationNoteCard({
         </div>
       ) : null}
 
-      <div className={styles.body} data-note-body>
+      <div className={styles.bodyFrame}>
+      <div
+        className={styles.body}
+        data-note-body
+        style={{ maxHeight: BODY_PREVIEW_HEIGHT }}
+      >
         {description ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {description}
@@ -221,6 +234,24 @@ export function AnnotationNoteCard({
           <div className={styles.note}>{annotation.note}</div>
         ) : null}
       </div>
+      {clipped ? <div aria-hidden="true" className={styles.fade} /> : null}
+      </div>
+
+      {clipped ? (
+        <div className={styles.moreBar}>
+          <button
+            type="button"
+            className={styles.more}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect();
+            }}
+          >
+            Show more
+          </button>
+        </div>
+      ) : null}
 
       {geometry.vertical === "above" ? (
         <header

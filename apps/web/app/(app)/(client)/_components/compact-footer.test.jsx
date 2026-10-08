@@ -8,8 +8,10 @@ test("structures footer contains only the X icon, credit and legal links", () =>
   expect(html).not.toContain('aria-label="Discord"');
   expect(html).not.toContain('aria-label="GitHub"');
   expect(html).not.toContain("NousResearch");
-  expect(html).toContain("Designed and developed by");
-  expect(html).toContain("Admin12121");
+  expect(html).toContain("Design and development by");
+  expect(html).toContain("Verge InfoTech");
+  expect(html).toContain("in collaboration with");
+  expect(html).toContain("admin12121");
   expect(html).toContain('href="/terms"');
   expect(html).toContain('href="/privacy"');
   expect(html).toContain("bg-transparent");

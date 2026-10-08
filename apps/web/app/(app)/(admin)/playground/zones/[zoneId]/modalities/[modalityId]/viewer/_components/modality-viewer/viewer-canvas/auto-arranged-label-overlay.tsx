@@ -14,12 +14,6 @@ type ViewerCanvasAutoArrangedLabelOverlayProps = {
   annotationForm: AnnotationFormState;
   editLockEnabled: boolean;
   editorMode: boolean;
-  fitLabelText: (
-    text: string,
-    fontSize: number,
-    fontWeight: 500 | 700,
-    maxWidth?: number,
-  ) => string;
   labelLayout: {
     labels: Map<string, PlacedAnnotationLabel>;
   };
@@ -42,7 +36,6 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
   annotationForm,
   editLockEnabled,
   editorMode,
-  fitLabelText,
   labelLayout,
   onAnnotationHover,
   onAnnotationSelect,
@@ -113,13 +106,6 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
             : annotation.leaderColorHex || color;
         const leaderColor =
           isEmphasized && !isRegion ? "#f4f7f8" : configuredLeaderColor;
-        const label = annotation.titleOverride || structure.title;
-        const displayLabel = fitLabelText(
-          label,
-          placed.fontSize,
-          isSelected ? 700 : 500,
-          placed.textMaxWidth,
-        );
         const lineY = placed.y + placed.height / 2;
         const textColor =
           isEmphasized && !isRegion ? "#f5f7f8" : color;
@@ -236,7 +222,16 @@ export function ViewerCanvasAutoArrangedLabelOverlay({
               x={placed.textX}
               y={lineY}
             >
-              {displayLabel}
+              {/* Wrapped by the layout; each line centred in its own row. */}
+              {placed.lines.map((line, index) => (
+                <tspan
+                  key={index}
+                  x={placed.textX}
+                  y={placed.y + placed.lineHeight * (index + 0.5)}
+                >
+                  {line}
+                </tspan>
+              ))}
             </text>
           </g>
         );

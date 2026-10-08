@@ -68,14 +68,52 @@
   font-size: 20px;
 }
 
+.bodyFrame {
+  position: relative;
+  min-height: 0;
+}
+
+/* A fixed preview: the full explanation opens in the sidebar ("Show more"). */
 .body {
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 10px 9px 12px;
   color: #ededed;
   font-size: 13px;
   line-height: 1.45;
-  scrollbar-width: thin;
+}
+
+.fade {
+  position: absolute;
+  inset: auto 0 0;
+  height: 56px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(54, 54, 54, 0), #363636 85%);
+  backdrop-filter: blur(1.5px);
+  mask-image: linear-gradient(to bottom, transparent, #000 55%);
+}
+
+.moreBar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 8px 8px;
+}
+
+.more {
+  border: 0;
+  border-radius: 3px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f0f0f0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.more:hover,
+.more:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .body p {

@@ -8,18 +8,11 @@ import AnatomyScene from "./atlas/scene";
 import { DEFAULT_VISIBLE, SYSTEMS, type Atlas, type SystemId } from "./atlas/anatomy";
 import type { ZoneAnchor } from "@/lib/playground/types";
 import { cn } from "@/lib/utils";
+import { FIXED_REGIONS } from "./regions";
 
+export { FIXED_REGIONS };
 export type HighlightableLayerId = "brain" | "lungs" | "heartKidney" | "digestive";
 export type AnatomyStageZone = { id: string; name: string; slug?: string; anchor?: ZoneAnchor };
-export const FIXED_REGIONS = [
-  { slug: "head", name: "Head" },
-  { slug: "neck", name: "Neck" },
-  { slug: "chest", name: "Chest" },
-  { slug: "abdomen-pelvis", name: "Abdomen & Pelvis" },
-  { slug: "upper-limbs", name: "Upper Limbs" },
-  { slug: "lower-limbs", name: "Lower Limbs" },
-  { slug: "backbone", name: "Spine" },
-] as const;
 
 type Props = {
   backgroundColor?: string;
@@ -36,6 +29,11 @@ type Props = {
   onReady?: () => void;
   onError?: (message: string) => void;
   onZoneSelect?: (zoneId: string) => void;
+  /** Region-level callbacks, by FIXED_REGIONS slug; work without zone ids. */
+  onRegionSelect?: (regionSlug: string) => void;
+  onRegionHover?: (regionSlug: string | null) => void;
+  /** Highlights a region by slug; takes precedence over selectedZoneId. */
+  selectedRegionSlug?: string | null;
   overlay?: (hoveredLayer: HighlightableLayerId | null) => ReactNode;
   previewLayer?: HighlightableLayerId | null;
   selectedZoneId?: string | null;
@@ -69,6 +67,9 @@ export function AnatomyStage({
   onReady,
   onError,
   onZoneSelect,
+  onRegionSelect,
+  onRegionHover,
+  selectedRegionSlug,
   overlay,
   selectedZoneId,
   showBackdrop = false,
@@ -87,10 +88,13 @@ export function AnatomyStage({
   const [partsOpen, setPartsOpen] = useState(false);
   const [hovered, setHovered] = useState<number | null>(null);
   const selectedIndex = useMemo(() => {
+    if (selectedRegionSlug !== undefined) {
+      return FIXED_REGIONS.findIndex((region) => region.slug === selectedRegionSlug);
+    }
     const zone = zones.find((item) => item.id === selectedZoneId);
     if (!zone) return previewLayer === "brain" ? 0 : previewLayer === "lungs" || previewLayer === "heartKidney" ? 2 : previewLayer === "digestive" ? 3 : -1;
     return FIXED_REGIONS.findIndex((region) => region.slug === (zone.slug || zone.name.toLowerCase().replace(/\s*&\s*|\s+|\//g, "-")));
-  }, [selectedZoneId, zones, previewLayer]);
+  }, [selectedRegionSlug, selectedZoneId, zones, previewLayer]);
 
   useEffect(() => { if (error) onError?.(error); }, [error, onError]);
 
@@ -105,8 +109,14 @@ export function AnatomyStage({
   const toggle = (id: SystemId) => setVisible((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const selectRegion = (index: number) => {
     const region = FIXED_REGIONS[index];
+    if (!region) return;
+    onRegionSelect?.(region.slug);
     const zone = zones.find((item) => item.slug === region.slug || item.name.toLowerCase() === region.name.toLowerCase());
     if (zone) onZoneSelect?.(zone.id);
+  };
+  const hoverRegion = (index: number | null) => {
+    setHovered(index);
+    onRegionHover?.(index === null ? null : (FIXED_REGIONS[index]?.slug ?? null));
   };
   const ready = !!atlas && progress === 100 && !error;
 
@@ -116,7 +126,7 @@ export function AnatomyStage({
       {atlas && !error && (
         <AnatomyScene
           atlas={atlas} visible={visible} selectedRegion={selectedIndex} modelZoom={modelZoom} cameraTargetY={cameraTargetY}
-          onRegionClick={selectRegion} onRegionHover={setHovered}
+          onRegionClick={selectRegion} onRegionHover={hoverRegion}
           onProgress={setProgress} onError={setError} onReady={onReady}
         />
       )}

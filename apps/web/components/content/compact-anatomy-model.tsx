@@ -75,7 +75,16 @@ function ModelLoader() {
   );
 }
 
-export function CompactAnatomyModel({ contentSlug }: { contentSlug: string }) {
+export function CompactAnatomyModel({
+  contentSlug,
+  regionSlug,
+  onRegionSelect,
+}: {
+  contentSlug: string;
+  /** Region to highlight; the sidebar shows this region's structures. */
+  regionSlug?: string | null;
+  onRegionSelect?: (regionSlug: string) => void;
+}) {
   const { resolvedTheme } = useTheme();
   const background = resolvedTheme === "dark" ? "#000030" : "#f2f2f2";
   const previewLayer =
@@ -145,6 +154,8 @@ export function CompactAnatomyModel({ contentSlug }: { contentSlug: string }) {
                 cameraTargetY={0.67}
                 loadingFallback={null}
                 previewLayer={previewLayer}
+                selectedRegionSlug={regionSlug ?? undefined}
+                onRegionSelect={onRegionSelect}
                 showPartsToggle={false}
                 onReady={markReady}
                 onError={markFailed}

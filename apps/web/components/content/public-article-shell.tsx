@@ -70,6 +70,20 @@ export function PublicArticleShell({
     });
   }, []);
   const family = families[`${zoneSlug}/${contentSlug}`];
+  // The sidebar lists one region: the page's own, until the model picks
+  // another. Navigating to a new region resets the choice.
+  const [regionChoice, setRegionChoice] = useState<{
+    route: string | undefined;
+    region: string;
+  } | null>(null);
+  const region =
+    regionChoice && regionChoice.route === zoneSlug
+      ? regionChoice.region
+      : (zoneSlug ?? null);
+  const selectRegion = useCallback(
+    (slug: string) => setRegionChoice({ route: zoneSlug, region: slug }),
+    [zoneSlug],
+  );
   const selection = {
     family: { id: topic?.id ?? "" },
     structureId:
@@ -89,6 +103,8 @@ export function PublicArticleShell({
               article={selection}
               topics={topics}
               collapsed={collapsed}
+              regionSlug={region}
+              onRegionSelect={selectRegion}
             />
           ),
           headerActions: session ? <PublicAccountMenu /> : undefined,
@@ -108,6 +124,8 @@ export function PublicArticleShell({
               <CompactAnatomyModel
                 key="anatomy-model"
                 contentSlug={contentSlug ?? ""}
+                regionSlug={region}
+                onRegionSelect={selectRegion}
               />
             </div>
           ),

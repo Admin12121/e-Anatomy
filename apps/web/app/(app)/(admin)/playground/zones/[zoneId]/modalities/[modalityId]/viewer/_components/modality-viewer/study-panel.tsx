@@ -196,7 +196,7 @@ export function StudyPanel({
       className={cn(
         "h-full min-h-0 p-2",
         showStructureDrawer
-          ? "space-y-4 overflow-y-auto max-xl:fixed max-xl:inset-x-0 max-xl:bottom-14 max-xl:top-0 max-xl:z-50 max-xl:bg-background max-xl:p-4"
+          ? "flex flex-col gap-4 overflow-hidden max-xl:fixed max-xl:inset-x-0 max-xl:bottom-14 max-xl:top-0 max-xl:z-50 max-xl:bg-background max-xl:p-4"
           : "flex flex-col gap-4 overflow-hidden max-xl:border-r max-xl:border-border/70 max-xl:bg-background/95 max-xl:p-1",
       )}
     >

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   findRegionInteriorAnchor,
   layoutAnnotationLabels,
+  wrapLabelText,
 } from "./annotation-layout.ts";
 
 describe("annotation rail layout", () => {
@@ -49,6 +50,56 @@ describe("annotation rail layout", () => {
       expect(rail.every((label) => label.y >= 64)).toBe(true);
       expect(rail.every((label) => label.y + label.height <= 754)).toBe(true);
     }
+  });
+});
+
+describe("label auto sizing", () => {
+  const anchors = (count, label = "Structure") =>
+    Array.from({ length: count }, (_, index) => ({
+      anchorX: 300,
+      anchorY: 120 + index * 4,
+      color: "#fff",
+      id: `label-${index}`,
+      label: `${label} ${index}`,
+    }));
+
+  test("few labels get the largest font and spread out", () => {
+    const labels = layoutAnnotationLabels(anchors(3), 1200, 800);
+    expect(labels.every((label) => label.fontSize === 20)).toBe(true);
+    const ys = labels.map((label) => label.y).sort((a, b) => a - b);
+    expect(ys[1] - ys[0]).toBeGreaterThan(30);
+  });
+
+  test("many labels shrink toward the minimum font", () => {
+    const few = layoutAnnotationLabels(anchors(3), 1200, 800);
+    const many = layoutAnnotationLabels(anchors(30), 1200, 800);
+    expect(many[0].fontSize).toBeLessThan(few[0].fontSize);
+    expect(many[0].fontSize).toBeGreaterThanOrEqual(12);
+  });
+
+  test("long names wrap to at most two lines within the rail", () => {
+    const [label] = layoutAnnotationLabels(
+      [
+        {
+          anchorX: 300,
+          anchorY: 300,
+          color: "#fff",
+          id: "long",
+          label: "Superior mesenteric artery and inferior pancreaticoduodenal branch",
+        },
+      ],
+      900,
+      700,
+    );
+    expect(label.lines.length).toBeLessThanOrEqual(2);
+    expect(label.lines.length).toBe(2);
+    expect(label.height).toBe(label.lines.length * label.lineHeight);
+  });
+
+  test("wrapLabelText ellipsizes what does not fit in two lines", () => {
+    const wrapped = wrapLabelText("one two three four five six seven eight", 20, 80);
+    expect(wrapped.lines.length).toBe(2);
+    expect(wrapped.lines[1].endsWith("…")).toBe(true);
   });
 });
 

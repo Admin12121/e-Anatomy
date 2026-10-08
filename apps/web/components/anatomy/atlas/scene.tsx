@@ -85,6 +85,11 @@ export default function AnatomyScene({atlas,visible,selectedRegion,modelZoom=1,c
   pivot.position.y=.86;body.position.y=-.86;pivot.add(body);scene.add(pivot);
 
   const geometries:T.BufferGeometry[]=[],materials:T.MeshStandardMaterial[]=[];
+  // Uniforms shared by every material: the highlight crossfades from the
+  // previous region to the new one instead of jumping.
+  const region={current:{value:-1},previous:{value:-1},fade:{value:1}};
+  const fadeMs=matchMedia('(prefers-reduced-motion: reduce)').matches?0:240;
+  let fadeStart=0;
   const meshesBySystem=new Map<SystemId,T.Mesh[]>();
   let visibleSet=new Set<SystemId>(visible);
 
@@ -101,12 +106,23 @@ export default function AnatomyScene({atlas,visible,selectedRegion,modelZoom=1,c
     pivot.rotation.y=currentYaw;
     pivot.rotation.x=currentPitch;
     pivot.updateMatrixWorld(true);
+    if(region.fade.value<1){
+     const t=fadeMs?Math.min(1,(performance.now()-fadeStart)/fadeMs):1;
+     region.fade.value=t*t*(3-2*t);
+     if(t<1)schedule();
+    }
     render();
     if(Math.abs(currentYaw-targetYaw)>.00025||Math.abs(currentPitch-targetPitch)>.00025)schedule();
    });
   };
 
-  const applyHighlight=()=>{for(const m of materials)(m.userData.hoverRegion as {value:number}).value=hovered>=0?hovered:selected;schedule();};
+  const applyHighlight=()=>{
+   const target=hovered>=0?hovered:selected;
+   if(target===region.current.value)return;
+   // Mid-fade, keep fading out whichever region is still mostly visible.
+   if(region.fade.value>=.5)region.previous.value=region.current.value;
+   region.current.value=target;region.fade.value=0;fadeStart=performance.now();schedule();
+  };
   const setHovered=(id:number,x?:number,y?:number)=>{
    if(id!==hovered){
     hovered=id;
@@ -126,15 +142,16 @@ export default function AnatomyScene({atlas,visible,selectedRegion,modelZoom=1,c
     color:neutralColor(original),metalness:0,roughness:.82,side:T.DoubleSide,
     transparent:system==='integumentary',opacity:system==='integumentary'?.08:1,depthWrite:system!=='integumentary',
    });
-   const hoverRegion={value:-1},highlightColor=new T.Color(original);
-   m.userData.hoverRegion=hoverRegion;
+   const highlightColor=new T.Color(original);
    m.onBeforeCompile=shader=>{
-    shader.uniforms.hoverRegion=hoverRegion;
+    shader.uniforms.hoverRegion=region.current;
+    shader.uniforms.previousRegion=region.previous;
+    shader.uniforms.regionFade=region.fade;
     shader.uniforms.highlightColor={value:highlightColor};
-    shader.vertexShader='attribute float regionId; uniform float hoverRegion; varying float regionHighlight;\n'+shader.vertexShader;
+    shader.vertexShader='attribute float regionId; uniform float hoverRegion; uniform float previousRegion; uniform float regionFade; varying float regionHighlight;\n'+shader.vertexShader;
     shader.vertexShader=shader.vertexShader.replace(
      '#include <begin_vertex>',
-     '#include <begin_vertex>\nregionHighlight = 1.0 - step(0.25, abs(regionId - hoverRegion));',
+     '#include <begin_vertex>\nregionHighlight = mix(1.0 - step(0.25, abs(regionId - previousRegion)), 1.0 - step(0.25, abs(regionId - hoverRegion)), regionFade);',
     );
     shader.fragmentShader='uniform vec3 highlightColor; varying float regionHighlight;\n'+shader.fragmentShader;
     shader.fragmentShader=shader.fragmentShader.replace(
