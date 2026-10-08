@@ -67,6 +67,8 @@ import {
 } from "@/components/ui/table";
 import Link from "next/link";
 import { Spinner } from "@/components/ui/spinner";
+import { LibraryPicker } from "@/components/image-library/library-picker";
+import { readLibraryResponse, type LibraryStudy } from "@/lib/image-library/types";
 
 const EMPTY_MODALITY_FAMILIES: ZoneModalityFamily[] = [];
 
@@ -589,6 +591,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   });
   const [activeModalityId, setActiveModalityId] = useState<string | null>(null);
   const [createName, setCreateName] = useState("");
+  const [createSourceMode, setCreateSourceMode] = useState<"upload" | "library">("upload");
+  const [selectedLibraryStudy, setSelectedLibraryStudy] = useState<LibraryStudy | null>(null);
   const [createThumbnailUrl, setCreateThumbnailUrl] = useState("");
   const [createThumbnailUploading, setCreateThumbnailUploading] = useState(false);
   const [createDetectedUpload, setCreateDetectedUpload] =
@@ -782,6 +786,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   }
 
   function resetCreateState(nextContext: CreateContext = { kind: "new" }) {
+    setCreateSourceMode("upload");
+    setSelectedLibraryStudy(null);
     setCreateContext(nextContext);
     setCreateName(nextContext.kind === "variant" ? nextContext.name : "");
     setCreateThumbnailUrl(
@@ -813,6 +819,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   }
 
   function handleCreateModalityTypeChange(value: ModalityType) {
+    setSelectedLibraryStudy(null);
     setCreateModalityTypeOverride(value);
 
     if (!isMriModalityType(value)) {
@@ -937,6 +944,39 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   }
 
   async function handleCreateModality() {
+    if (createSourceMode === "library") {
+      if (!selectedLibraryStudy || selectedLibraryStudy.modalityType !== createModalityTypeOverride) {
+        toast.error("Select a ready library study matching this modality type.");
+        return;
+      }
+      try {
+        setIsCreatingFromStudy(true);
+        const response = await fetch(`/api/image-library/${selectedLibraryStudy.id}/attach`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            zoneId,
+            familyId: createContext.kind === "variant" ? createContext.familyId : null,
+            name: createName.trim() || selectedLibraryStudy.name,
+            modalityType: createModalityTypeOverride,
+            weightingCode: isMriModalityType(createModalityTypeOverride) && createWeightingCode ? createWeightingCode : null,
+            thumbnailUrl: createThumbnailUrl.trim() || null,
+            revision: selectedLibraryStudy.revision,
+          }),
+        });
+        const created = await readLibraryResponse<ZoneModality>(response);
+        await refetchModalities();
+        setActiveModalityId(created.id);
+        setEditorMode("edit");
+        resetCreateState();
+        toast.success("Saved images attached to modality.");
+      } catch (cause) {
+        toast.error(cause instanceof Error ? cause.message : "Unable to use library images.");
+      } finally {
+        setIsCreatingFromStudy(false);
+      }
+      return;
+    }
     if (!createDetectedUpload || selectedSourceFiles.length === 0) {
       toast.error("Choose a DICOM folder or one ZIP package first.");
       return;
@@ -1264,6 +1304,13 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
             />
 
             <FieldGroup className="gap-4">
+              <div className="flex gap-2" role="group" aria-label="Image source">
+                <Button type="button" variant={createSourceMode === "upload" ? "default" : "outline"} aria-pressed={createSourceMode === "upload"} disabled={isPending} onClick={() => setCreateSourceMode("upload")}>Upload DICOM</Button>
+                <Button type="button" variant={createSourceMode === "library" ? "default" : "outline"} aria-pressed={createSourceMode === "library"} disabled={isPending} onClick={() => setCreateSourceMode("library")}>Select from library</Button>
+              </div>
+              {createSourceMode === "library" ? (
+                <LibraryPicker modalityType={createModalityTypeOverride} value={selectedLibraryStudy} onChange={setSelectedLibraryStudy} disabled={isPending} />
+              ) : (
               <Field>
                 <FieldLabel>Choose source study</FieldLabel>
                 <div className="relative">
@@ -1300,7 +1347,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                           Drop study files here or click to browse
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          ZIP packages or DICOM files, max size: 512MB
+                          ZIP packages or DICOM files, max size: 1024 MB
                         </p>
                         {selectedSourceLabel ? (
                           <p className="mt-2 max-w-xs truncate text-xs text-muted-foreground">
@@ -1370,6 +1417,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                   </div>
                 ) : null}
               </Field>
+              )}
 
               <div className="grid gap-3 md:grid-cols-2">
                 <Field>
@@ -1382,6 +1430,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                     value={createName}
                     onChange={(event) => setCreateName(event.target.value)}
                     placeholder={
+                      (createSourceMode === "library" ? selectedLibraryStudy?.name : null) ??
                       createDetectedUpload?.suggestedName ??
                       "Leave blank to use the detected draft name"
                     }
@@ -1441,7 +1490,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
               <Button
                 type="button"
                 disabled={
-                  !createDetectedUpload || isPending || createThumbnailUploading
+                  (createSourceMode === "upload" ? !createDetectedUpload : !selectedLibraryStudy || selectedLibraryStudy.modalityType !== createModalityTypeOverride) || isPending || createThumbnailUploading
                 }
                 onClick={handleCreateModality}
               >
@@ -1452,7 +1501,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                 )}
                 {createContext.kind === "variant"
                   ? "Create source variant"
-                  : "Create modality draft"}
+                  : createSourceMode === "library" ? "Create modality" : "Create modality draft"}
               </Button>
               <Button
                 type="button"

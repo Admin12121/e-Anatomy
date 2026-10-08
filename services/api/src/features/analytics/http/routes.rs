@@ -11,11 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     features::analytics::domain::models::{AnalyticsEventInput, EVENT_NAMES},
-    infrastructure::{
-        error::AppError,
-        http::resolve_admin_account_id,
-        state::AppState,
-    },
+    infrastructure::{error::AppError, http::resolve_admin_account_id, state::AppState},
 };
 
 #[derive(Debug, Deserialize)]

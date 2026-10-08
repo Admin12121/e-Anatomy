@@ -102,8 +102,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://anatomy:anatomy@postgres:5432/anatomy}
       AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:-${DATABASE_URL:-postgres://anatomy:anatomy@postgres:5432/anatomy}}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-anatomy_better_auth_dev_secret_that_is_long_enough}
-      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost}
-      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-http://localhost,http://localhost:3000}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:88}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-http://localhost:88,http://localhost:3000}
       BETTER_AUTH_PASSKEY_RP_ID: ${BETTER_AUTH_PASSKEY_RP_ID:-localhost}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@gmail.com}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin@#12}
@@ -117,6 +117,8 @@ services:
       INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://api:8080/api/v1}
       INTERNAL_WEB_API_KEY: ${INTERNAL_WEB_API_KEY:-anatomy-internal-web-key-dev-only}
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+      NEXT_PUBLIC_ANALYTICS_COLLECTION_ENABLED: ${NEXT_PUBLIC_ANALYTICS_COLLECTION_ENABLED:-true}
+      NEXT_PUBLIC_ANALYTICS_ENDPOINT: ${NEXT_PUBLIC_ANALYTICS_ENDPOINT:-/api/v1/public/analytics/events}
       NEXT_SERVER_API_PROXY_TARGET: ${NEXT_SERVER_API_PROXY_TARGET:-http://api:8080}
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"
@@ -143,7 +145,7 @@ services:
       web:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${HTTP_PORT:-80}:80"
+      - "127.0.0.1:${HTTP_PORT:-88}:88"
     volumes:
       - ./infra/nginx/dev.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
@@ -161,6 +163,8 @@ services:
 
   api-prod:
     profiles: ["prod"]
+    # Releases run the CI image for ANATOMY_RELEASE; setup.sh builds :local.
+    image: ${ANATOMY_REGISTRY_PREFIX:-ghcr.io/admin12121}/anatomy-api:${ANATOMY_RELEASE:-local}
     build:
       context: .
       dockerfile: infra/docker/api.prod.Dockerfile
@@ -190,6 +194,7 @@ services:
 
   web-prod:
     profiles: ["prod"]
+    image: ${ANATOMY_REGISTRY_PREFIX:-ghcr.io/admin12121}/anatomy-web:${ANATOMY_RELEASE:-local}
     build:
       context: .
       dockerfile: infra/docker/web.prod.Dockerfile
@@ -213,6 +218,8 @@ services:
       INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://127.0.0.1:8080/api/v1}
       INTERNAL_WEB_API_KEY: ${INTERNAL_WEB_API_KEY:-}
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+      NEXT_PUBLIC_ANALYTICS_COLLECTION_ENABLED: ${NEXT_PUBLIC_ANALYTICS_COLLECTION_ENABLED:-false}
+      NEXT_PUBLIC_ANALYTICS_ENDPOINT: ${NEXT_PUBLIC_ANALYTICS_ENDPOINT:-}
       NEXT_SERVER_API_PROXY_TARGET: ${NEXT_SERVER_API_PROXY_TARGET:-http://127.0.0.1:8080}
       NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
       NODE_ENV: production

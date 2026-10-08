@@ -64,11 +64,7 @@ impl IntoResponse for AppError {
             Self::Conflict(message) => (StatusCode::CONFLICT, "conflict", message),
             Self::NotFound(message) => (StatusCode::NOT_FOUND, "not_found", message),
             Self::Unauthorized(message) => (StatusCode::UNAUTHORIZED, "unauthorized", message),
-            Self::RateLimited(message) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                message,
-            ),
+            Self::RateLimited(message) => (StatusCode::TOO_MANY_REQUESTS, "rate_limited", message),
             Self::Internal(message) => {
                 error!(message = %message, "internal application error");
                 (

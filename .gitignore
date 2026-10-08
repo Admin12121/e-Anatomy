@@ -9,3 +9,6 @@ services/api/target
 services/api/data
 
 refrence/
+
+# Server-only release tooling; never published.
+/deploy/

@@ -148,3 +148,16 @@ fn has_admin_access(role_code: &str) -> bool {
         "owner" | "admin" | "platform_admin" | "content_admin" | "editor" | "reviewer"
     )
 }
+
+pub async fn require_content_editor(
+    state: &AppState,
+    account: Uuid,
+    user: &str,
+) -> Result<(), AppError> {
+    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM account_memberships WHERE account_id=$1 AND user_id=$2 AND status='active' AND role_code IN ('owner','admin','platform_admin','content_admin','editor'))")
+        .bind(account).bind(user).fetch_one(&state.pool).await?;
+    if !allowed {
+        return Err(AppError::unauthorized("Content editing is not permitted"));
+    }
+    Ok(())
+}

@@ -68,7 +68,9 @@ impl AnalyticsService {
         .await?;
 
         if visitor_events >= MAX_EVENTS_PER_MINUTE || device_events >= MAX_EVENTS_PER_MINUTE {
-            return Err(AppError::rate_limited("Analytics event rate limit exceeded"));
+            return Err(AppError::rate_limited(
+                "Analytics event rate limit exceeded",
+            ));
         }
 
         let supplied_modality_id = input.property_uuid("modalityId");
@@ -87,8 +89,13 @@ impl AnalyticsService {
             .property_uuid("structureId")
             .or_else(|| context.as_ref().and_then(|value| value.structure_id));
         if let Some(id) = structure_id {
-            let matches: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM anatomy_structures WHERE id=$1 AND modality_id=$2)")
-                .bind(id).bind(context.as_ref().map(|value| value.modality_id)).fetch_one(&self.pool).await?;
+            let matches: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM anatomy_structures WHERE id=$1 AND modality_id=$2)",
+            )
+            .bind(id)
+            .bind(context.as_ref().map(|value| value.modality_id))
+            .fetch_one(&self.pool)
+            .await?;
             if !matches {
                 return Err(AppError::bad_request(
                     "Analytics label does not match the modality",
@@ -99,27 +106,27 @@ impl AnalyticsService {
         if let (Some(expected), Some(supplied)) = (
             context.as_ref().map(|value| value.content_id),
             input.property_uuid("contentId"),
-        ) {
-            if expected != supplied {
-                return Err(AppError::bad_request(
-                    "Analytics content identifier does not match the modality",
-                ));
-            }
+        ) && expected != supplied
+        {
+            return Err(AppError::bad_request(
+                "Analytics content identifier does not match the modality",
+            ));
         }
         if let (Some(expected), Some(supplied)) = (
             context.as_ref().map(|value| value.zone_id),
             input.property_uuid("zoneId"),
-        ) {
-            if expected != supplied {
-                return Err(AppError::bad_request(
-                    "Analytics zone identifier does not match the modality",
-                ));
-            }
+        ) && expected != supplied
+        {
+            return Err(AppError::bad_request(
+                "Analytics zone identifier does not match the modality",
+            ));
         }
 
         let country_code = country_code
             .map(str::trim)
-            .filter(|value| value.len() == 2 && value.chars().all(|char| char.is_ascii_alphabetic()))
+            .filter(|value| {
+                value.len() == 2 && value.chars().all(|char| char.is_ascii_alphabetic())
+            })
             .map(|value| value.to_ascii_uppercase());
         let result = sqlx::query(
             r#"

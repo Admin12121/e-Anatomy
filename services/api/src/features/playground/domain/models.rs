@@ -48,6 +48,8 @@ pub struct ZoneDetail {
     pub updated_at: String,
 }
 
+// Still parsed so the retired create-zone route answers with its own message.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateZoneInput {

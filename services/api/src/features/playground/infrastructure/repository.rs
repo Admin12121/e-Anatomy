@@ -26,6 +26,7 @@ impl PlaygroundRepository {
                 anchor_z
             FROM anatomy_zones
             WHERE canonical_slug IS NOT NULL
+              AND EXISTS (SELECT 1 FROM accounts WHERE accounts.id = anatomy_zones.account_id AND accounts.status = 'active')
             ORDER BY array_position(ARRAY['head','neck','chest','abdomen-pelvis','upper-limbs','lower-limbs','backbone'], canonical_slug) ASC, created_at ASC
             "#,
         )
@@ -51,7 +52,7 @@ impl PlaygroundRepository {
                 anchor_y,
                 anchor_z
             FROM anatomy_zones
-            WHERE account_id = $1 AND canonical_slug IS NOT NULL
+            WHERE account_id = $1
             ORDER BY array_position(ARRAY['head','neck','chest','abdomen-pelvis','upper-limbs','lower-limbs','backbone'],canonical_slug) ASC, created_at ASC
             "#,
         )
@@ -82,7 +83,7 @@ impl PlaygroundRepository {
                 TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
                 TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
             FROM anatomy_zones
-            WHERE account_id = $1 AND id = $2 AND canonical_slug IS NOT NULL
+            WHERE account_id = $1 AND id = $2
             "#,
         )
         .bind(account_id)
@@ -91,62 +92,6 @@ impl PlaygroundRepository {
         .await?;
 
         Ok(row.map(Into::into))
-    }
-
-    pub async fn create_zone(
-        &self,
-        pool: &PgPool,
-        account_id: Uuid,
-        user_id: &str,
-        slug: &str,
-        name: &str,
-        description: Option<&str>,
-        body_view: &str,
-        anchor_x: f64,
-        anchor_y: f64,
-        anchor_z: f64,
-    ) -> Result<ZoneDetail, sqlx::Error> {
-        let row = sqlx::query_as::<_, ZoneDetailRow>(
-            r#"
-            INSERT INTO anatomy_zones (
-                account_id,
-                slug,
-                name,
-                description,
-                body_view,
-                anchor_x,
-                anchor_y,
-                anchor_z,
-                created_by_user_id,
-                updated_by_user_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-            RETURNING
-                id::text AS id,
-                slug,
-                name,
-                description,
-                body_view,
-                anchor_x,
-                anchor_y,
-                anchor_z,
-                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-                TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
-            "#,
-        )
-        .bind(account_id)
-        .bind(slug)
-        .bind(name)
-        .bind(description)
-        .bind(body_view)
-        .bind(anchor_x)
-        .bind(anchor_y)
-        .bind(anchor_z)
-        .bind(user_id)
-        .fetch_one(pool)
-        .await?;
-
-        Ok(row.into())
     }
 
     pub async fn update_zone(
@@ -201,29 +146,6 @@ impl PlaygroundRepository {
         .await?;
 
         Ok(row.map(Into::into))
-    }
-
-    pub async fn slug_exists(
-        &self,
-        pool: &PgPool,
-        account_id: Uuid,
-        slug: &str,
-    ) -> Result<bool, sqlx::Error> {
-        let exists = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS(
-                SELECT 1
-                FROM anatomy_zones
-                WHERE account_id = $1 AND slug = $2
-            )
-            "#,
-        )
-        .bind(account_id)
-        .bind(slug)
-        .fetch_one(pool)
-        .await?;
-
-        Ok(exists)
     }
 
     pub async fn zone_exists_for_account(
@@ -307,12 +229,13 @@ impl PlaygroundRepository {
                 modality.id AS modality_id
             FROM anatomy_zones AS zone
             INNER JOIN anatomy_zone_modalities AS modality ON modality.zone_id = zone.id
-            WHERE (zone.slug = $1 AND modality.slug = $2)
+            WHERE EXISTS (SELECT 1 FROM accounts WHERE accounts.id = zone.account_id AND accounts.status = 'active')
+              AND ((zone.slug = $1 AND modality.slug = $2)
                OR EXISTS (
                  SELECT 1 FROM anatomy_legacy_modality_routes old
                  WHERE old.account_id=zone.account_id AND old.modality_id=modality.id
                    AND old.original_zone_slug=$1 AND old.original_modality_slug=$2
-               )
+               ))
             ORDER BY zone.created_at ASC, modality.created_at ASC
             LIMIT 1
             "#,
@@ -391,6 +314,7 @@ impl PlaygroundRepository {
             FROM anatomy_zone_modality_families AS family
             INNER JOIN anatomy_zone_modalities AS modality ON modality.family_id = family.id
             WHERE family.zone_id = $1
+              AND EXISTS (SELECT 1 FROM anatomy_zones z JOIN accounts a ON a.id=z.account_id WHERE z.id=family.zone_id AND a.status='active')
             ORDER BY
                 GREATEST(family.updated_at, modality.updated_at) DESC,
                 family.name ASC,
@@ -1529,6 +1453,7 @@ impl PlaygroundRepository {
             INNER JOIN anatomy_zone_modalities AS modality ON modality.id = asset.modality_id
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
             WHERE asset.id = $1
+              AND EXISTS (SELECT 1 FROM accounts WHERE accounts.id = zone.account_id AND accounts.status = 'active')
             LIMIT 1
             "#,
         )
@@ -1936,11 +1861,13 @@ impl PlaygroundRepository {
                 title = $6,
                 color_hex = $7,
                 latin_name = $8,
-                short_description = $9,
-                long_description = $10,
+                -- Once an article exists, its revisioned editor owns these fields.
+                -- Stale metadata forms must not overwrite the canonical document.
+                short_description = CASE WHEN EXISTS (SELECT 1 FROM anatomy_content_documents d WHERE d.structure_id=structures.id) THEN structures.short_description ELSE $9 END,
+                long_description = CASE WHEN EXISTS (SELECT 1 FROM anatomy_content_documents d WHERE d.structure_id=structures.id) THEN structures.long_description ELSE $10 END,
                 synonyms = $11,
                 learning_points = $12,
-                access_level = $13,
+                access_level = CASE WHEN EXISTS (SELECT 1 FROM anatomy_content_documents d WHERE d.structure_id=structures.id) THEN structures.access_level ELSE $13 END,
                 is_pinned_default = $14,
                 sort_order = $15,
                 updated_by_user_id = $16,

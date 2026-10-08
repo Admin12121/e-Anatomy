@@ -1,9 +1,7 @@
 use anyhow::Result;
-use sqlx::{PgPool, migrate::Migrator, postgres::PgPoolOptions};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::infrastructure::config::DatabaseConfig;
-
-static MIGRATOR: Migrator = sqlx::migrate!();
 
 pub async fn connect_pool(config: &DatabaseConfig) -> Result<PgPool> {
     let pool = PgPoolOptions::new()
@@ -15,6 +13,10 @@ pub async fn connect_pool(config: &DatabaseConfig) -> Result<PgPool> {
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
-    MIGRATOR.run(pool).await?;
+    // A rolled-back image must still start on a database a newer release has
+    // migrated. Migrations are additive, so unknown applied versions are allowed.
+    let mut migrator = sqlx::migrate!();
+    migrator.set_ignore_missing(true);
+    migrator.run(pool).await?;
     Ok(())
 }

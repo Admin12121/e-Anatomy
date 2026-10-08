@@ -641,13 +641,19 @@ configure_ssh_hardening() {
 
   run_as_root install -d -m 755 /etc/ssh/sshd_config.d
 
+  # The CI release user (deploy/install.sh) must survive a hardening re-run.
+  local allowed_users="$DEPLOY_USER"
+  if id anatomy-deploy >/dev/null 2>&1; then
+    allowed_users="$allowed_users anatomy-deploy"
+  fi
+
   run_as_root tee /etc/ssh/sshd_config.d/99-anatomy-hardening.conf >/dev/null <<EOF_SSH
 Port $SSH_PORT
 PermitRootLogin no
 PubkeyAuthentication yes
 PasswordAuthentication $password_auth
 KbdInteractiveAuthentication no
-AllowUsers $DEPLOY_USER
+AllowUsers $allowed_users
 X11Forwarding no
 ClientAliveInterval 300
 ClientAliveCountMax 2

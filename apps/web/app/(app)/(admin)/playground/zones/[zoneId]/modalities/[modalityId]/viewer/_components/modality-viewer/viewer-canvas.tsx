@@ -230,7 +230,9 @@ export function ViewerCanvas({
   const [popupRenderId, setPopupRenderId] = useState<string | null>(null);
   const [popupVisible, setPopupVisible] = useState(false);
   const [stageSizePx, setStageSizePx] = useState({ width: 0, height: 0 });
-  const initialFitScaleCapRef = useRef<number | null>(null);
+  const [initialFitScaleCap, setInitialFitScaleCap] = useState<number | null>(
+    null,
+  );
   const [measureLabelTextWidth, setMeasureLabelTextWidth] =
     useState<LabelTextWidthMeasurer>(
       () => (text: string, fontSize: number) =>
@@ -283,7 +285,7 @@ export function ViewerCanvas({
   const viewerLayout = useMemo(
     () =>
       calculateViewerLayout({
-        fitScaleCap: lockInitialFitScale ? initialFitScaleCapRef.current : null,
+        fitScaleCap: lockInitialFitScale ? initialFitScaleCap : null,
         imageHeight: sourceImageHeight,
         imageWidth: sourceImageWidth,
         reserveLabelSpace: shouldReserveLabelSpace,
@@ -292,6 +294,7 @@ export function ViewerCanvas({
         stageWidth: Math.max(stageSizePx.width, 1),
       }),
     [
+      initialFitScaleCap,
       lockInitialFitScale,
       normalizedCanvasRotation,
       shouldReserveLabelSpace,
@@ -305,28 +308,16 @@ export function ViewerCanvas({
   // Lock the first settled desktop/mobile fit as the maximum automatic image
   // scale. This runs after the parent has applied its responsive side-panel
   // defaults, so later opening/closing those panels does not look like zooming.
-  useEffect(() => {
-    if (
-      !lockInitialFitScale ||
-      initialFitScaleCapRef.current !== null ||
-      stageSizePx.width < 240 ||
-      stageSizePx.height < 240 ||
-      sourceImageWidth <= 1 ||
-      sourceImageHeight <= 1
-    ) {
-      return;
-    }
-
-    initialFitScaleCapRef.current =
-      uncappedViewerLayout.surfaceWidth / sourceImageWidth;
-  }, [
-    lockInitialFitScale,
-    sourceImageHeight,
-    sourceImageWidth,
-    stageSizePx.height,
-    stageSizePx.width,
-    uncappedViewerLayout.surfaceWidth,
-  ]);
+  if (
+    lockInitialFitScale &&
+    initialFitScaleCap === null &&
+    stageSizePx.width >= 240 &&
+    stageSizePx.height >= 240 &&
+    sourceImageWidth > 1 &&
+    sourceImageHeight > 1
+  ) {
+    setInitialFitScaleCap(uncappedViewerLayout.surfaceWidth / sourceImageWidth);
+  }
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -1151,6 +1142,25 @@ export function ViewerCanvas({
     popupTargetId && labelLayout.labels.has(popupTargetId),
   );
 
+  const popupShowId =
+    !editorMode && popupTargetId && popupTargetHasLabel ? popupTargetId : null;
+  const popupSyncKey = `${editorMode}:${popupShowId ?? ""}`;
+  const [popupSyncedKey, setPopupSyncedKey] = useState<string | null>(null);
+
+  // Synchronous popup state follows the target during render; the effect below
+  // only owns the enter frame and exit timer.
+  if (popupSyncedKey !== popupSyncKey) {
+    setPopupSyncedKey(popupSyncKey);
+    if (editorMode) {
+      setPopupVisible(false);
+      setPopupRenderId(null);
+    } else if (popupShowId) {
+      setPopupRenderId(popupShowId);
+    } else {
+      setPopupVisible(false);
+    }
+  }
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -1165,33 +1175,21 @@ export function ViewerCanvas({
       popupShowFrameRef.current = null;
     }
 
-    if (editorMode) {
-      // Keep editor canvases popup-free without writing the same state on
-      // every render. MPR renders three canvases simultaneously, so an
-      // identity-changing label map must never be able to create an effect
-      // -> setState -> render loop.
-      setPopupVisible((current) => (current ? false : current));
-      setPopupRenderId((current) => (current === null ? current : null));
-      return;
-    }
+    if (editorMode) return;
 
-    if (popupTargetId && popupTargetHasLabel) {
-      setPopupRenderId((current) =>
-        current === popupTargetId ? current : popupTargetId,
-      );
+    if (popupShowId) {
       popupShowFrameRef.current = window.requestAnimationFrame(() => {
         popupShowFrameRef.current = null;
-        setPopupVisible((current) => (current ? current : true));
+        setPopupVisible(true);
       });
       return;
     }
 
-    setPopupVisible((current) => (current ? false : current));
     popupHideTimerRef.current = window.setTimeout(() => {
       popupHideTimerRef.current = null;
-      setPopupRenderId((current) => (current === null ? current : null));
+      setPopupRenderId(null);
     }, 130);
-  }, [editorMode, popupTargetHasLabel, popupTargetId]);
+  }, [editorMode, popupShowId]);
 
   useEffect(() => {
     return () => {

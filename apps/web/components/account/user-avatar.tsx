@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type ComponentProps } from "react"
+import { useState, type ComponentProps } from "react"
 import { Blobatar } from "@blobatar/react"
 
 import {
@@ -31,13 +31,11 @@ export function UserAvatar({
   seed,
   ...props
 }: UserAvatarProps) {
-  const [imageLoaded, setImageLoaded] = useState(false)
-  const [imageFailed, setImageFailed] = useState(false)
-
-  useEffect(() => {
-    setImageLoaded(false)
-    setImageFailed(false)
-  }, [image])
+  // Keyed by URL so a new image starts hidden without resetting in an effect.
+  const [loadedImage, setLoadedImage] = useState<string | null>(null)
+  const [failedImage, setFailedImage] = useState<string | null>(null)
+  const imageLoaded = Boolean(image) && loadedImage === image
+  const imageFailed = Boolean(image) && failedImage === image
 
   const showUploadedImage = Boolean(image) && !imageFailed
 
@@ -53,11 +51,8 @@ export function UserAvatar({
             "transition-opacity duration-200",
             imageLoaded ? "opacity-100" : "opacity-0",
           )}
-          onError={() => {
-            setImageLoaded(false)
-            setImageFailed(true)
-          }}
-          onLoad={() => setImageLoaded(true)}
+          onError={() => setFailedImage(image ?? null)}
+          onLoad={() => setLoadedImage(image ?? null)}
           src={image ?? undefined}
         />
       ) : null}

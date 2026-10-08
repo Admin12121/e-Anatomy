@@ -68,7 +68,7 @@ export type ModalityType =
   | "endoscopy"
   | "other";
 
-export type ModalitySourceKind = "manual" | "zip" | "dicom_files";
+export type ModalitySourceKind = "manual" | "zip" | "dicom_files" | "library";
 
 export type ModalityProcessingStatus =
   | "draft"

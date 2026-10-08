@@ -1,0 +1,2 @@
+# Repository functions bind one SQL parameter per argument.
+too-many-arguments-threshold = 20

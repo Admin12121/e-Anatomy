@@ -18,7 +18,7 @@ export async function PublicArticle({
 }) {
   const article = await loadPublicArticle(zoneSlug, contentSlug, structureSlug);
   const canonical = `/structures/${article.family.zoneSlug}/${article.family.slug}${article.structureSlug ? `/${article.structureSlug}` : ""}`;
-  if (contentSlug !== article.family.slug) redirect(canonical);
+  if (contentSlug !== article.family.slug || zoneSlug !== article.family.zoneSlug || (structureSlug && structureSlug !== article.structureSlug)) redirect(canonical);
   const media = article.document.resources.filter(
     (resource) => resource.kind === "image",
   );

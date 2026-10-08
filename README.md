@@ -88,3 +88,16 @@ Run a specific production step when you do not want the full flow:
 ```
 
 `scripts/deploy-host-db.sh` is kept as a compatibility wrapper for `./scripts/setup.sh -prod`.
+
+## Releases
+
+A release is a `vMAJOR.MINOR.PATCH` tag on the current `main` HEAD:
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+`.github/workflows/release.yml` verifies the tag, runs the frontend checks (typecheck, lint, tests) and
+backend checks (fmt, clippy, tests), builds and pushes the release images to GHCR, deploys, and keeps only
+the deployed release and the one before it in GHCR. Deployment tooling and configuration live on the
+server only.

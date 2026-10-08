@@ -39,14 +39,17 @@ use crate::features::playground::{
         ReorderZoneModalityAssetsResponse, UpdateViewerAnnotationInput,
         UpdateViewerStructureGroupInput, UpdateViewerStructureInput, UpdateZoneInput,
         UpdateZoneModalityAssetInput, UpdateZoneModalityFamilyInput, UpdateZoneModalityInput,
-        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneAnchor, ZoneDetail, ZoneListResponse,
-        ZoneModality, ZoneModalityAsset, ZoneModalityAssetListResponse, ZoneModalityAtlasFrame,
-        ZoneModalityAtlasPage, ZoneModalityFamily, ZoneModalityFamilyListResponse,
-        ZoneModalityViewerManifest,
+        ViewerAnnotationPoint, ViewerStructure, ViewerStructureGroup, ZoneAnchor, ZoneDetail,
+        ZoneListResponse, ZoneModality, ZoneModalityAsset, ZoneModalityAssetListResponse,
+        ZoneModalityAtlasFrame, ZoneModalityAtlasPage, ZoneModalityFamily,
+        ZoneModalityFamilyListResponse, ZoneModalityViewerManifest,
     },
     infrastructure::repository::PlaygroundRepository,
 };
 use crate::infrastructure::error::AppError;
+
+#[path = "library.rs"]
+pub mod library;
 
 #[derive(Clone)]
 pub struct PlaygroundService {
@@ -134,6 +137,7 @@ struct DerivedSliceBuild {
 #[derive(Debug, Clone)]
 struct MprSourceSlice {
     file_path: PathBuf,
+    frame_index: u32,
     series_uid: String,
     frame_of_reference_uid: Option<String>,
     rows: usize,
@@ -146,7 +150,7 @@ struct MprSourceSlice {
     slice_projection: f64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MprVolumeGeometry {
     dimensions: [usize; 3],
@@ -255,6 +259,9 @@ const MAX_ATLAS_PAGE_EDGE: u32 = 4096;
 const MAX_ATLAS_PAGE_COLUMNS: usize = 8;
 const MAX_ATLAS_SLICES_PER_PAGE: usize = 40;
 const MAX_MPR_VOXELS: usize = 48_000_000;
+// The reconstruction is downsampled to MAX_MPR_VOXELS; the decoded source may be
+// larger (512x512x700 CT is ~180M voxels, ~360 MB as u16).
+const MAX_MPR_SOURCE_VOXELS: usize = 4 * MAX_MPR_VOXELS;
 
 impl PlaygroundService {
     pub fn new(pool: PgPool, storage_root: impl Into<String>) -> Self {
@@ -318,7 +325,10 @@ impl PlaygroundService {
         user_id: &str,
     ) -> Result<ZoneListResponse, AppError> {
         sqlx::query("SELECT anatomy_seed_fixed_zones($1,$2)")
-            .bind(account_id).bind(user_id).execute(&self.pool).await?;
+            .bind(account_id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
         let items = self
             .repo
             .list_zones_for_account(&self.pool, account_id)
@@ -356,7 +366,9 @@ impl PlaygroundService {
         _user_id: &str,
         _input: CreateZoneInput,
     ) -> Result<ZoneDetail, AppError> {
-        Err(AppError::bad_request("Zones are predefined; choose one of the seven regions"))
+        Err(AppError::bad_request(
+            "Zones are predefined; choose one of the seven regions",
+        ))
     }
 
     pub async fn update_zone(
@@ -366,11 +378,21 @@ impl PlaygroundService {
         zone_id: Uuid,
         input: UpdateZoneInput,
     ) -> Result<ZoneDetail, AppError> {
-        let previous = self.repo.get_zone_detail(&self.pool, account_id, zone_id).await?
+        let previous = self
+            .repo
+            .get_zone_detail(&self.pool, account_id, zone_id)
+            .await?
             .ok_or_else(|| AppError::not_found("Canonical zone not found"))?;
-        if input.name.trim() != previous.name || input.anchor.is_some() ||
-            input.body_view.as_deref().is_some_and(|v| v != previous.body_view.as_str()) {
-            return Err(AppError::bad_request("Zone names, regions and coordinates are fixed"));
+        if input.name.trim() != previous.name
+            || input.anchor.is_some()
+            || input
+                .body_view
+                .as_deref()
+                .is_some_and(|v| v != previous.body_view.as_str())
+        {
+            return Err(AppError::bad_request(
+                "Zone names, regions and coordinates are fixed",
+            ));
         }
         let name = normalize_required_name(&input.name, "Zone name is required")?;
         let description = normalize_optional_text(input.description);
@@ -749,25 +771,23 @@ impl PlaygroundService {
             )
             .await?;
 
-            let (derived_slice_builds, mpr_geometry, mpr_plane_counts) =
-                if modality_type == "mpr" {
-                    let mpr = self
-                        .derive_mpr_slices(
-                            account_id,
-                            zone_id,
-                            ingest_job_id,
-                            &user_id,
-                            &study_files,
-                        )
-                        .await?;
-                    (mpr.slice_builds, Some(mpr.geometry), Some(mpr.plane_asset_counts))
-                } else {
-                    (
-                        self.derive_study_slices(ingest_job_id, &study_files).await?,
-                        None,
-                        None,
-                    )
-                };
+            let (derived_slice_builds, mpr_geometry, mpr_plane_counts) = if modality_type == "mpr" {
+                let mpr = self
+                    .derive_mpr_slices(account_id, zone_id, ingest_job_id, &user_id, &study_files)
+                    .await?;
+                (
+                    mpr.slice_builds,
+                    Some(mpr.geometry),
+                    Some(mpr.plane_asset_counts),
+                )
+            } else {
+                (
+                    self.derive_study_slices(ingest_job_id, &study_files)
+                        .await?,
+                    None,
+                    None,
+                )
+            };
 
             if derived_slice_builds.is_empty() {
                 return Err(AppError::bad_request(
@@ -810,7 +830,11 @@ impl PlaygroundService {
                         ingest_job_id,
                         &user_id,
                         &label,
-                        if modality_type == "mpr" { "derived_slice" } else { "slice" },
+                        if modality_type == "mpr" {
+                            "derived_slice"
+                        } else {
+                            "slice"
+                        },
                         derived_slice.weighting_code.as_deref(),
                         &image_url,
                         None,
@@ -834,9 +858,7 @@ impl PlaygroundService {
 
                 persisted_assets.push(asset);
 
-                if sort_order + 1 == derived_slice_builds.len()
-                    || (sort_order + 1) % 50 == 0
-                {
+                if sort_order + 1 == derived_slice_builds.len() || (sort_order + 1) % 50 == 0 {
                     let completed = sort_order + 1;
                     let total = derived_slice_builds.len();
                     let base = if modality_type == "mpr" { 82.0 } else { 70.0 };
@@ -903,23 +925,24 @@ impl PlaygroundService {
             )
             .await?;
 
-            let (manifest_schema_version, manifest_json) = if let Some(geometry) = mpr_geometry.as_ref() {
-                (
-                    "mpr-1",
-                    build_mpr_viewer_manifest_json(
-                        &persisted_assets,
-                        &atlas_pages,
-                        &atlas_frames,
-                        geometry,
-                        mpr_plane_counts.as_ref(),
-                    ),
-                )
-            } else {
-                (
-                    "draft-1",
-                    build_viewer_manifest_json(&persisted_assets, &atlas_pages, &atlas_frames),
-                )
-            };
+            let (manifest_schema_version, manifest_json) =
+                if let Some(geometry) = mpr_geometry.as_ref() {
+                    (
+                        "mpr-1",
+                        build_mpr_viewer_manifest_json(
+                            &persisted_assets,
+                            &atlas_pages,
+                            &atlas_frames,
+                            geometry,
+                            mpr_plane_counts.as_ref(),
+                        ),
+                    )
+                } else {
+                    (
+                        "draft-1",
+                        build_viewer_manifest_json(&persisted_assets, &atlas_pages, &atlas_frames),
+                    )
+                };
 
             self.repo
                 .upsert_modality_viewer_manifest(
@@ -1511,7 +1534,9 @@ impl PlaygroundService {
                 _ => dimensions[2],
             };
             if slice_index >= axis_limit {
-                return Err(AppError::bad_request("MPR slice is outside the volume geometry"));
+                return Err(AppError::bad_request(
+                    "MPR slice is outside the volume geometry",
+                ));
             }
             excluded_slices.insert(plane, slice_index);
             requested_slice_ids.push(*requested_id);
@@ -1560,7 +1585,19 @@ impl PlaygroundService {
             })
             .ok_or_else(|| AppError::not_found("Ingest job was not found"))?;
 
-        let study_files = self.load_existing_mpr_study_files(ingest_job_id).await?;
+        let library_geometry = if modality.source_kind == "library" {
+            Some(
+                serde_json::from_value::<MprVolumeGeometry>(manifest_json["volume"].clone())
+                    .map_err(|_| AppError::bad_request("Library MPR geometry is invalid"))?,
+            )
+        } else {
+            None
+        };
+        let study_files = if library_geometry.is_some() {
+            Vec::new()
+        } else {
+            self.load_existing_mpr_study_files(ingest_job_id).await?
+        };
         let edit_root = self
             .storage_root
             .join("playground")
@@ -1575,8 +1612,18 @@ impl PlaygroundService {
         let edit_root_for_task = edit_root.clone();
         let study_files_for_task = study_files.clone();
         let excluded_for_task = excluded_slices.clone();
+        let assets_for_task = assets_before.clone();
         let (progress_tx, _progress_rx) = mpsc::unbounded_channel::<MprProgressUpdate>();
         let derivation = tokio::task::spawn_blocking(move || {
+            if let Some(geometry) = library_geometry {
+                return library::derive_library_mpr_exclusions(
+                    &storage_root,
+                    &edit_root_for_task,
+                    &assets_for_task,
+                    &excluded_for_task,
+                    geometry,
+                );
+            }
             derive_mpr_volume_and_slices(
                 &storage_root,
                 &edit_root_for_task,
@@ -1587,7 +1634,9 @@ impl PlaygroundService {
         })
         .await
         .map_err(|error| AppError::internal(format!("MPR edit task failed: {error}")))?
-        .map_err(|error| AppError::bad_request(format!("Unable to rebuild edited MPR volume: {error}")))?;
+        .map_err(|error| {
+            AppError::bad_request(format!("Unable to rebuild edited MPR volume: {error}"))
+        })?;
 
         // The exclusion model preserves the original patient-space dimensions.
         // A deleted plane becomes absent from that plane's filmstrip while the
@@ -1603,11 +1652,7 @@ impl PlaygroundService {
 
         let mut builds_by_plane_index = BTreeMap::<(String, i32), DerivedSliceBuild>::new();
         for build in derivation.slice_builds {
-            let plane = build
-                .candidate
-                .orientation_code
-                .clone()
-                .unwrap_or_default();
+            let plane = build.candidate.orientation_code.clone().unwrap_or_default();
             builds_by_plane_index.insert((plane, build.candidate.slice_index), build);
         }
 
@@ -1644,9 +1689,10 @@ impl PlaygroundService {
                     ))
                 })?;
             let generated_path = self.storage_root.join(&build.candidate.storage_key);
-            let storage_key = asset.storage_key.as_deref().ok_or_else(|| {
-                AppError::internal("Stored MPR slice file is unavailable")
-            })?;
+            let storage_key = asset
+                .storage_key
+                .as_deref()
+                .ok_or_else(|| AppError::internal("Stored MPR slice file is unavailable"))?;
             let existing_path = self.storage_root.join(storage_key);
             let bytes = fs::read(&generated_path).await.map_err(|error| {
                 AppError::internal(format!("Unable to read rebuilt MPR slice: {error}"))
@@ -1659,6 +1705,14 @@ impl PlaygroundService {
             fs::write(&existing_path, &bytes).await.map_err(|error| {
                 AppError::internal(format!("Unable to replace edited MPR slice: {error}"))
             })?;
+            if modality.source_kind == "library" {
+                let png = fs::read(generated_path.with_extension("png"))
+                    .await
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+                fs::write(existing_path.with_extension("png"), png)
+                    .await
+                    .map_err(|e| AppError::internal(e.to_string()))?;
+            }
 
             if let Ok(asset_id) = Uuid::parse_str(&asset.id) {
                 self.repo
@@ -1754,9 +1808,12 @@ impl PlaygroundService {
             .filter(|asset| asset.orientation_code.as_deref() == Some("axial"))
             .collect::<Vec<_>>();
         axial_assets.sort_by_key(|asset| asset.slice_index.unwrap_or(i32::MAX));
-        let cover_image_url = axial_assets
-            .get(axial_assets.len() / 2)
-            .and_then(|asset| asset.thumbnail_url.as_deref().or(Some(asset.image_url.as_str())));
+        let cover_image_url = axial_assets.get(axial_assets.len() / 2).and_then(|asset| {
+            asset
+                .thumbnail_url
+                .as_deref()
+                .or(Some(asset.image_url.as_str()))
+        });
         self.repo
             .attach_ingest_job_to_modality(
                 &self.pool,
@@ -2933,7 +2990,9 @@ impl PlaygroundService {
         })
         .await
         .map_err(|error| AppError::internal(format!("MPR derivation task failed: {error}")))?
-        .map_err(|error| AppError::bad_request(format!("Unable to reconstruct MPR volume: {error}")));
+        .map_err(|error| {
+            AppError::bad_request(format!("Unable to reconstruct MPR volume: {error}"))
+        });
 
         let _ = progress_task.await;
         derivation
@@ -3199,23 +3258,6 @@ impl PlaygroundService {
         Ok(())
     }
 
-    async fn allocate_zone_slug(&self, account_id: Uuid, name: &str) -> Result<String, AppError> {
-        let base = slugify(name, "zone");
-        let mut candidate = base.clone();
-        let mut suffix = 1;
-
-        while self
-            .repo
-            .slug_exists(&self.pool, account_id, &candidate)
-            .await?
-        {
-            candidate = format!("{base}-{suffix}");
-            suffix += 1;
-        }
-
-        Ok(candidate)
-    }
-
     async fn allocate_modality_slug(&self, zone_id: Uuid, name: &str) -> Result<String, AppError> {
         let base = slugify(name, "modality");
         let mut candidate = base.clone();
@@ -3383,36 +3425,12 @@ fn normalize_required_image_url(value: &str) -> Result<String, AppError> {
     Ok(normalized.to_string())
 }
 
-fn normalize_body_view(value: Option<String>) -> Result<String, AppError> {
-    let normalized = value
-        .unwrap_or_else(|| "anterior".to_string())
-        .trim()
-        .to_ascii_lowercase();
-
-    match normalized.as_str() {
-        "anterior" | "posterior" => Ok(normalized),
-        _ => Err(AppError::bad_request(
-            "Body view must be anterior or posterior",
-        )),
-    }
-}
-
-fn validate_anchor(
-    anchor: crate::features::playground::domain::models::ZoneAnchor,
-) -> Result<crate::features::playground::domain::models::ZoneAnchor, AppError> {
-    if !anchor.x.is_finite() || !anchor.y.is_finite() || !anchor.z.is_finite() {
-        return Err(AppError::bad_request("Zone anchor is invalid"));
-    }
-
-    Ok(anchor)
-}
-
 fn normalize_modality_type(value: &str) -> Result<String, AppError> {
     let normalized = value.trim().to_ascii_lowercase();
 
     match normalized.as_str() {
-        "mri" | "mpr" | "ct" | "pet" | "ultrasound" | "xray" | "mra" | "mrv" | "angiography" | "cbct"
-        | "illustration" | "photography" | "endoscopy" | "other" => Ok(normalized),
+        "mri" | "mpr" | "ct" | "pet" | "ultrasound" | "xray" | "mra" | "mrv" | "angiography"
+        | "cbct" | "illustration" | "photography" | "endoscopy" | "other" => Ok(normalized),
         _ => Err(AppError::bad_request("Modality type is invalid")),
     }
 }
@@ -3709,6 +3727,9 @@ async fn extract_zip_study(
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|_| AppError::bad_request("Unable to read ZIP package."))?;
         let mut prepared = Vec::new();
+        let mut names = BTreeSet::new();
+        let mut expanded_bytes = 0u64;
+        if archive.len() > 10_000 { return Err(AppError::bad_request("ZIP package exceeds the 10,000-file limit")); }
 
         for index in 0..archive.len() {
             let mut entry = archive
@@ -3727,7 +3748,13 @@ async fn extract_zip_study(
                 )));
             }
 
-            let safe_relative_path = sanitize_relative_path(&original_name);
+            let safe_path = entry.enclosed_name().ok_or_else(|| AppError::bad_request("ZIP contains an unsafe path"))?;
+            if entry.is_symlink() || original_name.contains('\\') || original_name.contains(':') || original_name.split('/').any(|part| part == "." || part == ".." || part.is_empty()) || !names.insert(safe_path.clone()) {
+                return Err(AppError::bad_request("ZIP contains a duplicate or unsupported file path"));
+            }
+            expanded_bytes = expanded_bytes.saturating_add(entry.size());
+            if expanded_bytes > 2 * 1024 * 1024 * 1024 { return Err(AppError::bad_request("Expanded ZIP exceeds 2 GB")); }
+            let safe_relative_path = safe_path.to_string_lossy().to_string();
             let output_path = extracted_root.join(&safe_relative_path);
 
             if let Some(parent) = output_path.parent() {
@@ -3739,9 +3766,11 @@ async fn extract_zip_study(
             let mut output = std::fs::File::create(&output_path).map_err(|error| {
                 AppError::internal(format!("Unable to create extracted study file: {error}"))
             })?;
-            std::io::copy(&mut entry, &mut output).map_err(|error| {
+            let declared_size = entry.size();
+            let copied = std::io::copy(&mut std::io::Read::take(&mut entry, declared_size.saturating_add(1)), &mut output).map_err(|error| {
                 AppError::internal(format!("Unable to extract ZIP package entry: {error}"))
             })?;
+            if copied != declared_size { return Err(AppError::bad_request("ZIP entry length does not match its metadata")); }
 
             prepared.push(PreparedStudyFile {
                 source_relative_path: Some(safe_relative_path),
@@ -3866,13 +3895,17 @@ fn derive_mpr_volume_and_slices(
             Ok(object) => object,
             Err(_) => continue,
         };
-        let Some(source_slice) = read_mpr_source_slice(&object, study_file) else {
-            continue;
-        };
-        grouped
-            .entry(source_slice.series_uid.clone())
-            .or_default()
-            .push(source_slice);
+        let frame_count = dicom_usize(&object, "NumberOfFrames").unwrap_or(1);
+        for frame_index in 0..frame_count {
+            let Some(source_slice) = read_mpr_source_slice(&object, study_file, frame_index as u32)
+            else {
+                continue;
+            };
+            grouped
+                .entry(source_slice.series_uid.clone())
+                .or_default()
+                .push(source_slice);
+        }
 
         let completed = file_index + 1;
         if completed == study_files.len() || completed % metadata_report_every == 0 {
@@ -3910,7 +3943,8 @@ fn derive_mpr_volume_and_slices(
     }
 
     let slices = selected_series.ok_or_else(|| {
-        last_validation_error.unwrap_or_else(|| anyhow::anyhow!("no reconstructable DICOM series was found"))
+        last_validation_error
+            .unwrap_or_else(|| anyhow::anyhow!("no reconstructable DICOM series was found"))
     })?;
 
     let first = &slices[0];
@@ -3922,13 +3956,17 @@ fn derive_mpr_volume_and_slices(
     let row_axis = scale3(first.column_direction, first.row_spacing);
     let slice_axis = scale3(slice_direction, slice_spacing);
     let source_basis = matrix_from_columns(column_axis, row_axis, slice_axis);
-    let inverse_basis = invert3(source_basis).context("DICOM volume orientation matrix is singular")?;
+    let inverse_basis =
+        invert3(source_basis).context("DICOM volume orientation matrix is singular")?;
 
     let source_voxel_count = first
         .columns
         .checked_mul(first.rows)
         .and_then(|value| value.checked_mul(slices.len()))
         .context("source DICOM volume is too large")?;
+    if source_voxel_count > MAX_MPR_SOURCE_VOXELS {
+        anyhow::bail!("source DICOM volume exceeds the MPR voxel limit");
+    }
     let mut source_volume = Vec::<u16>::with_capacity(source_voxel_count);
     let mut histogram = vec![0u64; 65_536];
     let decode_report_every = (slices.len() / 12).max(1);
@@ -3944,14 +3982,25 @@ fn derive_mpr_volume_and_slices(
 
     for (slice_index, slice) in slices.iter().enumerate() {
         let object = open_file(&slice.file_path).with_context(|| {
-            format!("unable to reopen source DICOM {}", slice.file_path.display())
+            format!(
+                "unable to reopen source DICOM {}",
+                slice.file_path.display()
+            )
         })?;
         let decoded = object.decode_pixel_data().with_context(|| {
-            format!("unable to decode source DICOM {}", slice.file_path.display())
+            format!(
+                "unable to decode source DICOM {}",
+                slice.file_path.display()
+            )
         })?;
-        let image = decoded.to_dynamic_image(0).with_context(|| {
-            format!("unable to render source DICOM {}", slice.file_path.display())
-        })?;
+        let image = decoded
+            .to_dynamic_image(slice.frame_index)
+            .with_context(|| {
+                format!(
+                    "unable to render source DICOM {}",
+                    slice.file_path.display()
+                )
+            })?;
         let image = image.to_luma16();
         if image.width() as usize != first.columns || image.height() as usize != first.rows {
             anyhow::bail!("DICOM series dimensions changed while decoding");
@@ -4073,12 +4122,11 @@ fn derive_mpr_volume_and_slices(
                         for local_z in 0..local_plane_count {
                             let z = z_start + local_z;
                             let z_base = add3(base_source, scale3(step_z, z as f64));
-                            let plane = &mut volume_chunk
-                                [local_z * plane_len..(local_z + 1) * plane_len];
+                            let plane =
+                                &mut volume_chunk[local_z * plane_len..(local_z + 1) * plane_len];
 
                             for y in 0..ny {
-                                let mut source_index =
-                                    add3(z_base, scale3(step_y, y as f64));
+                                let mut source_index = add3(z_base, scale3(step_y, y as f64));
                                 let row_offset = y * nx;
                                 for x in 0..nx {
                                     plane[row_offset + x] = trilinear_sample_u16(
@@ -4090,16 +4138,13 @@ fn derive_mpr_volume_and_slices(
                                 }
                             }
 
-                            let completed =
-                                completed_planes.fetch_add(1, Ordering::Relaxed) + 1;
-                            if completed == nz || completed % resample_report_every == 0 {
+                            let completed = completed_planes.fetch_add(1, Ordering::Relaxed) + 1;
+                            if completed == nz || completed.is_multiple_of(resample_report_every) {
                                 let percent = interpolate_progress(25, 55, completed, nz);
                                 report_mpr_progress(
                                     &progress,
                                     "reconstructing_volume",
-                                    &format!(
-                                        "Reconstructed volume section {completed}/{nz}."
-                                    ),
+                                    &format!("Reconstructed volume section {completed}/{nz}."),
                                     percent,
                                     completed,
                                     nz,
@@ -4110,7 +4155,12 @@ fn derive_mpr_volume_and_slices(
                 }
             });
 
-            (target_volume, target_dimensions, target_spacing, target_origin)
+            (
+                target_volume,
+                target_dimensions,
+                target_spacing,
+                target_origin,
+            )
         };
 
     if let Some(excluded_slices) = excluded_slices.filter(|excluded| !excluded.is_empty()) {
@@ -4174,92 +4224,100 @@ fn derive_mpr_volume_and_slices(
         .max(1);
     let source_series_uid = first.series_uid.clone();
 
-    let rendered_chunks = std::thread::scope(|scope| -> anyhow::Result<Vec<Vec<(usize, DerivedSliceBuild)>>> {
-        let mut handles = Vec::new();
+    let rendered_chunks = std::thread::scope(
+        |scope| -> anyhow::Result<Vec<Vec<(usize, DerivedSliceBuild)>>> {
+            let mut handles = Vec::new();
 
-        for (worker_index, task_chunk) in render_tasks.chunks(tasks_per_worker).enumerate() {
-            let task_chunk = task_chunk.to_vec();
-            let target_volume = &target_volume;
-            let completed_renders = Arc::clone(&completed_renders);
-            let progress = progress.clone();
-            let source_series_uid = source_series_uid.clone();
+            for (worker_index, task_chunk) in render_tasks.chunks(tasks_per_worker).enumerate() {
+                let task_chunk = task_chunk.to_vec();
+                let target_volume = &target_volume;
+                let completed_renders = Arc::clone(&completed_renders);
+                let progress = progress.clone();
+                let source_series_uid = source_series_uid.clone();
 
-            handles.push(scope.spawn(move || -> anyhow::Result<Vec<(usize, DerivedSliceBuild)>> {
-                let mut builds = Vec::with_capacity(task_chunk.len());
-                for (local_index, (plane, slice_index)) in task_chunk.into_iter().enumerate() {
-                    let image = render_mpr_plane(
-                        target_volume,
-                        target_dimensions,
-                        plane,
-                        slice_index,
-                        window_low,
-                        window_high,
-                    )?;
-                    let file_name = format!("{plane}-{:04}.png", slice_index + 1);
-                    let image_path = derived_root.join(plane).join(file_name);
-                    let png_bytes = encode_png(&image)?;
-                    std::fs::write(&image_path, &png_bytes)?;
-                    let label = format!("MPR {}", capitalize_ascii(plane));
-                    let task_index = worker_index * tasks_per_worker + local_index;
+                handles.push(scope.spawn(
+                    move || -> anyhow::Result<Vec<(usize, DerivedSliceBuild)>> {
+                        let mut builds = Vec::with_capacity(task_chunk.len());
+                        for (local_index, (plane, slice_index)) in
+                            task_chunk.into_iter().enumerate()
+                        {
+                            let image = render_mpr_plane(
+                                target_volume,
+                                target_dimensions,
+                                plane,
+                                slice_index,
+                                window_low,
+                                window_high,
+                            )?;
+                            let file_name = format!("{plane}-{:04}.png", slice_index + 1);
+                            let image_path = derived_root.join(plane).join(file_name);
+                            let png_bytes = encode_png(&image)?;
+                            std::fs::write(&image_path, &png_bytes)?;
+                            let label = format!("MPR {}", capitalize_ascii(plane));
+                            let task_index = worker_index * tasks_per_worker + local_index;
 
-                    builds.push((
-                        task_index,
-                        DerivedSliceBuild {
-                            candidate: DerivedSliceCandidate {
-                                source_relative_path: None,
-                                storage_key: storage_key_from_absolute(storage_root, &image_path)
-                                    .map_err(anyhow::Error::from)?,
-                                checksum: sha256_hex(&png_bytes),
-                                size_bytes: png_bytes.len() as i64,
-                                width: i32::try_from(image.width()).unwrap_or(i32::MAX),
-                                height: i32::try_from(image.height()).unwrap_or(i32::MAX),
-                                series_uid: Some(format!("{source_series_uid}:mpr:{plane}")),
-                                series_label: Some(label),
-                                instance_uid: None,
-                                slice_index: i32::try_from(slice_index).unwrap_or(i32::MAX),
-                                weighting_code: None,
-                                orientation_code: Some(plane.to_string()),
-                            },
-                            atlas_source_image: None,
-                        },
-                    ));
+                            builds.push((
+                                task_index,
+                                DerivedSliceBuild {
+                                    candidate: DerivedSliceCandidate {
+                                        source_relative_path: None,
+                                        storage_key: storage_key_from_absolute(
+                                            storage_root,
+                                            &image_path,
+                                        )
+                                        .map_err(anyhow::Error::from)?,
+                                        checksum: sha256_hex(&png_bytes),
+                                        size_bytes: png_bytes.len() as i64,
+                                        width: i32::try_from(image.width()).unwrap_or(i32::MAX),
+                                        height: i32::try_from(image.height()).unwrap_or(i32::MAX),
+                                        series_uid: Some(format!(
+                                            "{source_series_uid}:mpr:{plane}"
+                                        )),
+                                        series_label: Some(label),
+                                        instance_uid: None,
+                                        slice_index: i32::try_from(slice_index).unwrap_or(i32::MAX),
+                                        weighting_code: None,
+                                        orientation_code: Some(plane.to_string()),
+                                    },
+                                    atlas_source_image: None,
+                                },
+                            ));
 
-                    let completed = completed_renders.fetch_add(1, Ordering::Relaxed) + 1;
-                    if completed == total_plane_slices
-                        || completed % render_report_every == 0
-                    {
-                        let percent =
-                            interpolate_progress(55, 82, completed, total_plane_slices);
-                        report_mpr_progress(
-                            &progress,
-                            "rendering_planes",
-                            &format!(
-                                "Rendered MPR slices {completed}/{total_plane_slices}."
-                            ),
-                            percent,
-                            completed,
-                            total_plane_slices,
-                        );
-                    }
-                }
-                Ok(builds)
-            }));
-        }
+                            let completed = completed_renders.fetch_add(1, Ordering::Relaxed) + 1;
+                            if completed == total_plane_slices
+                                || completed.is_multiple_of(render_report_every)
+                            {
+                                let percent =
+                                    interpolate_progress(55, 82, completed, total_plane_slices);
+                                report_mpr_progress(
+                                    &progress,
+                                    "rendering_planes",
+                                    &format!(
+                                        "Rendered MPR slices {completed}/{total_plane_slices}."
+                                    ),
+                                    percent,
+                                    completed,
+                                    total_plane_slices,
+                                );
+                            }
+                        }
+                        Ok(builds)
+                    },
+                ));
+            }
 
-        let mut chunks = Vec::with_capacity(handles.len());
-        for handle in handles {
-            let builds = handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("MPR render worker panicked"))??;
-            chunks.push(builds);
-        }
-        Ok(chunks)
-    })?;
+            let mut chunks = Vec::with_capacity(handles.len());
+            for handle in handles {
+                let builds = handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("MPR render worker panicked"))??;
+                chunks.push(builds);
+            }
+            Ok(chunks)
+        },
+    )?;
 
-    let mut indexed_builds = rendered_chunks
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+    let mut indexed_builds = rendered_chunks.into_iter().flatten().collect::<Vec<_>>();
     indexed_builds.sort_by_key(|(task_index, _)| *task_index);
     let mut slice_builds = indexed_builds
         .into_iter()
@@ -4292,13 +4350,25 @@ fn derive_mpr_volume_and_slices(
 fn read_mpr_source_slice(
     object: &dicom::object::DefaultDicomObject,
     study_file: &PreparedStudyFile,
+    frame_index: u32,
 ) -> Option<MprSourceSlice> {
     let series_uid = dicom_text(object, "SeriesInstanceUID")?;
     let rows = dicom_usize(object, "Rows")?;
     let columns = dicom_usize(object, "Columns")?;
-    let image_position = dicom_f64_array::<3>(object, "ImagePositionPatient")?;
-    let orientation = dicom_f64_array::<6>(object, "ImageOrientationPatient")?;
-    let pixel_spacing = dicom_f64_array::<2>(object, "PixelSpacing")?;
+    let image_position = library::frame_geometry::<3>(
+        object,
+        frame_index,
+        "PlanePositionSequence",
+        "ImagePositionPatient",
+    )?;
+    let orientation = library::frame_geometry::<6>(
+        object,
+        frame_index,
+        "PlaneOrientationSequence",
+        "ImageOrientationPatient",
+    )?;
+    let pixel_spacing =
+        library::frame_geometry::<2>(object, frame_index, "PixelMeasuresSequence", "PixelSpacing")?;
     let row_direction = normalize3([orientation[0], orientation[1], orientation[2]])?;
     let column_direction = normalize3([orientation[3], orientation[4], orientation[5]])?;
     let normal = normalize3(cross3(row_direction, column_direction))?;
@@ -4317,6 +4387,7 @@ fn read_mpr_source_slice(
 
     Some(MprSourceSlice {
         file_path: study_file.file_path.clone(),
+        frame_index,
         series_uid,
         frame_of_reference_uid: dicom_text(object, "FrameOfReferenceUID"),
         rows,
@@ -4330,7 +4401,9 @@ fn read_mpr_source_slice(
     })
 }
 
-fn validate_and_sort_mpr_series(mut slices: Vec<MprSourceSlice>) -> anyhow::Result<Vec<MprSourceSlice>> {
+fn validate_and_sort_mpr_series(
+    mut slices: Vec<MprSourceSlice>,
+) -> anyhow::Result<Vec<MprSourceSlice>> {
     if slices.len() < 3 {
         anyhow::bail!("MPR requires at least three spatial slices from the same DICOM series");
     }
@@ -4350,7 +4423,9 @@ fn validate_and_sort_mpr_series(mut slices: Vec<MprSourceSlice>) -> anyhow::Resu
     });
 
     if slices.len() < 3 {
-        anyhow::bail!("the DICOM series does not have consistent dimensions, orientation, and spacing");
+        anyhow::bail!(
+            "the DICOM series does not have consistent dimensions, orientation, and spacing"
+        );
     }
 
     let reference_normal = normalize3(cross3(first.row_direction, first.column_direction))
@@ -4424,11 +4499,7 @@ fn report_mpr_progress(
     });
 }
 
-fn apply_mpr_exclusions(
-    volume: &mut [u16],
-    dimensions: [usize; 3],
-    excluded: &MprExcludedSlices,
-) {
+fn apply_mpr_exclusions(volume: &mut [u16], dimensions: [usize; 3], excluded: &MprExcludedSlices) {
     let [nx, ny, nz] = dimensions;
     if nx == 0 || ny == 0 || nz == 0 {
         return;
@@ -4448,19 +4519,17 @@ fn apply_mpr_exclusions(
     }
 }
 
-fn canonical_source_axis_mapping(
-    directions: [[f64; 3]; 3],
-) -> Option<[(usize, bool); 3]> {
+fn canonical_source_axis_mapping(directions: [[f64; 3]; 3]) -> Option<[(usize, bool); 3]> {
     let mut mapping = [(0usize, false); 3];
     let mut used_patient_axes = [false; 3];
 
     for (source_axis, direction) in directions.into_iter().enumerate() {
         let mut patient_axis = 0usize;
         let mut dominant_component = direction[0];
-        for axis in 1..3 {
-            if direction[axis].abs() > dominant_component.abs() {
+        for (axis, &component) in direction.iter().enumerate().skip(1) {
+            if component.abs() > dominant_component.abs() {
                 patient_axis = axis;
-                dominant_component = direction[axis];
+                dominant_component = component;
             }
         }
 
@@ -4541,9 +4610,8 @@ fn reorient_axis_aligned_volume(
                 }
 
                 let source_index = (source_z * source_ny + source_y) * source_nx + source_x;
-                let target_index =
-                    (target_indices[2] * target_ny + target_indices[1]) * target_nx
-                        + target_indices[0];
+                let target_index = (target_indices[2] * target_ny + target_indices[1]) * target_nx
+                    + target_indices[0];
                 target_volume[target_index] = source_volume[source_index];
             }
         }
@@ -4588,11 +4656,7 @@ fn dicom_f64_array<const N: usize>(
 }
 
 fn matrix_from_columns(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [[f64; 3]; 3] {
-    [
-        [a[0], b[0], c[0]],
-        [a[1], b[1], c[1]],
-        [a[2], b[2], c[2]],
-    ]
+    [[a[0], b[0], c[0]], [a[1], b[1], c[1]], [a[2], b[2], c[2]]]
 }
 
 fn invert3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
@@ -4603,9 +4667,21 @@ fn invert3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
     }
     let inv = 1.0 / determinant;
     Some([
-        [(e * i - f * h) * inv, (c * h - b * i) * inv, (b * f - c * e) * inv],
-        [(f * g - d * i) * inv, (a * i - c * g) * inv, (c * d - a * f) * inv],
-        [(d * h - e * g) * inv, (b * g - a * h) * inv, (a * e - b * d) * inv],
+        [
+            (e * i - f * h) * inv,
+            (c * h - b * i) * inv,
+            (b * f - c * e) * inv,
+        ],
+        [
+            (f * g - d * i) * inv,
+            (a * i - c * g) * inv,
+            (c * d - a * f) * inv,
+        ],
+        [
+            (d * h - e * g) * inv,
+            (b * g - a * h) * inv,
+            (a * e - b * d) * inv,
+        ],
     ])
 }
 
@@ -4660,14 +4736,9 @@ fn effective_patient_axis_spacing(
     }
 }
 
-fn target_dimensions_from_bounds(
-    min: [f64; 3],
-    max: [f64; 3],
-    spacing: [f64; 3],
-) -> [usize; 3] {
+fn target_dimensions_from_bounds(min: [f64; 3], max: [f64; 3], spacing: [f64; 3]) -> [usize; 3] {
     [0, 1, 2].map(|axis| {
-        (((max[axis] - min[axis]).max(0.0) / spacing[axis].max(1e-6)).ceil() as usize + 1)
-            .max(1)
+        (((max[axis] - min[axis]).max(0.0) / spacing[axis].max(1e-6)).ceil() as usize + 1).max(1)
     })
 }
 
@@ -4678,11 +4749,7 @@ fn checked_volume_len(dimensions: [usize; 3]) -> anyhow::Result<usize> {
         .context("reconstructed volume dimensions overflow")
 }
 
-fn trilinear_sample_u16(
-    volume: &[u16],
-    dimensions: [usize; 3],
-    point: [f64; 3],
-) -> u16 {
+fn trilinear_sample_u16(volume: &[u16], dimensions: [usize; 3], point: [f64; 3]) -> u16 {
     let [nx, ny, nz] = dimensions;
     let [x, y, z] = point;
     if x < 0.0
@@ -4713,7 +4780,9 @@ fn trilinear_sample_u16(
     let c11 = sample(x0, y1, z1) * (1.0 - tx) + sample(x1, y1, z1) * tx;
     let c0 = c00 * (1.0 - ty) + c10 * ty;
     let c1 = c01 * (1.0 - ty) + c11 * ty;
-    (c0 * (1.0 - tz) + c1 * tz).round().clamp(0.0, u16::MAX as f64) as u16
+    (c0 * (1.0 - tz) + c1 * tz)
+        .round()
+        .clamp(0.0, u16::MAX as f64) as u16
 }
 
 fn histogram_window(histogram: &[u64]) -> (u16, u16) {
@@ -4825,7 +4894,11 @@ fn normalize3(value: [f64; 3]) -> Option<[f64; 3]> {
     if !magnitude.is_finite() || magnitude <= 1e-12 {
         return None;
     }
-    Some([value[0] / magnitude, value[1] / magnitude, value[2] / magnitude])
+    Some([
+        value[0] / magnitude,
+        value[1] / magnitude,
+        value[2] / magnitude,
+    ])
 }
 
 fn add3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
@@ -4852,8 +4925,7 @@ fn capitalize_ascii(value: &str) -> String {
     }
 }
 
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct BuiltAtlasPage {
     storage_key: String,
     checksum: String,
@@ -5293,7 +5365,10 @@ fn write_atlas_pages_from_slice_builds(
                 let image_path = storage_root.join(&build.candidate.storage_key);
                 image::open(&image_path)
                     .with_context(|| {
-                        format!("Unable to open derived MPR slice at {}", image_path.display())
+                        format!(
+                            "Unable to open derived MPR slice at {}",
+                            image_path.display()
+                        )
                     })?
                     .to_rgba8()
             };
@@ -5348,7 +5423,6 @@ fn write_atlas_pages_from_slice_builds(
     Ok(pages)
 }
 
-
 fn write_atlas_pages(
     storage_root: &Path,
     atlas_root: &Path,
@@ -5366,16 +5440,12 @@ fn write_atlas_pages(
         global_cell_height = global_cell_height.max(slice.image.height());
     }
 
-    let columns_by_width = if global_cell_width == 0 {
-        1
-    } else {
-        (MAX_ATLAS_PAGE_EDGE / global_cell_width).max(1) as usize
-    };
-    let rows_by_height = if global_cell_height == 0 {
-        1
-    } else {
-        (MAX_ATLAS_PAGE_EDGE / global_cell_height).max(1) as usize
-    };
+    let columns_by_width = MAX_ATLAS_PAGE_EDGE
+        .checked_div(global_cell_width)
+        .map_or(1, |columns| columns.max(1) as usize);
+    let rows_by_height = MAX_ATLAS_PAGE_EDGE
+        .checked_div(global_cell_height)
+        .map_or(1, |rows| rows.max(1) as usize);
     let columns_per_page = columns_by_width.clamp(1, MAX_ATLAS_PAGE_COLUMNS);
     let rows_per_page = rows_by_height.max(1);
     let slices_per_page = (columns_per_page * rows_per_page).clamp(1, MAX_ATLAS_SLICES_PER_PAGE);
@@ -5463,6 +5533,13 @@ fn load_atlas_source_image(
         .as_deref()
         .context("Atlas source asset is missing a storage key")?;
     let image_path = storage_root.join(storage_key);
+
+    // Library snapshots retain the edited PNG beside the AVIF. Rebuilding a
+    // cache must never substitute the original, unedited DICOM pixels.
+    let edited_png = image_path.with_extension("png");
+    if image_path.extension().and_then(OsStr::to_str) == Some("avif") && edited_png.is_file() {
+        return Ok(image::open(&edited_png)?.to_rgba8());
+    }
 
     let can_decode_directly = image_path
         .extension()

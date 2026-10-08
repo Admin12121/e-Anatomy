@@ -56,7 +56,7 @@ const BLOCKED_DICOM_ARCHIVE_SEGMENTS = new Set([
 ])
 
 export const MAX_DICOM_FILES = 512
-export const MAX_TOTAL_UPLOAD_BYTES = 512 * 1024 * 1024
+export const MAX_TOTAL_UPLOAD_BYTES = 1024 * 1024 * 1024
 
 export class ModalityUploadValidationError extends Error {
   constructor(message: string) {

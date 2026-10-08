@@ -106,16 +106,8 @@ function LazyAtlasThumbnail({
   const [visible, setVisible] = useState(eager);
 
   useEffect(() => {
-    if (eager) {
-      setVisible(true);
-      return;
-    }
-
     const host = hostRef.current;
-    if (!host || typeof IntersectionObserver === "undefined") {
-      setVisible(true);
-      return;
-    }
+    if (eager || !host) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -135,7 +127,7 @@ function LazyAtlasThumbnail({
 
   return (
     <div ref={hostRef} className="h-full w-full">
-      {visible ? <div className="h-full w-full" style={style} /> : null}
+      {eager || visible ? <div className="h-full w-full" style={style} /> : null}
     </div>
   );
 }

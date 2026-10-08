@@ -60,19 +60,6 @@ fn required_internal_api_key(value: String) -> Result<String> {
     Ok(value)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::required_internal_api_key;
-
-    #[test]
-    fn internal_key_must_be_explicit_and_nonempty() {
-        assert!(required_internal_api_key(String::new()).is_err());
-        assert!(required_internal_api_key("short".into()).is_err());
-        assert!(required_internal_api_key(format!(" {}", "x".repeat(32))).is_err());
-        assert!(required_internal_api_key("x".repeat(32)).is_ok());
-    }
-}
-
 impl ServerConfig {
     pub fn bind_address(&self) -> String {
         format!("{}:{}", self.host, self.port)
@@ -93,5 +80,18 @@ where
             .parse::<T>()
             .map_err(|error| anyhow::anyhow!("{key} is invalid: {error}")),
         Err(_) => Ok(default),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_internal_api_key;
+
+    #[test]
+    fn internal_key_must_be_explicit_and_nonempty() {
+        assert!(required_internal_api_key(String::new()).is_err());
+        assert!(required_internal_api_key("short".into()).is_err());
+        assert!(required_internal_api_key(format!(" {}", "x".repeat(32))).is_err());
+        assert!(required_internal_api_key("x".repeat(32)).is_ok());
     }
 }

@@ -2,7 +2,11 @@ use super::{
     models::{ContentDocument, ContentFamily, ContentLabel, PublicTopic, SaveDocumentInput},
     repository,
 };
-use crate::infrastructure::{error::AppError, http::resolve_admin_actor_context, state::AppState};
+use crate::infrastructure::{
+    error::AppError,
+    http::{require_content_editor, resolve_admin_actor_context},
+    state::AppState,
+};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -63,7 +67,7 @@ async fn set_primary(
     Json(input): Json<PrimaryInput>,
 ) -> Result<Json<ContentFamily>, AppError> {
     let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
-    require_editor(&state, actor.account_id, &actor.user_id).await?;
+    require_content_editor(&state, actor.account_id, &actor.user_id).await?;
     let updated = sqlx::query(r#"
         UPDATE anatomy_zone_modality_families f SET primary_modality_id=$3, updated_by_user_id=$4, updated_at=NOW()
         FROM anatomy_zones z WHERE z.id=f.zone_id AND z.account_id=$1 AND f.id=$2
@@ -79,14 +83,6 @@ async fn set_primary(
     ))
 }
 
-async fn require_editor(state: &AppState, account: Uuid, user: &str) -> Result<(), AppError> {
-    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM account_memberships WHERE account_id=$1 AND user_id=$2 AND status='active' AND role_code IN ('owner','admin','platform_admin','content_admin','editor'))")
-        .bind(account).bind(user).fetch_one(&state.pool).await?;
-    if !allowed {
-        return Err(AppError::unauthorized("Content editing is not permitted"));
-    }
-    Ok(())
-}
 async fn workspace(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -120,7 +116,7 @@ async fn save(
     Json(input): Json<SaveDocumentInput>,
 ) -> Result<Json<ContentDocument>, AppError> {
     let actor = resolve_admin_actor_context(&state, &jar, &headers).await?;
-    require_editor(&state, actor.account_id, &actor.user_id).await?;
+    require_content_editor(&state, actor.account_id, &actor.user_id).await?;
     repository::family(&state.pool, Some(actor.account_id), Some(id), None, None).await?;
     let structure = repository::check_target(&state.pool, id, &target).await?;
     Ok(Json(

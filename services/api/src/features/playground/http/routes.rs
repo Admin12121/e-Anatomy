@@ -36,7 +36,7 @@ use crate::infrastructure::{
     state::AppState,
 };
 
-const MAX_STUDY_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
+const MAX_STUDY_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_STUDY_UPLOAD_FILE_COUNT: usize = 512;
 const MAX_STUDY_UPLOAD_SINGLE_FILE_BYTES: i64 = MAX_STUDY_UPLOAD_BYTES as i64;
 const MAX_UPLOAD_PATH_LENGTH: usize = 260;
@@ -521,7 +521,6 @@ async fn reorder_zone_modality_assets(
 
     Ok((StatusCode::OK, Json(response)))
 }
-
 
 async fn delete_mpr_zone_modality_slices(
     State(state): State<AppState>,

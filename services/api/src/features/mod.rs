@@ -1,6 +1,7 @@
 pub mod analytics;
 pub mod content;
 pub mod health;
+pub mod image_library;
 pub mod modules;
 pub mod playground;
 

@@ -386,7 +386,7 @@ export function ProfileSettingsPanel({
             <div>
               <p className="text-sm font-medium">Profile picture</p>
               <p className="text-xs text-muted-foreground">
-                Upload your own photo, or use your account's stable Blobatar by
+                Upload your own photo, or use your account&apos;s stable Blobatar by
                 default.
               </p>
             </div>

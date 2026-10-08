@@ -147,6 +147,7 @@ export function CompactAnatomyModel({ contentSlug }: { contentSlug: string }) {
                 previewLayer={previewLayer}
                 showPartsToggle={false}
                 onReady={markReady}
+                onError={markFailed}
               />
             </div>
           </ModelBoundary>

@@ -5,6 +5,7 @@ import {
   BarChart3Icon,
   FileStackIcon,
   FolderIcon,
+  ImagesIcon,
   LayoutDashboardIcon,
   UsersIcon,
 } from "lucide-react";
@@ -62,6 +63,7 @@ function getPrimaryNav(roleCode: RoleCode) {
     items.push(
       { title: "Content", href: "/content", icon: <FileStackIcon /> },
       { title: "Playground", href: "/playground", icon: <FolderIcon /> },
+      { title: "Image library", href: "/image-library", icon: <ImagesIcon /> },
     );
   }
 

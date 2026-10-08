@@ -32,14 +32,19 @@ impl AnalyticsEventInput {
             return Err(AppError::bad_request("Unsupported analytics event name"));
         }
         if !self.properties.is_object() {
-            return Err(AppError::bad_request("Analytics properties must be an object"));
+            return Err(AppError::bad_request(
+                "Analytics properties must be an object",
+            ));
         }
         if self.properties.to_string().len() > 16_384 {
             return Err(AppError::bad_request("Analytics properties are too large"));
         }
-        for value in [self.original_referrer.as_ref(), self.session_referrer.as_ref()]
-            .into_iter()
-            .flatten()
+        for value in [
+            self.original_referrer.as_ref(),
+            self.session_referrer.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
         {
             if value.len() > 512 {
                 return Err(AppError::bad_request("Analytics referrer is too long"));

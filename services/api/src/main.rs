@@ -9,8 +9,7 @@ use tracing::{info, warn};
 
 use crate::features::{
     analytics::http::routes::{
-        public_routes as public_analytics_routes,
-        routes as analytics_routes,
+        public_routes as public_analytics_routes, routes as analytics_routes,
     },
     health::http::routes as health_routes,
     modules::http::routes as module_routes,
@@ -41,7 +40,17 @@ async fn main() -> Result<()> {
     let pool = connect_pool(&config.database).await?;
     run_migrations(&pool).await?;
 
+    // `anatomy-api migrate` lets a deploy migrate while the previous release serves.
+    if std::env::args().nth(1).as_deref() == Some("migrate") {
+        info!("database migrations are up to date");
+        return Ok(());
+    }
+
     let state = AppState::new(pool, config);
+    // Process-local workers cannot survive a restart. Keep completed revisions
+    // usable and make interrupted imports explicit instead of polling forever.
+    sqlx::query("UPDATE anatomy_image_library SET status=CASE WHEN status='encoding' AND revision>1 THEN 'ready' WHEN status='encoding' THEN 'editable' ELSE 'failed' END,error_message='Conversion interrupted by a server restart. Reupload the package to retry.',updated_at=NOW() WHERE status IN ('queued','processing','encoding')")
+        .execute(&state.pool).await?;
 
     let interrupted_ingests = state
         .playground_service
@@ -55,6 +64,7 @@ async fn main() -> Result<()> {
     }
 
     let app = Router::new()
+        .nest("/api/v1/image-library", features::image_library::routes())
         .nest("/api/v1/content", features::content::routes::routes())
         .nest(
             "/api/v1/public/content",

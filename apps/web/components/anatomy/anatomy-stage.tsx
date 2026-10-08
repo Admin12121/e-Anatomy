@@ -34,6 +34,7 @@ type Props = {
   modelOffsetY?: number;
   onCreateAnchor?: (anchor: ZoneAnchor) => void;
   onReady?: () => void;
+  onError?: (message: string) => void;
   onZoneSelect?: (zoneId: string) => void;
   overlay?: (hoveredLayer: HighlightableLayerId | null) => ReactNode;
   previewLayer?: HighlightableLayerId | null;
@@ -66,6 +67,7 @@ export function AnatomyStage({
   surfaceTone = "dark",
   className,
   onReady,
+  onError,
   onZoneSelect,
   overlay,
   selectedZoneId,
@@ -74,6 +76,7 @@ export function AnatomyStage({
   mobilePanelOffset = false,
   zones = [],
   loadingFallback,
+  previewLayer,
   modelZoom = 1,
   cameraTargetY = 0.86,
 }: Props) {
@@ -85,9 +88,11 @@ export function AnatomyStage({
   const [hovered, setHovered] = useState<number | null>(null);
   const selectedIndex = useMemo(() => {
     const zone = zones.find((item) => item.id === selectedZoneId);
-    if (!zone) return -1;
+    if (!zone) return previewLayer === "brain" ? 0 : previewLayer === "lungs" || previewLayer === "heartKidney" ? 2 : previewLayer === "digestive" ? 3 : -1;
     return FIXED_REGIONS.findIndex((region) => region.slug === (zone.slug || zone.name.toLowerCase().replace(/\s*&\s*|\s+|\//g, "-")));
-  }, [selectedZoneId, zones]);
+  }, [selectedZoneId, zones, previewLayer]);
+
+  useEffect(() => { if (error) onError?.(error); }, [error, onError]);
 
   useEffect(() => {
     let active = true;
@@ -117,7 +122,7 @@ export function AnatomyStage({
       )}
       {hovered !== null && <span className="sr-only" aria-live="polite">{FIXED_REGIONS[hovered]?.name}</span>}
       {!ready && !error && <div className="pointer-events-none absolute inset-x-0 bottom-14 z-10 mx-auto w-fit rounded-lg bg-black/65 p-3 text-center text-xs text-white/85" role="status">
-        {loadingFallback ?? <>Loading Human Atlas anatomy… {progress}%</>}
+        {loadingFallback === undefined ? <>Loading Human Atlas anatomy… {progress}%</> : loadingFallback}
       </div>}
       {error && <div role="alert" className="absolute inset-x-4 top-1/2 z-20 mx-auto max-w-sm rounded-xl bg-red-950 p-4 text-sm text-white">
         <p>{error}</p><button className="mt-2 underline" type="button" onClick={() => { setError(null); setProgress(0); setAtlas(null); sharedAtlas = undefined; void preloadAnatomyStageAssets().then(setAtlas).catch((err: unknown) => setError(String(err))); }}>Retry</button>

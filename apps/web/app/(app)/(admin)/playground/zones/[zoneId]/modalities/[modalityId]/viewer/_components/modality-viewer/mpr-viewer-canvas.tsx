@@ -138,8 +138,16 @@ export function MprViewerCanvas({
     Math.floor(spec.volume.dimensions[2] / 2),
   ]);
   const [activeEditPlane, setActiveEditPlane] = useState<MprPlane>("axial");
+  const [syncedDimensions, setSyncedDimensions] = useState(spec.volume.dimensions);
+  const [syncedActive, setSyncedActive] = useState<{
+    assetId: string | null;
+    assetsById: typeof assetsById;
+    planes: typeof spec.planes;
+    dimensions: typeof spec.volume.dimensions;
+  } | null>(null);
 
-  useEffect(() => {
+  if (syncedDimensions !== spec.volume.dimensions) {
+    setSyncedDimensions(spec.volume.dimensions);
     const [nx, ny, nz] = spec.volume.dimensions;
     setCursor((current) => {
       const next: MprCursor = [
@@ -149,9 +157,24 @@ export function MprViewerCanvas({
       ];
       return sameCursor(current, next) ? current : next;
     });
-  }, [spec.volume.dimensions]);
+  }
 
-  useEffect(() => {
+  if (
+    syncedActive?.assetId !== activeAssetId ||
+    syncedActive.assetsById !== assetsById ||
+    syncedActive.planes !== spec.planes ||
+    syncedActive.dimensions !== spec.volume.dimensions
+  ) {
+    setSyncedActive({
+      assetId: activeAssetId,
+      assetsById,
+      planes: spec.planes,
+      dimensions: spec.volume.dimensions,
+    });
+    syncCursorToActiveAsset();
+  }
+
+  function syncCursorToActiveAsset() {
     if (!activeAssetId) return;
 
     for (const plane of MPR_PLANES) {
@@ -174,7 +197,7 @@ export function MprViewerCanvas({
       setActiveEditPlane((current) => (current === plane ? current : plane));
       break;
     }
-  }, [activeAssetId, assetsById, spec.planes, spec.volume.dimensions]);
+  }
 
   const assetIdForPlane = (plane: MprPlane, nextCursor = cursor) => {
     const selection = findNearestPlaneAsset(
@@ -664,21 +687,19 @@ function useViewportImage(
       ? loaded.image
       : cachedForRequestedUrl;
 
-  useEffect(() => {
-    if (!imageUrl) {
-      setLoaded(null);
-      return;
-    }
+  // Hold cache hits in state so a later LRU eviction cannot blank the viewport.
+  if (!imageUrl && loaded) {
+    setLoaded(null);
+  } else if (
+    imageUrl &&
+    cachedForRequestedUrl &&
+    (loaded?.url !== imageUrl || loaded.image !== cachedForRequestedUrl)
+  ) {
+    setLoaded({ image: cachedForRequestedUrl, url: imageUrl });
+  }
 
-    const cached = getCachedViewportImage(imageUrl);
-    if (cached) {
-      setLoaded((current) =>
-        current?.url === imageUrl && current.image === cached
-          ? current
-          : { image: cached, url: imageUrl },
-      );
-      return;
-    }
+  useEffect(() => {
+    if (!imageUrl || viewportImageCache.has(imageUrl)) return;
 
     let cancelled = false;
     void loadViewportImage(imageUrl, priority).then((image) => {

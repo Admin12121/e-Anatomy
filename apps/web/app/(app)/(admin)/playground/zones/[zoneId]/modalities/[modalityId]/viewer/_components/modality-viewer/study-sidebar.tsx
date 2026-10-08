@@ -478,6 +478,15 @@ export function StructureDrawer({
   );
 }
 
+function isRichTextJson(content: string) {
+  try {
+    return Array.isArray(JSON.parse(content));
+  } catch {
+    // Existing descriptions remain Markdown.
+    return false;
+  }
+}
+
 function MarkdownContent({
   className,
   content,
@@ -485,11 +494,9 @@ function MarkdownContent({
   className?: string;
   content: string;
 }) {
-  try {
-    if (Array.isArray(JSON.parse(content))) {
-      return <ProjectRichTextViewer value={content} className={className} />;
-    }
-  } catch { /* Existing descriptions remain Markdown. */ }
+  if (isRichTextJson(content)) {
+    return <ProjectRichTextViewer value={content} className={className} />;
+  }
   return (
     <div
       className={cn(
