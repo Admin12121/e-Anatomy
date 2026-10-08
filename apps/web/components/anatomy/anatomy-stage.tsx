@@ -18,7 +18,7 @@ export const FIXED_REGIONS = [
   { slug: "abdomen-pelvis", name: "Abdomen & Pelvis" },
   { slug: "upper-limbs", name: "Upper Limbs" },
   { slug: "lower-limbs", name: "Lower Limbs" },
-  { slug: "backbone", name: "Backbone" },
+  { slug: "backbone", name: "Spine" },
 ] as const;
 
 type Props = {
@@ -77,7 +77,7 @@ export function AnatomyStage({
   zones = [],
   loadingFallback,
   previewLayer,
-  modelZoom = 1,
+  modelZoom = 1.12,
   cameraTargetY = 0.86,
 }: Props) {
   const [atlas, setAtlas] = useState<Atlas | null>(null);
@@ -128,7 +128,7 @@ export function AnatomyStage({
         <p>{error}</p><button className="mt-2 underline" type="button" onClick={() => { setError(null); setProgress(0); setAtlas(null); sharedAtlas = undefined; void preloadAnatomyStageAssets().then(setAtlas).catch((err: unknown) => setError(String(err))); }}>Retry</button>
       </div>}
       {showPartsToggle && (
-        <div className={cn("absolute left-4 z-20 max-h-[min(82svh,40rem)] max-w-[calc(100vw-2rem)] text-white md:bottom-5 md:left-6", mobilePanelOffset ? "bottom-[calc(40svh+1.5rem)]" : "bottom-5")}>
+        <div className={cn("absolute left-4 z-20 flex max-h-[min(82svh,40rem)] max-w-[calc(100vw-2rem)] flex-col items-start text-left text-white md:bottom-5 md:left-6", mobilePanelOffset ? "bottom-[calc(40svh+1.5rem)]" : "bottom-5")}>
           {partsOpen && <div className="mb-2 flex w-64 max-h-[min(78svh,36rem)] min-h-0 flex-col rounded-xl border border-white/15 bg-[#171717]/95 p-3 shadow-2xl backdrop-blur-md" aria-label="Anatomical systems">
             <div className="mb-3 flex items-center justify-between text-xs font-semibold uppercase tracking-widest"><span>Body parts</span><span className="text-white/50">{SYSTEMS.length}</span></div>
             <div className="mb-3 flex flex-wrap gap-1">
@@ -146,10 +146,7 @@ export function AnatomyStage({
             </label>)}
             </div>
           </div>}
-          <div className="flex gap-2">
-            <button type="button" aria-expanded={partsOpen} onClick={() => setPartsOpen(!partsOpen)} className="rounded-lg border border-white/20 bg-[#171717]/90 px-4 py-2 text-xs shadow-lg backdrop-blur-md hover:bg-[#333]">Parts {partsOpen ? "−" : "+"}</button>
-            <span className="self-center text-[11px] text-white/60" aria-label="Drag the anatomy model to rotate it">Drag model to rotate</span>
-          </div>
+          <button type="button" aria-expanded={partsOpen} onClick={() => setPartsOpen(!partsOpen)} className="rounded-lg border border-white/20 bg-[#171717]/90 px-4 py-2 text-xs shadow-lg backdrop-blur-md hover:bg-[#333]">Parts {partsOpen ? "−" : "+"}</button>
         </div>
       )}
       {overlay?.(null)}

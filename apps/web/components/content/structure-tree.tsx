@@ -68,7 +68,12 @@ export function StructureTree({
 }) {
   const searchId = useId();
   const [search, setSearch] = useState("");
+  // Explicit open/closed choices; without one, the current family and every
+  // search match start open.
+  const [openChoice, setOpenChoice] = useState<Record<string, boolean>>({});
   const query = search.trim().toLowerCase();
+  const setTopicOpen = (topicId: string, open: boolean) =>
+    setOpenChoice((choices) => ({ ...choices, [topicId]: open }));
   const matches = (name: string) => name.toLowerCase().includes(query);
   const filtered = topics.filter(
     (topic) =>
@@ -89,21 +94,37 @@ export function StructureTree({
         persistOpen={false}
         className="min-h-0! flex-col gap-5 bg-transparent!"
       >
-        <div className={collapsed ? "hidden" : "relative mb-2"}>
-          <label className="sr-only" htmlFor={searchId}>
-            Search anatomical structures
-          </label>
-          <Input
-            id={searchId}
-            type="search"
-            placeholder="Search structures…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="h-8 rounded-sm border-0 bg-[#f2f2f2]! px-3 pr-9 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm text-[#000061]! uppercase shadow-none placeholder:text-[#000061]/70 [font-variation-settings:'wdth'_50] focus-visible:ring-2 focus-visible:ring-[#f2f2f2]/60"
-          />
-          <SearchIcon
+        {/* Stays put while the list scrolls under it through a blurred fade. */}
+        <div
+          className={
+            collapsed
+              ? "hidden"
+              : "sticky top-0 z-10 mb-2 bg-[var(--structure-nav-bg,#000061)]"
+          }
+        >
+          <div className="relative">
+            <label className="sr-only" htmlFor={searchId}>
+              Search anatomical structures
+            </label>
+            <Input
+              id={searchId}
+              type="search"
+              placeholder="Search structures…"
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setOpenChoice({});
+              }}
+              className="h-8 rounded-sm border-0 bg-[#f2f2f2]! px-3 pr-9 font-['Rules_Variable','Arial_Narrow',sans-serif] text-sm text-[#000061]! uppercase shadow-none placeholder:text-[#000061]/70 [font-variation-settings:'wdth'_50] focus-visible:ring-2 focus-visible:ring-[#f2f2f2]/60"
+            />
+            <SearchIcon
+              aria-hidden="true"
+              className="pointer-events-none absolute right-3 top-2 size-4 text-[#000061]"
+            />
+          </div>
+          <div
             aria-hidden="true"
-            className="pointer-events-none absolute right-3 top-2 size-4 text-[#000061]"
+            className="pointer-events-none absolute inset-x-0 top-full h-10 bg-linear-to-b from-[var(--structure-nav-bg,#000061)] to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_bottom,#000,transparent)]"
           />
         </div>
         {zones.map((zone) => (
@@ -129,27 +150,39 @@ export function StructureTree({
                     query && !matches(topic.name) && !matches(topic.zoneName)
                       ? labels.filter((label) => matches(label.title))
                       : labels;
+                  const open =
+                    openChoice[topic.id] ?? (current || Boolean(query));
+                  const onOwnPage = current && !article.structureId;
                   return (
                     <Collapsible
-                      key={`${topic.id}-${current}-${Boolean(query)}`}
+                      key={topic.id}
                       asChild
-                      defaultOpen={current || Boolean(query)}
+                      open={open}
+                      onOpenChange={(next) => setTopicOpen(topic.id, next)}
                       className="group/collapsible"
                     >
                       <SidebarMenuItem>
                         <SidebarMenuButton
                           asChild
-                          isActive={current && !article.structureId}
+                          isActive={onOwnPage}
                           className={`${styles.navLink} h-8 gap-4 text-sm`}
                         >
                           <Link
                             href={base}
-                            aria-current={
-                              current && !article.structureId
-                                ? "page"
-                                : undefined
-                            }
+                            aria-current={onOwnPage ? "page" : undefined}
+                            aria-expanded={visible.length ? open : undefined}
                             title={topic.name}
+                            onClick={(event) => {
+                              if (collapsed || !visible.length) return;
+                              // Already on this page: the title toggles its
+                              // labels. Elsewhere it navigates and opens them.
+                              if (onOwnPage) {
+                                event.preventDefault();
+                                setTopicOpen(topic.id, !open);
+                              } else {
+                                setTopicOpen(topic.id, true);
+                              }
+                            }}
                           >
                             <Thumbnail src={topic.thumbnailUrl} />
                             <span>{topic.name}</span>

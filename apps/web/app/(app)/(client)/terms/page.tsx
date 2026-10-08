@@ -4,8 +4,9 @@ import { loadLegalMdx } from "../_legal/load-legal-mdx";
 import { PortalLegalShell } from "../_legal/portal-legal-shell";
 
 export const metadata: Metadata = {
-  title: "Terms of Service",
-  description: "Terms of Service",
+  title: "Terms & Conditions",
+  description:
+    "VoxelAnatomy Terms & Conditions: educational use, accuracy, user responsibilities and intellectual property.",
 };
 
 export default async function TermsPage() {
@@ -15,7 +16,7 @@ export default async function TermsPage() {
     <PortalLegalShell
       html={content.html}
       kind="terms"
-      title={content.title || "Terms of Service"}
+      title={content.title || "Terms & Conditions"}
       updated={content.updated}
     />
   );

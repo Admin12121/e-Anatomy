@@ -287,6 +287,17 @@ export function PortalLegalShell({
     const main = mainRef.current;
     if (!main || event.deltaY === 0) return;
 
+    // The structures list scrolls on its own; forward only once it can't.
+    const list = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-sidebar-scroll]",
+    );
+    if (list && list.scrollHeight > list.clientHeight) {
+      const canScrollUp = list.scrollTop > 0;
+      const canScrollDown =
+        list.scrollTop + list.clientHeight < list.scrollHeight - 1;
+      if (event.deltaY < 0 ? canScrollUp : canScrollDown) return;
+    }
+
     // The sidebar is intentionally fixed. Forward wheel input from it to the
     // legal content so the page still feels scrollable no matter where the
     // pointer is, while only the right-hand content actually moves.
@@ -449,7 +460,13 @@ export function PortalLegalShell({
                     workspace ? "Anatomical structures" : "Legal pages"
                   }
                   data-lenis-prevent=""
-                  className="flex min-h-0 flex-1 flex-col gap-[7px] overflow-hidden px-5 pb-5 pt-2.5"
+                  data-sidebar-scroll={workspace ? "" : undefined}
+                  className={cn(
+                    "flex min-h-0 flex-1 flex-col gap-[7px] px-5 pb-5 pt-2.5 [--structure-nav-bg:#000061] dark:[--structure-nav-bg:#000030]",
+                    workspace
+                      ? "overflow-y-auto overflow-x-hidden overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                      : "overflow-hidden",
+                  )}
                 >
                   {workspace ? (
                     workspace.navigation(collapsed)
@@ -617,7 +634,7 @@ export function PortalLegalShell({
               <div
                 data-lenis-prevent=""
                 className={cn(
-                  "flex min-h-0 flex-1 flex-col gap-[calc(7*var(--u))] overflow-y-auto overscroll-contain px-[5px] pb-[calc(20*var(--u))] pt-[calc(11*var(--u))] transition-opacity duration-200",
+                  "flex min-h-0 flex-1 flex-col gap-[calc(7*var(--u))] overflow-y-auto overscroll-contain px-[5px] pb-[calc(20*var(--u))] pt-[calc(11*var(--u))] transition-opacity duration-200 [--structure-nav-bg:#000057]",
                   mobileNavOpen ? "opacity-100 delay-100" : "opacity-0",
                 )}
               >

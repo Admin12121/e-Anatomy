@@ -6,11 +6,11 @@ import {mergeGeometries} from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {decodeModelResponse} from './model-download';
 import {SYSTEMS,type Atlas,type SystemId} from './anatomy';
 
-type BodyRegion='Head'|'Neck'|'Chest'|'Abdomen & Pelvis'|'Upper Limbs'|'Lower Limbs'|'Backbone';
+type BodyRegion='Head'|'Neck'|'Chest'|'Abdomen & Pelvis'|'Upper Limbs'|'Lower Limbs'|'Spine';
 interface Props {atlas:Atlas;visible:SystemId[];selectedRegion:number;modelZoom?:number;cameraTargetY?:number;onRegionClick?:(region:number)=>void;onRegionHover?:(region:number|null)=>void;onReady?:()=>void;onProgress:(n:number)=>void;onError:(s:string)=>void;transparent?:boolean}
 interface SceneController {setVisible:(visible:SystemId[])=>void;setSelected:(region:number)=>void}
 
-const REGIONS:BodyRegion[]=['Head','Neck','Chest','Abdomen & Pelvis','Upper Limbs','Lower Limbs','Backbone'];
+const REGIONS:BodyRegion[]=['Head','Neck','Chest','Abdomen & Pelvis','Upper Limbs','Lower Limbs','Spine'];
 const regionId=(region:BodyRegion)=>REGIONS.indexOf(region);
 const partRegion=(part:Atlas['parts'][number],positions:Float32Array)=>{
  if(typeof part.region==='number')return part.region;

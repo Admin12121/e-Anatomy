@@ -2,11 +2,12 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CompactFooter } from "./footer";
 
-test("structures footer contains only the existing social links, credit and legal links", () => {
+test("structures footer contains only the X icon, credit and legal links", () => {
   const html = renderToStaticMarkup(<CompactFooter />);
-  for (const label of ["Discord", "GitHub", "X"]) {
-    expect(html).toContain(`aria-label="${label}"`);
-  }
+  expect(html).toContain('aria-label="X"');
+  expect(html).not.toContain('aria-label="Discord"');
+  expect(html).not.toContain('aria-label="GitHub"');
+  expect(html).not.toContain("NousResearch");
   expect(html).toContain("Designed and developed by");
   expect(html).toContain("Admin12121");
   expect(html).toContain('href="/terms"');

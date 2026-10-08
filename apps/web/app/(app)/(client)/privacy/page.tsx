@@ -5,7 +5,8 @@ import { PortalLegalShell } from "../_legal/portal-legal-shell";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
-  description: "Privacy Policy",
+  description:
+    "How VoxelAnatomy collects, uses and protects information, and your data protection rights.",
 };
 
 export default async function PrivacyPage() {

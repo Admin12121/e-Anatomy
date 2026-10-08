@@ -18,4 +18,5 @@ export const SYSTEMS:{id:SystemId;name:string;color:string}[]=[
 ];
 export interface Part {region?:number;system:SystemId;chunk:number;positions:number;normals:number;indices:number;vertexCount:number;indexCount:number;positionBytes?:2|4;normalBytes?:1|2;indexBytes?:2|4;positionMin?:number[];positionScale?:number[];bounds?:[number[],number[]]}
 export interface Atlas {version:string;sex?:'male';source?:string;scope?:string;parts:Part[];chunks:{url:string;bytes:number;gzip?:string;gzipBytes?:number}[];triangles:number;systemCounts?:Partial<Record<SystemId,number>>}
-export const DEFAULT_VISIBLE:SystemId[]=['cardiac','sensory','skeletal','muscular','arterial','venous','nervous','respiratory','digestive','urinary','lymphatic','endocrine','reproductive','connective'];
+// Every system except muscles starts visible.
+export const DEFAULT_VISIBLE:SystemId[]=['cardiac','sensory','skeletal','arterial','venous','nervous','respiratory','digestive','urinary','lymphatic','endocrine','reproductive','integumentary','connective'];

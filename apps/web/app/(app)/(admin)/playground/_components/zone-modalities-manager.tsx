@@ -67,7 +67,7 @@ import {
 } from "@/components/ui/table";
 import Link from "next/link";
 import { Spinner } from "@/components/ui/spinner";
-import { LibraryPicker } from "@/components/image-library/library-picker";
+import { LibraryPanel } from "@/components/image-library/library-picker";
 import { readLibraryResponse, type LibraryStudy } from "@/lib/image-library/types";
 
 const EMPTY_MODALITY_FAMILIES: ZoneModalityFamily[] = [];
@@ -819,11 +819,29 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
   }
 
   function handleCreateModalityTypeChange(value: ModalityType) {
-    setSelectedLibraryStudy(null);
+    if (selectedLibraryStudy && selectedLibraryStudy.modalityType !== value) {
+      setSelectedLibraryStudy(null);
+      setCreateSourceMode("upload");
+    }
     setCreateModalityTypeOverride(value);
 
     if (!isMriModalityType(value)) {
       setCreateWeightingCode("");
+    }
+  }
+
+  // A library pick replaces any dropped files and takes the study's type.
+  function handleLibrarySelect(study: LibraryStudy) {
+    if (selectedSourceFiles.length > 0) {
+      clearSelectedSource({ preserveModalityType: true });
+    }
+    setCreateSourceMode("library");
+    setSelectedLibraryStudy(study);
+    if (createContext.kind !== "variant") {
+      setCreateModalityTypeOverride(study.modalityType);
+      if (!isMriModalityType(study.modalityType)) {
+        setCreateWeightingCode("");
+      }
     }
   }
 
@@ -848,6 +866,8 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
       return;
     }
 
+    setCreateSourceMode("upload");
+    setSelectedLibraryStudy(null);
     setSelectedSourceFiles(files);
     const sourceLabel = getSelectedSourceLabel(files);
     setSelectedSourceLabel(sourceLabel);
@@ -1304,18 +1324,13 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
             />
 
             <FieldGroup className="gap-4">
-              <div className="flex gap-2" role="group" aria-label="Image source">
-                <Button type="button" variant={createSourceMode === "upload" ? "default" : "outline"} aria-pressed={createSourceMode === "upload"} disabled={isPending} onClick={() => setCreateSourceMode("upload")}>Upload DICOM</Button>
-                <Button type="button" variant={createSourceMode === "library" ? "default" : "outline"} aria-pressed={createSourceMode === "library"} disabled={isPending} onClick={() => setCreateSourceMode("library")}>Select from library</Button>
-              </div>
-              {createSourceMode === "library" ? (
-                <LibraryPicker modalityType={createModalityTypeOverride} value={selectedLibraryStudy} onChange={setSelectedLibraryStudy} disabled={isPending} />
-              ) : (
               <Field>
                 <FieldLabel>Choose source study</FieldLabel>
+                <div className="grid grid-cols-2 gap-3">
                 <div className="relative">
                   <div
-                    className="relative flex min-h-52 flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-input p-4 transition-colors hover:bg-accent/50 data-[dragging=true]:bg-accent/50"
+                    className="relative flex h-60 flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-input p-2 transition-colors hover:bg-accent/50 data-[active=true]:border-primary data-[dragging=true]:bg-accent/50"
+                    data-active={(createSourceMode === "upload" && selectedSourceFiles.length > 0) || undefined}
                     data-dragging={isDragging || undefined}
                     onClick={openFileDialog}
                     onDragEnter={handleDragEnter}
@@ -1336,7 +1351,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                         />
                       </div>
                     ) : (
-                      <div className="relative z-10 flex flex-col items-center justify-center px-4 py-3 text-center">
+                      <div className="relative z-10 flex min-w-0 flex-col items-center justify-center px-2 py-3 text-center">
                         <div
                           aria-hidden="true"
                           className="mb-2 flex size-11 shrink-0 items-center justify-center rounded-full border bg-background"
@@ -1344,13 +1359,13 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                           <ImageUpIcon className="size-4 opacity-60" />
                         </div>
                         <p className="mb-1.5 text-sm font-medium">
-                          Drop study files here or click to browse
+                          Drop files or click to browse
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          ZIP packages or DICOM files, max size: 1024 MB
+                          ZIP or DICOM, up to 1024 MB
                         </p>
                         {selectedSourceLabel ? (
-                          <p className="mt-2 max-w-xs truncate text-xs text-muted-foreground">
+                          <p className="mt-2 max-w-full truncate text-xs text-muted-foreground">
                             {selectedSourceLabel}
                           </p>
                         ) : null}
@@ -1406,6 +1421,14 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                     ) : null}
                   </div>
                 </div>
+                <LibraryPanel
+                  className="h-60"
+                  disabled={isPending}
+                  modalityType={createContext.kind === "variant" ? createModalityTypeOverride : undefined}
+                  onSelect={handleLibrarySelect}
+                  value={createSourceMode === "library" ? selectedLibraryStudy : null}
+                />
+                </div>
 
                 {uploadErrors.length > 0 ? (
                   <div
@@ -1417,7 +1440,6 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                   </div>
                 ) : null}
               </Field>
-              )}
 
               <div className="grid gap-3 md:grid-cols-2">
                 <Field>

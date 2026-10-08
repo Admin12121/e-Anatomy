@@ -17,6 +17,7 @@ import { SplitText } from "gsap/SplitText";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useLenis } from "lenis/react";
 import { ArrowLeftIcon, ArrowUpRightIcon } from "lucide-react";
 import {
   markHomePreloaderSeen,
@@ -267,6 +268,20 @@ export default function Page() {
       markHomePreloaderSeen();
     }
   }, [preloaderMode]);
+
+  const lenis = useLenis();
+  useEffect(() => {
+    const page = pageRef.current;
+    if (!page || !lenis) {
+      return;
+    }
+
+    // <html> is h-full, so Lenis never sees this page grow by itself. Without
+    // this, View All stops at the atlas height and the footer is unreachable.
+    const observer = new ResizeObserver(() => lenis.resize());
+    observer.observe(page);
+    return () => observer.disconnect();
+  }, [lenis]);
 
   const {
     data: zonesResponse,
@@ -809,6 +824,32 @@ export default function Page() {
     ? "hero"
     : "relative z-10 h-[100svh] w-full overflow-hidden bg-black text-white";
 
+  // Rendered on the stage in atlas view and above the catalogue in View All.
+  const brandHeader = (
+    <>
+      <span className="absolute md:w-67.5 w-50 inset-x-4 z-20 md:inset-x-auto top-1 md:top-5 left-1/2 transform -translate-x-1/2 md:translate-x-0 md:left-5 md:bottom-auto h-14 flex items-center">
+        <div className="flex size-14 items-center justify-center rounded-md">
+          <Image
+            src="/logo.webp"
+            alt="Anatomy"
+            height={35}
+            width={35}
+            className="rounded-md dark:rounded-none"
+          />
+        </div>
+        <ShinyText
+          text="Voxel Anatomy"
+          duration={2}
+          delay={1}
+          className="text-xl md:text-3xl"
+        />
+      </span>
+      <PublicAccountMenu
+        className="absolute right-4 top-4 z-30 md:right-5 md:top-5"
+      />
+    </>
+  );
+
   return (
     <div
       ref={pageRef}
@@ -950,6 +991,18 @@ export default function Page() {
             : ""
         }
       >
+        {catalogLayoutActive ? (
+          // Above the catalogue (z-10): cards blur and fade out under the
+          // header instead of running over it. Ends with the catalogue, so the
+          // footer reveal below is never covered.
+          <div className="sticky top-0 z-30 h-0">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-linear-to-b from-[#141414] via-[#141414]/80 to-transparent backdrop-blur-md [mask-image:linear-gradient(to_bottom,#000_50%,transparent)] md:h-32"
+            />
+            {brandHeader}
+          </div>
+        ) : null}
         <section
           className={
             catalogLayoutActive
@@ -981,26 +1034,7 @@ export default function Page() {
                 />
               </div>
 
-              <span className="absolute md:w-67.5 w-50 inset-x-4 z-20 md:inset-x-auto top-1 md:top-5 left-1/2 transform -translate-x-1/2 md:translate-x-0 md:left-5 md:bottom-auto h-14 flex items-center">
-                <div className="flex size-14 items-center justify-center rounded-md">
-                  <Image
-                    src="/logo.webp"
-                    alt="Anatomy"
-                    height={35}
-                    width={35}
-                    className="rounded-md dark:rounded-none"
-                  />
-                </div>
-                <ShinyText
-                  text="Voxel Anatomy"
-                  duration={2}
-                  delay={1}
-                  className="text-xl md:text-3xl"
-                />
-              </span>
-              <PublicAccountMenu
-                className="absolute right-4 top-4 z-30 md:right-5 md:top-5"
-              />
+              {catalogLayoutActive ? null : brandHeader}
 
             <AnimatePresence>
               {atlasUiVisible && selectedZone && (isModalitiesLoading || isModalitiesError || selectedZoneModalities.length > 0) ? (
@@ -1327,17 +1361,8 @@ export default function Page() {
         ) : null}
       </div>
 
-      {/* In catalogue mode, give the original reveal footer one viewport of
-          runway. Its own -100dvh margin cancels this layout height, so the
-          footer keeps the exact original overlap/reveal math while remaining
-          fully reachable below the long catalogue. */}
-      {catalogLayoutActive ? (
-        <div
-          aria-hidden="true"
-          className="relative z-10 h-[100dvh] bg-[#141414]"
-          data-footer-reveal-runway
-        />
-      ) : null}
+      {/* The footer's -100dvh margin tucks it under the last screen of the
+          atlas or catalogue (both z-10), which then slides up to reveal it. */}
       <Footer />
     </div>
   );
