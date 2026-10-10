@@ -560,7 +560,6 @@ fn convert_package(
     let mut slices = Vec::new();
     let mut identities = BTreeSet::new();
     let mut mpr_sources = Vec::new();
-    let mut mpr_series = BTreeSet::new();
     let mut input_frames = 0usize;
     for file in &files {
         if file.original_file_name.eq_ignore_ascii_case("DICOMDIR") {
@@ -597,15 +596,12 @@ fn convert_package(
             }
         }
         if kind == "mpr" {
-            mpr_series.insert(series.clone());
             for frame in 0..frame_count {
-                let spatial =
-                    read_mpr_source_slice(&object, file, frame as u32).ok_or_else(|| {
-                        AppError::bad_request(
-                            "Every MPR frame needs valid position, orientation and spacing",
-                        )
-                    })?;
-                mpr_sources.push(spatial);
+                // Frames without position data (reports, captures) are not part
+                // of any 3D stack; the reconstruction picks the largest stack.
+                if let Some(spatial) = read_mpr_source_slice(&object, file, frame as u32) {
+                    mpr_sources.push(spatial);
+                }
             }
             continue;
         }
@@ -686,19 +682,9 @@ fn convert_package(
         }
     }
     let volume = if kind == "mpr" {
-        if mpr_series.len() != 1 {
-            return Err(AppError::bad_request(
-                "MPR requires one spatial series. Split a multi-series ZIP into separate library studies.",
-            ));
-        }
-        let expected_count = mpr_sources.len();
-        let validated = validate_and_sort_mpr_series(mpr_sources)
-            .map_err(|e| AppError::bad_request(e.to_string()))?;
-        if validated.len() != expected_count {
-            return Err(AppError::bad_request(
-                "MPR series contains duplicate positions or inconsistent geometry; no slices were dropped",
-            ));
-        }
+        // Fail before the slow reconstruction when nothing can be rebuilt.
+        select_mpr_stack(mpr_sources)
+            .map_err(|e| AppError::bad_request(format!("Unable to reconstruct MPR volume: {e}")))?;
         let (sender, mut receiver) = mpsc::unbounded_channel();
         // Drain progress while the CPU-bound existing reconstruction runs.
         let progress_task = std::thread::spawn(move || while receiver.blocking_recv().is_some() {});
@@ -950,20 +936,18 @@ fn write_library_atlases(output: &Path, manifest: &LibraryManifest) -> Result<()
     for (index, slices) in manifest.slices.chunks(chunk_size).enumerate() {
         let atlas_root = output.join("atlases").join(index.to_string());
         std::fs::create_dir_all(&atlas_root).map_err(io_error)?;
-        let images = slices
+        let cells = slices
             .iter()
-            .map(|slice| {
-                let image = image::open(output.join("png").join(&slice.filename))
-                    .map_err(|e| AppError::internal(e.to_string()))?
-                    .to_rgba8();
-                Ok(AtlasSourceSlice {
-                    asset_id: slice.id.to_string(),
-                    image,
-                })
+            .map(|slice| AtlasSlice {
+                asset_id: slice.id.to_string(),
+                width: slice.width,
+                height: slice.height,
             })
-            .collect::<Result<Vec<_>, AppError>>()?;
-        pages
-            .extend(write_atlas_pages(output, &atlas_root, images, false).map_err(AppError::from)?);
+            .collect::<Vec<_>>();
+        let load = |position: usize| -> anyhow::Result<RgbaImage> {
+            Ok(image::open(output.join("png").join(&slices[position].filename))?.to_rgba8())
+        };
+        pages.extend(write_atlas_pages(output, &atlas_root, &cells, load).map_err(AppError::from)?);
     }
     std::fs::write(
         output.join("library-atlases.json"),

@@ -4,7 +4,13 @@ mod infrastructure;
 use anyhow::Result;
 use axum::Router;
 use tokio::net::TcpListener;
-use tower_http::trace::TraceLayer;
+use tower_http::{
+    compression::{
+        CompressionLayer,
+        predicate::{DefaultPredicate, NotForContentType, Predicate},
+    },
+    trace::TraceLayer,
+};
 use tracing::{info, warn};
 
 use crate::features::{
@@ -76,6 +82,14 @@ async fn main() -> Result<()> {
         .nest("/api/v1/modules", module_routes())
         .nest("/api/v1/public/playground", public_playground_routes())
         .nest("/api/v1/playground", playground_routes())
+        // Viewer manifests are ~1 MB of JSON. Images and ZIPs are already compressed.
+        .layer(
+            CompressionLayer::new().compress_when(
+                DefaultPredicate::new()
+                    .and(NotForContentType::const_new("application/zip"))
+                    .and(NotForContentType::const_new("application/octet-stream")),
+            ),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -85,6 +99,14 @@ async fn main() -> Result<()> {
         address = %state.config.server.bind_address(),
         "anatomy api listening"
     );
+
+    // Converts studies stored by older releases, after the deploy health
+    // check has had the CPU to itself.
+    let upgrade_service = state.playground_service.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        upgrade_service.upgrade_legacy_media().await;
+    });
 
     axum::serve(listener, app).await?;
 

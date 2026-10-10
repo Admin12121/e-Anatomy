@@ -55,6 +55,7 @@ function buildAtlasThumbnailStyle(
   atlasFrame: ZoneModalityAtlasFrame,
   thumbnailSizePx: number,
   fit: "cover" | "contain" = "cover",
+  pixelAspect = 1,
 ): CSSProperties | null {
   if (
     atlasPage.width <= 0 ||
@@ -66,24 +67,27 @@ function buildAtlasThumbnailStyle(
     return null;
   }
 
+  // Fit the frame at its physical shape; the page is stretched to match.
+  const physicalHeight = atlasFrame.height * pixelAspect;
   const scale =
     fit === "contain"
       ? Math.min(
           thumbnailSizePx / atlasFrame.width,
-          thumbnailSizePx / atlasFrame.height,
+          thumbnailSizePx / physicalHeight,
         )
       : Math.max(
           thumbnailSizePx / atlasFrame.width,
-          thumbnailSizePx / atlasFrame.height,
+          thumbnailSizePx / physicalHeight,
         );
+  const scaleY = scale * pixelAspect;
   const atlasScaledWidth = atlasPage.width * scale;
-  const atlasScaledHeight = atlasPage.height * scale;
+  const atlasScaledHeight = atlasPage.height * scaleY;
   const frameScaledWidth = atlasFrame.width * scale;
-  const frameScaledHeight = atlasFrame.height * scale;
+  const frameScaledHeight = atlasFrame.height * scaleY;
   const offsetX =
     -(atlasFrame.x * scale) - (frameScaledWidth - thumbnailSizePx) / 2;
   const offsetY =
-    -(atlasFrame.y * scale) - (frameScaledHeight - thumbnailSizePx) / 2;
+    -(atlasFrame.y * scaleY) - (frameScaledHeight - thumbnailSizePx) / 2;
 
   return {
     backgroundImage: `url(${atlasPage.imageUrl})`,
@@ -138,6 +142,8 @@ type SliceFilmstripProps = {
   allowTimelineChanges?: boolean;
   timelineControlMode?: "full" | "synchronized-delete";
   thumbnailFit?: "cover" | "contain";
+  /** Pixel height over width for every slice in the strip. */
+  thumbnailPixelAspect?: number;
   lazyAtlasThumbnails?: boolean;
   mobileCompactNavigation?: boolean;
   canDeleteLeftSlices: boolean;
@@ -192,6 +198,7 @@ export function SliceFilmstrip({
   allowTimelineChanges = true,
   timelineControlMode = "full",
   thumbnailFit = "cover",
+  thumbnailPixelAspect = 1,
   lazyAtlasThumbnails = false,
   mobileCompactNavigation = false,
   canDeleteLeftSlices,
@@ -297,6 +304,7 @@ export function SliceFilmstrip({
               atlasFrame,
               thumbnailSizePx,
               thumbnailFit,
+              thumbnailPixelAspect,
             )
           : null;
 
@@ -409,6 +417,7 @@ export function SliceFilmstrip({
       onToggleMultiSelectedAsset,
       sliceEditorScrollerRef,
       thumbnailFit,
+      thumbnailPixelAspect,
     ],
   );
 

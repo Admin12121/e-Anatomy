@@ -12,7 +12,7 @@ use std::{
 use anyhow::Context;
 use dicom::{object::open_file, pixeldata::PixelDecoder};
 use image::{
-    ExtendedColorType, ImageBuffer, ImageEncoder, Rgba, RgbaImage,
+    ExtendedColorType, ImageEncoder, Rgba, RgbaImage,
     codecs::{
         avif::AvifEncoder,
         png::{CompressionType, FilterType, PngEncoder},
@@ -50,6 +50,10 @@ use crate::infrastructure::error::AppError;
 
 #[path = "library.rs"]
 pub mod library;
+#[path = "media_upgrade.rs"]
+mod media_upgrade;
+#[path = "plane_export.rs"]
+mod plane_export;
 
 #[derive(Clone)]
 pub struct PlaygroundService {
@@ -139,6 +143,9 @@ struct MprSourceSlice {
     file_path: PathBuf,
     frame_index: u32,
     series_uid: String,
+    /// Slices that form one 3D stack share this key; see `select_mpr_stack`.
+    stack_key: String,
+    series_label: String,
     frame_of_reference_uid: Option<String>,
     rows: usize,
     columns: usize,
@@ -244,9 +251,13 @@ struct AtlasPageMetadata {
     frames: Vec<AtlasFrameMetadata>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum DerivedAssetBinaryVariant {
-    Image,
+#[derive(Debug)]
+pub struct DerivedAssetFile {
+    pub path: PathBuf,
+    pub mime_type: String,
+    pub etag: String,
+    /// Atlas pages get a new id on every rebuild, so their bytes never change.
+    pub immutable: bool,
 }
 
 const MAX_ACTIVE_MODALITY_INGESTS: i64 = 2;
@@ -255,6 +266,8 @@ const MAX_CONCURRENT_DICOM_DERIVATIONS: usize = 8;
 const AVIF_ENCODER_SPEED: u8 = 8;
 const AVIF_ENCODER_QUALITY: u8 = 80;
 const AVIF_ENCODER_THREADS_PER_IMAGE: usize = 1;
+const ATLAS_AVIF_ENCODER_SPEED: u8 = 10;
+const ATLAS_AVIF_ENCODER_QUALITY: u8 = 90;
 const MAX_ATLAS_PAGE_EDGE: u32 = 4096;
 const MAX_ATLAS_PAGE_COLUMNS: usize = 8;
 const MAX_ATLAS_SLICES_PER_PAGE: usize = 40;
@@ -905,8 +918,20 @@ impl PlaygroundService {
                     &derived_slice_builds,
                 )
                 .await?;
-            let (atlas_pages, atlas_frames) = self
-                .persist_built_atlas_pages(modality_id, ingest_job_id, &user_id, packed_pages)
+            let PersistedAtlas {
+                pages: atlas_pages,
+                frames: atlas_frames,
+                ..
+            } = self
+                .persist_built_atlas_pages(
+                    account_id,
+                    zone_id,
+                    modality_id,
+                    ingest_job_id,
+                    &user_id,
+                    packed_pages,
+                    &[],
+                )
                 .await?;
 
             self.publish_ingest_progress(
@@ -1731,42 +1756,19 @@ impl PlaygroundService {
         let packed_pages = self
             .build_atlas_pages(ingest_job_id, &remaining_assets)
             .await?;
-        let old_atlas_assets = self
-            .repo
-            .list_zone_modality_atlas_assets(&self.pool, account_id, zone_id, modality_id)
-            .await?;
-        let old_atlas_ids = old_atlas_assets
-            .iter()
-            .filter_map(|asset| Uuid::parse_str(&asset.id).ok())
-            .collect::<Vec<_>>();
-
         let requested_count = requested_slice_ids.len();
         let deleted_count = self
-            .repo
-            .delete_zone_modality_assets(
-                &self.pool,
+            .persist_built_atlas_pages(
                 account_id,
                 zone_id,
                 modality_id,
+                ingest_job_id,
+                user_id,
+                packed_pages,
                 &requested_slice_ids,
             )
-            .await? as usize;
-
-        if !old_atlas_ids.is_empty() {
-            self.repo
-                .delete_zone_modality_assets(
-                    &self.pool,
-                    account_id,
-                    zone_id,
-                    modality_id,
-                    &old_atlas_ids,
-                )
-                .await?;
-        }
-
-        let (atlas_pages, atlas_frames) = self
-            .persist_built_atlas_pages(modality_id, ingest_job_id, user_id, packed_pages)
-            .await?;
+            .await?
+            .retired_count;
 
         for plane in ["axial", "coronal", "sagittal"] {
             let mut plane_assets = remaining_assets
@@ -1790,8 +1792,6 @@ impl PlaygroundService {
         }
 
         manifest_json["excludedSlices"] = mpr_excluded_slices_json(&excluded_slices);
-        manifest_json["atlases"] = json!(atlas_pages);
-        manifest_json["atlasFrames"] = json!(atlas_frames);
 
         self.repo
             .upsert_modality_viewer_manifest(
@@ -1947,7 +1947,7 @@ impl PlaygroundService {
             .get_modality_viewer_manifest_payload(&self.pool, modality_id)
             .await?;
         let (viewer_schema_version, viewer_spec) = viewer_manifest_payload
-            .map(|(schema_version, spec)| (Some(schema_version), Some(spec)))
+            .map(|(schema_version, spec)| (Some(schema_version), Some(without_atlas_copy(spec))))
             .unwrap_or((None, None));
         let structure_groups = self
             .repo
@@ -2043,7 +2043,7 @@ impl PlaygroundService {
             .get_modality_viewer_manifest_payload(&self.pool, lookup.modality_id)
             .await?;
         let (viewer_schema_version, viewer_spec) = viewer_manifest_payload
-            .map(|(schema_version, spec)| (Some(schema_version), Some(spec)))
+            .map(|(schema_version, spec)| (Some(schema_version), Some(without_atlas_copy(spec))))
             .unwrap_or((None, None));
         let structure_groups = self
             .repo
@@ -2126,12 +2126,19 @@ impl PlaygroundService {
             })
             .ok_or_else(|| AppError::not_found("Ingest job was not found"))?;
 
-        self.delete_existing_atlas_assets(account_id, zone_id, modality_id)
-            .await?;
-
         let packed_pages = self.build_atlas_pages(ingest_job_id, source_assets).await?;
-        self.persist_built_atlas_pages(modality_id, ingest_job_id, user_id, packed_pages)
-            .await
+        let persisted = self
+            .persist_built_atlas_pages(
+                account_id,
+                zone_id,
+                modality_id,
+                ingest_job_id,
+                user_id,
+                packed_pages,
+                &[],
+            )
+            .await?;
+        Ok((persisted.pages, persisted.frames))
     }
 
     pub async fn create_viewer_structure_group(
@@ -2606,12 +2613,11 @@ impl PlaygroundService {
         }
     }
 
-    pub async fn get_derived_asset_binary(
+    pub async fn derived_asset_file(
         &self,
         account_id: Uuid,
         asset_id: Uuid,
-        variant: DerivedAssetBinaryVariant,
-    ) -> Result<(Vec<u8>, String), AppError> {
+    ) -> Result<DerivedAssetFile, AppError> {
         let asset = self
             .repo
             .get_zone_modality_asset_storage(&self.pool, account_id, asset_id)
@@ -2626,29 +2632,37 @@ impl PlaygroundService {
             .mime_type
             .clone()
             .unwrap_or_else(|| infer_derived_mime_type(storage_key).to_string());
-
-        let _ = variant;
-        let binary_path = self.storage_root.join(storage_key);
-        let bytes = fs::read(binary_path)
+        let path = self.storage_root.join(storage_key);
+        let metadata = fs::metadata(&path)
             .await
             .map_err(|_| AppError::not_found("Derived asset file is unavailable"))?;
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |elapsed| elapsed.as_nanos());
 
-        Ok((bytes, mime_type))
+        Ok(DerivedAssetFile {
+            path,
+            mime_type,
+            // Slice files are rewritten in place by edits, so the tag follows
+            // the file itself rather than a stored checksum.
+            etag: format!("\"{modified:x}-{:x}\"", metadata.len()),
+            immutable: asset.asset_kind == "atlas",
+        })
     }
 
-    pub async fn get_public_derived_asset_binary(
+    pub async fn public_derived_asset_file(
         &self,
         asset_id: Uuid,
-        variant: DerivedAssetBinaryVariant,
-    ) -> Result<(Vec<u8>, String), AppError> {
+    ) -> Result<DerivedAssetFile, AppError> {
         let account_id = self
             .repo
             .get_public_zone_modality_asset_account_id(&self.pool, asset_id)
             .await?
             .ok_or_else(|| AppError::not_found("Derived asset was not found"))?;
 
-        self.get_derived_asset_binary(account_id, asset_id, variant)
-            .await
+        self.derived_asset_file(account_id, asset_id).await
     }
 
     async fn stage_study_files(
@@ -2724,6 +2738,10 @@ impl PlaygroundService {
         let mut prepared_files = Vec::with_capacity(files.len());
 
         for upload in files {
+            if !has_dicom_preamble(&upload.temp_path) {
+                let _ = fs::remove_file(&upload.temp_path).await;
+                continue;
+            }
             let relative_path = upload
                 .relative_path
                 .clone()
@@ -2768,6 +2786,9 @@ impl PlaygroundService {
             });
         }
 
+        if prepared_files.is_empty() {
+            return Err(AppError::bad_request(NO_DICOM_FILES));
+        }
         Ok((source_assets, prepared_files))
     }
 
@@ -3649,48 +3670,87 @@ fn is_zip_filename(value: &str) -> bool {
     value.trim().to_ascii_lowercase().ends_with(".zip")
 }
 
-fn is_allowed_dicom_archive_entry(value: &str) -> bool {
+/// Files that DICOM exports ship beside the images: viewer programs,
+/// documents and OS metadata. They are skipped, never extracted.
+fn is_bundled_non_dicom_entry(value: &str) -> bool {
     let normalized = value.trim().replace('\\', "/").to_ascii_lowercase();
     let segments: Vec<&str> = normalized
         .split('/')
         .filter(|segment| !segment.trim().is_empty())
         .collect();
     let Some(file_name) = segments.last().copied() else {
-        return false;
+        return true;
     };
 
-    if segments.iter().any(|segment| {
+    if file_name.starts_with('.')
+        || segments.iter().any(|segment| {
+            matches!(
+                *segment,
+                "__macosx" | "css" | "css_en" | "evlite" | "help_di" | "javascript" | "viewer"
+            )
+        })
+    {
+        return true;
+    }
+
+    // Anything else is checked by content: UID-named slices such as
+    // "1.3.12.2.1107.5.2" have no real extension.
+    file_name.rsplit_once('.').is_some_and(|(_, extension)| {
         matches!(
-            *segment,
-            "css"
-                | "css_en"
-                | "evlite"
-                | "help_di"
-                | "image"
-                | "image_en"
-                | "javascript"
+            extension,
+            "bat"
+                | "bmp"
+                | "cab"
+                | "cmd"
+                | "css"
+                | "csv"
+                | "db"
+                | "dll"
+                | "doc"
+                | "docx"
+                | "evx"
+                | "exe"
+                | "gif"
+                | "htm"
+                | "html"
+                | "ico"
+                | "inf"
+                | "ini"
+                | "jpeg"
+                | "jpg"
+                | "js"
+                | "json"
+                | "lnk"
+                | "log"
+                | "mp4"
                 | "mpeg"
-                | "other"
+                | "msi"
                 | "pdf"
-                | "viewer"
+                | "png"
+                | "rtf"
+                | "svg"
+                | "ttf"
+                | "txt"
+                | "woff"
+                | "woff2"
+                | "xls"
+                | "xlsx"
+                | "xml"
+                | "zip"
         )
-    }) {
-        return false;
-    }
-
-    let extension = file_name
-        .rsplit_once('.')
-        .map(|(_, extension)| format!(".{extension}"));
-
-    match extension.as_deref() {
-        None | Some(".dcm" | ".dicom" | ".ima") => true,
-        Some(
-            ".css" | ".evx" | ".gif" | ".htm" | ".html" | ".js" | ".lnk" | ".mp4" | ".mpeg"
-            | ".pdf" | ".png" | ".txt" | ".xml",
-        ) => false,
-        Some(_) => false,
-    }
+    })
 }
+
+/// DICOM Part 10 files carry "DICM" after a 128-byte preamble.
+fn has_dicom_preamble(path: &Path) -> bool {
+    let mut header = [0u8; 132];
+    std::fs::File::open(path)
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut header))
+        .is_ok()
+        && &header[128..] == b"DICM"
+}
+
+const NO_DICOM_FILES: &str = "No DICOM images were found. Export the MRI or CT series from the scanner or PACS as DICOM, then upload its folder or a ZIP of it.";
 
 fn storage_key_from_absolute(storage_root: &Path, path: &Path) -> Result<String, AppError> {
     let relative = path
@@ -3729,7 +3789,11 @@ async fn extract_zip_study(
         let mut prepared = Vec::new();
         let mut names = BTreeSet::new();
         let mut expanded_bytes = 0u64;
-        if archive.len() > 10_000 { return Err(AppError::bad_request("ZIP package exceeds the 10,000-file limit")); }
+        if archive.len() > 10_000 {
+            return Err(AppError::bad_request(
+                "ZIP package exceeds the 10,000-file limit",
+            ));
+        }
 
         for index in 0..archive.len() {
             let mut entry = archive
@@ -3742,18 +3806,29 @@ async fn extract_zip_study(
 
             let original_name = entry.name().to_string();
 
-            if !is_allowed_dicom_archive_entry(&original_name) {
-                return Err(AppError::bad_request(format!(
-                    "ZIP package contains non-DICOM viewer or document files ({original_name}). Upload a clean DICOM-only package."
-                )));
+            if is_bundled_non_dicom_entry(&original_name) {
+                continue;
             }
 
-            let safe_path = entry.enclosed_name().ok_or_else(|| AppError::bad_request("ZIP contains an unsafe path"))?;
-            if entry.is_symlink() || original_name.contains('\\') || original_name.contains(':') || original_name.split('/').any(|part| part == "." || part == ".." || part.is_empty()) || !names.insert(safe_path.clone()) {
-                return Err(AppError::bad_request("ZIP contains a duplicate or unsupported file path"));
+            let safe_path = entry
+                .enclosed_name()
+                .ok_or_else(|| AppError::bad_request("ZIP contains an unsafe path"))?;
+            if entry.is_symlink()
+                || original_name.contains('\\')
+                || original_name.contains(':')
+                || original_name
+                    .split('/')
+                    .any(|part| part == "." || part == ".." || part.is_empty())
+                || !names.insert(safe_path.clone())
+            {
+                return Err(AppError::bad_request(
+                    "ZIP contains a duplicate or unsupported file path",
+                ));
             }
             expanded_bytes = expanded_bytes.saturating_add(entry.size());
-            if expanded_bytes > 2 * 1024 * 1024 * 1024 { return Err(AppError::bad_request("Expanded ZIP exceeds 2 GB")); }
+            if expanded_bytes > 2 * 1024 * 1024 * 1024 {
+                return Err(AppError::bad_request("Expanded ZIP exceeds 2 GB"));
+            }
             let safe_relative_path = safe_path.to_string_lossy().to_string();
             let output_path = extracted_root.join(&safe_relative_path);
 
@@ -3767,10 +3842,23 @@ async fn extract_zip_study(
                 AppError::internal(format!("Unable to create extracted study file: {error}"))
             })?;
             let declared_size = entry.size();
-            let copied = std::io::copy(&mut std::io::Read::take(&mut entry, declared_size.saturating_add(1)), &mut output).map_err(|error| {
+            let copied = std::io::copy(
+                &mut std::io::Read::take(&mut entry, declared_size.saturating_add(1)),
+                &mut output,
+            )
+            .map_err(|error| {
                 AppError::internal(format!("Unable to extract ZIP package entry: {error}"))
             })?;
-            if copied != declared_size { return Err(AppError::bad_request("ZIP entry length does not match its metadata")); }
+            if copied != declared_size {
+                return Err(AppError::bad_request(
+                    "ZIP entry length does not match its metadata",
+                ));
+            }
+            drop(output);
+            if !has_dicom_preamble(&output_path) {
+                let _ = std::fs::remove_file(&output_path);
+                continue;
+            }
 
             prepared.push(PreparedStudyFile {
                 source_relative_path: Some(safe_relative_path),
@@ -3783,6 +3871,9 @@ async fn extract_zip_study(
             });
         }
 
+        if prepared.is_empty() {
+            return Err(AppError::bad_request(NO_DICOM_FILES));
+        }
         Ok(prepared)
     })
     .await
@@ -3887,7 +3978,7 @@ fn derive_mpr_volume_and_slices(
         study_files.len(),
     );
 
-    let mut grouped: BTreeMap<String, Vec<MprSourceSlice>> = BTreeMap::new();
+    let mut spatial_slices = Vec::new();
     let metadata_report_every = (study_files.len() / 10).max(1);
 
     for (file_index, study_file) in study_files.iter().enumerate() {
@@ -3901,10 +3992,7 @@ fn derive_mpr_volume_and_slices(
             else {
                 continue;
             };
-            grouped
-                .entry(source_slice.series_uid.clone())
-                .or_default()
-                .push(source_slice);
+            spatial_slices.push(source_slice);
         }
 
         let completed = file_index + 1;
@@ -3921,31 +4009,7 @@ fn derive_mpr_volume_and_slices(
         }
     }
 
-    if grouped.is_empty() {
-        anyhow::bail!(
-            "the upload does not contain a spatial DICOM series with ImagePositionPatient, ImageOrientationPatient, and PixelSpacing"
-        );
-    }
-
-    let mut candidate_groups = grouped.into_values().collect::<Vec<_>>();
-    candidate_groups.sort_by_key(|group| std::cmp::Reverse(group.len()));
-
-    let mut selected_series = None;
-    let mut last_validation_error = None;
-    for group in candidate_groups {
-        match validate_and_sort_mpr_series(group) {
-            Ok(series) => {
-                selected_series = Some(series);
-                break;
-            }
-            Err(error) => last_validation_error = Some(error),
-        }
-    }
-
-    let slices = selected_series.ok_or_else(|| {
-        last_validation_error
-            .unwrap_or_else(|| anyhow::anyhow!("no reconstructable DICOM series was found"))
-    })?;
+    let slices = select_mpr_stack(spatial_slices)?;
 
     let first = &slices[0];
     let slice_spacing = median_slice_spacing(&slices)?;
@@ -3981,26 +4045,14 @@ fn derive_mpr_volume_and_slices(
     );
 
     for (slice_index, slice) in slices.iter().enumerate() {
-        let object = open_file(&slice.file_path).with_context(|| {
-            format!(
-                "unable to reopen source DICOM {}",
-                slice.file_path.display()
-            )
-        })?;
-        let decoded = object.decode_pixel_data().with_context(|| {
-            format!(
-                "unable to decode source DICOM {}",
-                slice.file_path.display()
-            )
-        })?;
+        let object = open_file(&slice.file_path)
+            .context("a DICOM file could not be read again while rebuilding")?;
+        let decoded = object
+            .decode_pixel_data()
+            .map_err(|_| unsupported_pixel_encoding(object.meta().transfer_syntax()))?;
         let image = decoded
             .to_dynamic_image(slice.frame_index)
-            .with_context(|| {
-                format!(
-                    "unable to render source DICOM {}",
-                    slice.file_path.display()
-                )
-            })?;
+            .map_err(|_| unsupported_pixel_encoding(object.meta().transfer_syntax()))?;
         let image = image.to_luma16();
         if image.width() as usize != first.columns || image.height() as usize != first.rows {
             anyhow::bail!("DICOM series dimensions changed while decoding");
@@ -4385,9 +4437,28 @@ fn read_mpr_source_slice(
         return None;
     }
 
+    // One series can hold several stacks: localizer planes, echoes, b-values,
+    // time points or magnitude and phase images.
+    let stack_key = format!(
+        "{series_uid}|{rows}x{columns}|{row_spacing:.3}x{column_spacing:.3}|{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}|{}|{}|{}|{}",
+        row_direction[0],
+        row_direction[1],
+        row_direction[2],
+        column_direction[0],
+        column_direction[1],
+        column_direction[2],
+        dicom_text(object, "EchoNumbers").unwrap_or_default(),
+        dicom_text(object, "DiffusionBValue").unwrap_or_default(),
+        dicom_text(object, "TemporalPositionIdentifier").unwrap_or_default(),
+        dicom_text(object, "ImageType").unwrap_or_default(),
+    );
+
     Some(MprSourceSlice {
         file_path: study_file.file_path.clone(),
         frame_index,
+        stack_key,
+        series_label: dicom_text(object, "SeriesDescription")
+            .unwrap_or_else(|| "Unnamed series".into()),
         series_uid,
         frame_of_reference_uid: dicom_text(object, "FrameOfReferenceUID"),
         rows,
@@ -4401,11 +4472,51 @@ fn read_mpr_source_slice(
     })
 }
 
+/// Picks the largest stack in the upload that can be rebuilt in 3D.
+fn select_mpr_stack(slices: Vec<MprSourceSlice>) -> anyhow::Result<Vec<MprSourceSlice>> {
+    if slices.is_empty() {
+        anyhow::bail!(
+            "the upload has no DICOM images with position and orientation data. Export the original series, not screenshots or secondary captures"
+        );
+    }
+
+    let mut stacks: BTreeMap<String, Vec<MprSourceSlice>> = BTreeMap::new();
+    for slice in slices {
+        stacks
+            .entry(slice.stack_key.clone())
+            .or_default()
+            .push(slice);
+    }
+    let mut stacks = stacks.into_values().collect::<Vec<_>>();
+    stacks.sort_by_key(|stack| std::cmp::Reverse(stack.len()));
+
+    let mut largest_failure = None;
+    for stack in stacks {
+        let label = stack[0].series_label.clone();
+        let count = stack.len();
+        match validate_and_sort_mpr_series(stack) {
+            Ok(sorted) => return Ok(sorted),
+            Err(error) => {
+                largest_failure.get_or_insert(format!("\"{label}\" ({count} images) {error}"));
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "no series in the upload can be rebuilt in 3D. The largest, {}",
+        largest_failure.unwrap_or_default()
+    )
+}
+
+/// Missing slices filled per gap, and in total as a share of the stack.
+const MAX_FILLED_SLICES_PER_GAP: usize = 2;
+const MAX_FILLED_SLICE_PERCENT: usize = 10;
+
 fn validate_and_sort_mpr_series(
     mut slices: Vec<MprSourceSlice>,
 ) -> anyhow::Result<Vec<MprSourceSlice>> {
     if slices.len() < 3 {
-        anyhow::bail!("MPR requires at least three spatial slices from the same DICOM series");
+        anyhow::bail!("has fewer than three slices");
     }
 
     let first = slices[0].clone();
@@ -4423,9 +4534,7 @@ fn validate_and_sort_mpr_series(
     });
 
     if slices.len() < 3 {
-        anyhow::bail!(
-            "the DICOM series does not have consistent dimensions, orientation, and spacing"
-        );
+        anyhow::bail!("does not keep the same size, orientation and pixel spacing");
     }
 
     let reference_normal = normalize3(cross3(first.row_direction, first.column_direction))
@@ -4441,21 +4550,54 @@ fn validate_and_sort_mpr_series(
     slices.dedup_by(|left, right| (left.slice_projection - right.slice_projection).abs() < 0.0001);
 
     if slices.len() < 3 {
-        anyhow::bail!("the DICOM series does not contain enough unique slice positions");
+        anyhow::bail!("has fewer than three distinct slice positions");
     }
 
     let spacing = median_slice_spacing(&slices)?;
     let tolerance = (spacing * 0.2).max(0.1);
-    for pair in slices.windows(2) {
-        let delta = (pair[1].slice_projection - pair[0].slice_projection).abs();
-        if (delta - spacing).abs() > tolerance {
-            anyhow::bail!(
-                "the DICOM series has irregular slice spacing ({delta:.3} mm versus median {spacing:.3} mm)"
-            );
+    let mut stack = Vec::with_capacity(slices.len());
+    let mut filled = 0usize;
+    for (index, slice) in slices.iter().enumerate() {
+        if let Some(previous) = index.checked_sub(1).map(|previous| &slices[previous]) {
+            let delta = slice.slice_projection - previous.slice_projection;
+            let steps = (delta / spacing).round().max(1.0) as usize;
+            if (delta - steps as f64 * spacing).abs() > tolerance
+                || steps > MAX_FILLED_SLICES_PER_GAP + 1
+            {
+                anyhow::bail!(
+                    "has uneven slice spacing ({delta:.1} mm where {spacing:.1} mm is expected)"
+                );
+            }
+            // A slice missing from the export is filled from its nearer
+            // neighbour, so the volume keeps its true length.
+            for step in 1..steps {
+                let mut copy = if step * 2 <= steps { previous } else { slice }.clone();
+                let offset = spacing * step as f64;
+                copy.slice_projection = previous.slice_projection + offset;
+                copy.image_position =
+                    add3(previous.image_position, scale3(reference_normal, offset));
+                stack.push(copy);
+                filled += 1;
+            }
         }
+        stack.push(slice.clone());
+    }
+    if filled * 100 > stack.len() * MAX_FILLED_SLICE_PERCENT {
+        anyhow::bail!("is missing {filled} of {} slices", stack.len());
     }
 
-    Ok(slices)
+    Ok(stack)
+}
+
+fn unsupported_pixel_encoding(transfer_syntax: &str) -> anyhow::Error {
+    let uid = transfer_syntax.trim_end_matches('\0').trim();
+    let format = match uid {
+        "1.2.840.10008.1.2.4.80" | "1.2.840.10008.1.2.4.81" => "JPEG-LS compressed",
+        _ => "stored in an encoding the site cannot read",
+    };
+    anyhow::anyhow!(
+        "the images are {format} ({uid}). Export the series uncompressed or as JPEG / JPEG 2000 and upload it again"
+    )
 }
 
 fn median_slice_spacing(slices: &[MprSourceSlice]) -> anyhow::Result<f64> {
@@ -4867,13 +5009,24 @@ fn render_mpr_plane(
 
 fn encode_png(image: &RgbaImage) -> anyhow::Result<Vec<u8>> {
     let mut cursor = Cursor::new(Vec::new());
-    PngEncoder::new_with_quality(&mut cursor, CompressionType::Fast, FilterType::NoFilter)
-        .write_image(
+    let encoder =
+        PngEncoder::new_with_quality(&mut cursor, CompressionType::Default, FilterType::Adaptive);
+    // CT/MRI renders are opaque grey; one channel instead of four keeps the
+    // lossless slices about a quarter of the size.
+    let grey = image
+        .pixels()
+        .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2] && pixel[3] == u8::MAX);
+    if grey {
+        let luma = image.pixels().map(|pixel| pixel[0]).collect::<Vec<_>>();
+        encoder.write_image(&luma, image.width(), image.height(), ExtendedColorType::L8)?;
+    } else {
+        encoder.write_image(
             image.as_raw(),
             image.width(),
             image.height(),
             ExtendedColorType::Rgba8,
         )?;
+    }
     Ok(cursor.into_inner())
 }
 
@@ -4935,10 +5088,20 @@ struct BuiltAtlasPage {
     frames: Vec<AtlasFrameMetadata>,
 }
 
+/// An atlas cell. Width and height only size the pages; the loaded pixels
+/// decide each frame.
 #[derive(Debug, Clone)]
-struct AtlasSourceSlice {
+struct AtlasSlice {
     asset_id: String,
-    image: RgbaImage,
+    width: u32,
+    height: u32,
+}
+
+/// Atlas rows after a swap, plus how many other assets the swap retired.
+struct PersistedAtlas {
+    pages: Vec<ZoneModalityAtlasPage>,
+    frames: Vec<ZoneModalityAtlasFrame>,
+    retired_count: usize,
 }
 
 impl PlaygroundService {
@@ -4948,9 +5111,10 @@ impl PlaygroundService {
             .join("playground")
             .join("derived")
             .join(ingest_job_id.to_string())
-            .join("atlases");
+            .join(format!("atlases-{}", Uuid::new_v4().simple()));
 
-        let _ = fs::remove_dir_all(&atlas_root).await;
+        // A fresh directory per build: the live pages keep serving until the
+        // new rows are committed, and only then are their files removed.
         fs::create_dir_all(&atlas_root).await.map_err(|error| {
             AppError::internal(format!("Unable to create atlas directory: {error}"))
         })?;
@@ -4958,47 +5122,92 @@ impl PlaygroundService {
         Ok(atlas_root)
     }
 
-    async fn delete_existing_atlas_assets(
+    /// Swaps a study's atlas rows for freshly built pages in one transaction,
+    /// retiring `retired_asset_ids` with them, then deletes the old page files.
+    #[allow(clippy::too_many_arguments)]
+    async fn persist_built_atlas_pages(
         &self,
         account_id: Uuid,
         zone_id: Uuid,
         modality_id: Uuid,
-    ) -> Result<(), AppError> {
-        let atlas_assets = self
-            .repo
-            .list_zone_modality_atlas_assets(&self.pool, account_id, zone_id, modality_id)
-            .await?;
-
-        if atlas_assets.is_empty() {
-            return Ok(());
-        }
-
-        let atlas_ids = atlas_assets
+        ingest_job_id: Uuid,
+        user_id: &str,
+        packed_pages: Vec<BuiltAtlasPage>,
+        retired_asset_ids: &[Uuid],
+    ) -> Result<PersistedAtlas, AppError> {
+        let new_keys = packed_pages
             .iter()
-            .filter_map(|asset| Uuid::parse_str(&asset.id).ok())
+            .map(|page| page.storage_key.clone())
             .collect::<Vec<_>>();
+        let swapped = self
+            .swap_atlas_rows(
+                account_id,
+                zone_id,
+                modality_id,
+                ingest_job_id,
+                user_id,
+                packed_pages,
+                retired_asset_ids,
+            )
+            .await;
 
-        if atlas_ids.is_empty() {
-            return Ok(());
+        match swapped {
+            Ok((persisted, old_atlases)) => {
+                let old_keys = old_atlases
+                    .into_iter()
+                    .filter_map(|asset| asset.storage_key)
+                    .collect::<Vec<_>>();
+                remove_atlas_files(&self.storage_root, &old_keys).await;
+                Ok(persisted)
+            }
+            Err(error) => {
+                remove_atlas_files(&self.storage_root, &new_keys).await;
+                Err(error)
+            }
         }
-
-        let _ = self
-            .repo
-            .delete_zone_modality_assets(&self.pool, account_id, zone_id, modality_id, &atlas_ids)
-            .await?;
-
-        Ok(())
     }
 
-    async fn persist_built_atlas_pages(
+    /// Returns the new rows and the atlas assets they replaced.
+    #[allow(clippy::too_many_arguments)]
+    async fn swap_atlas_rows(
         &self,
+        account_id: Uuid,
+        zone_id: Uuid,
         modality_id: Uuid,
         ingest_job_id: Uuid,
         user_id: &str,
         packed_pages: Vec<BuiltAtlasPage>,
-    ) -> Result<(Vec<ZoneModalityAtlasPage>, Vec<ZoneModalityAtlasFrame>), AppError> {
+        retired_asset_ids: &[Uuid],
+    ) -> Result<(PersistedAtlas, Vec<ZoneModalityAsset>), AppError> {
         let mut atlas_pages = Vec::with_capacity(packed_pages.len());
         let mut atlas_frames = Vec::new();
+        let mut tx = self.pool.begin().await?;
+        // Two rebuilds of one study queue here instead of interleaving rows.
+        sqlx::query("SELECT 1 FROM anatomy_zone_modalities WHERE id = $1 FOR UPDATE")
+            .bind(modality_id)
+            .execute(&mut *tx)
+            .await?;
+        let old_atlases = self
+            .repo
+            .list_zone_modality_atlas_assets(&mut *tx, account_id, zone_id, modality_id)
+            .await?;
+        let old_atlas_ids = old_atlases
+            .iter()
+            .filter_map(|asset| Uuid::parse_str(&asset.id).ok())
+            .collect::<Vec<_>>();
+        self.repo
+            .delete_zone_modality_assets(&mut *tx, account_id, zone_id, modality_id, &old_atlas_ids)
+            .await?;
+        let retired_count = self
+            .repo
+            .delete_zone_modality_assets(
+                &mut *tx,
+                account_id,
+                zone_id,
+                modality_id,
+                retired_asset_ids,
+            )
+            .await? as usize;
 
         for (page_index, packed_page) in packed_pages.into_iter().enumerate() {
             let atlas_asset_id = Uuid::new_v4();
@@ -5006,7 +5215,7 @@ impl PlaygroundService {
             let atlas_asset = self
                 .repo
                 .create_zone_modality_derived_asset(
-                    &self.pool,
+                    &mut *tx,
                     atlas_asset_id,
                     modality_id,
                     ingest_job_id,
@@ -5054,7 +5263,35 @@ impl PlaygroundService {
             }));
         }
 
-        Ok((atlas_pages, atlas_frames))
+        tx.commit().await?;
+
+        Ok((
+            PersistedAtlas {
+                pages: atlas_pages,
+                frames: atlas_frames,
+                retired_count,
+            },
+            old_atlases,
+        ))
+    }
+
+    /// Builds pages into a fresh directory; a failed build leaves nothing behind.
+    async fn run_atlas_build(
+        &self,
+        ingest_job_id: Uuid,
+        build: impl FnOnce(&Path) -> anyhow::Result<Vec<BuiltAtlasPage>> + Send + 'static,
+    ) -> Result<Vec<BuiltAtlasPage>, AppError> {
+        let atlas_root = self.prepare_atlas_root(ingest_job_id).await?;
+        let task_root = atlas_root.clone();
+        let built = tokio::task::spawn_blocking(move || build(&task_root))
+            .await
+            .map_err(|error| AppError::internal(format!("Atlas build task failed: {error}")))
+            .and_then(|pages| pages.map_err(AppError::from));
+
+        if built.as_ref().is_ok_and(|pages| pages.is_empty()) || built.is_err() {
+            let _ = fs::remove_dir_all(&atlas_root).await;
+        }
+        built
     }
 
     async fn build_atlas_pages_from_slice_builds(
@@ -5070,21 +5307,35 @@ impl PlaygroundService {
         }
 
         let storage_root = self.storage_root.clone();
-        let atlas_root = self.prepare_atlas_root(ingest_job_id).await?;
-        let slice_assets = slice_assets.to_vec();
+        let slices = slice_assets
+            .iter()
+            .zip(slice_builds)
+            .map(|(asset, build)| AtlasSlice {
+                asset_id: asset.id.clone(),
+                width: build.candidate.width.max(1) as u32,
+                height: build.candidate.height.max(1) as u32,
+            })
+            .collect::<Vec<_>>();
         let slice_builds = slice_builds.to_vec();
 
-        tokio::task::spawn_blocking(move || {
-            write_atlas_pages_from_slice_builds(
-                &storage_root,
-                &atlas_root,
-                &slice_assets,
-                &slice_builds,
-            )
+        self.run_atlas_build(ingest_job_id, move |atlas_root| {
+            write_atlas_pages(&storage_root, atlas_root, &slices, |index| {
+                let build = &slice_builds[index];
+                if let Some(image) = &build.atlas_source_image {
+                    return Ok(image.clone());
+                }
+                let image_path = storage_root.join(&build.candidate.storage_key);
+                Ok(image::open(&image_path)
+                    .with_context(|| {
+                        format!(
+                            "Unable to open derived MPR slice at {}",
+                            image_path.display()
+                        )
+                    })?
+                    .to_rgba8())
+            })
         })
         .await
-        .map_err(|error| AppError::internal(format!("Atlas build task failed: {error}")))?
-        .map_err(AppError::from)
     }
 
     async fn build_atlas_pages(
@@ -5103,31 +5354,21 @@ impl PlaygroundService {
         }
 
         let storage_root = self.storage_root.clone();
-        let atlas_root = self.prepare_atlas_root(ingest_job_id).await?;
-        let lossless_atlas = slice_assets.iter().all(|asset| {
-            asset.asset_kind == "derived_slice"
-                && asset
-                    .storage_key
-                    .as_deref()
-                    .is_some_and(|storage_key| storage_key.ends_with(".png"))
-        });
+        let slices = slice_assets
+            .iter()
+            .map(|asset| AtlasSlice {
+                asset_id: asset.id.clone(),
+                width: asset.width.unwrap_or(1).max(1) as u32,
+                height: asset.height.unwrap_or(1).max(1) as u32,
+            })
+            .collect::<Vec<_>>();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<BuiltAtlasPage>> {
-            let mut slice_images = Vec::with_capacity(slice_assets.len());
-
-            for asset in slice_assets {
-                let image = load_atlas_source_image(&storage_root, &asset)?;
-                slice_images.push(AtlasSourceSlice {
-                    asset_id: asset.id,
-                    image,
-                });
-            }
-
-            write_atlas_pages(&storage_root, &atlas_root, slice_images, lossless_atlas)
+        self.run_atlas_build(ingest_job_id, move |atlas_root| {
+            write_atlas_pages(&storage_root, atlas_root, &slices, |index| {
+                load_atlas_source_image(&storage_root, &slice_assets[index])
+            })
         })
         .await
-        .map_err(|error| AppError::internal(format!("Atlas build task failed: {error}")))?
-        .map_err(AppError::from)
     }
 
     fn load_atlas_manifest(
@@ -5175,6 +5416,16 @@ impl PlaygroundService {
 
         Ok((pages, frames))
     }
+}
+
+/// Atlas pages and frames come from the atlas rows. Stored specs may hold an
+/// older copy, which would double the payload and can go stale.
+fn without_atlas_copy(mut spec: serde_json::Value) -> serde_json::Value {
+    if let Some(fields) = spec.as_object_mut() {
+        fields.remove("atlases");
+        fields.remove("atlasFrames");
+    }
+    spec
 }
 
 fn dicom_text(object: &dicom::object::DefaultDicomObject, name: &str) -> Option<String> {
@@ -5259,9 +5510,37 @@ fn recommended_mpr_worker_count(work_items: usize) -> usize {
 }
 
 fn encode_avif(image: &RgbaImage) -> anyhow::Result<Vec<u8>> {
+    encode_avif_with(
+        image,
+        AVIF_ENCODER_SPEED,
+        AVIF_ENCODER_QUALITY,
+        AVIF_ENCODER_THREADS_PER_IMAGE,
+    )
+}
+
+/// Viewers zoom into atlas pages, so they keep fine scan texture (q90, ~41 dB
+/// on real MRI). The fastest speed costs a quarter of the CPU for ~10% more
+/// bytes, and half the cores stay free for serving viewers.
+fn encode_atlas_page(image: &RgbaImage) -> anyhow::Result<Vec<u8>> {
+    let threads =
+        std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 2).clamp(1, 8));
+    encode_avif_with(
+        image,
+        ATLAS_AVIF_ENCODER_SPEED,
+        ATLAS_AVIF_ENCODER_QUALITY,
+        threads,
+    )
+}
+
+fn encode_avif_with(
+    image: &RgbaImage,
+    speed: u8,
+    quality: u8,
+    threads: usize,
+) -> anyhow::Result<Vec<u8>> {
     let mut cursor = Cursor::new(Vec::new());
-    AvifEncoder::new_with_speed_quality(&mut cursor, AVIF_ENCODER_SPEED, AVIF_ENCODER_QUALITY)
-        .with_num_threads(Some(AVIF_ENCODER_THREADS_PER_IMAGE))
+    AvifEncoder::new_with_speed_quality(&mut cursor, speed, quality)
+        .with_num_threads(Some(threads))
         .write_image(
             image.as_raw(),
             image.width(),
@@ -5305,108 +5584,86 @@ fn resolve_slice_source_file_path(
     ))
 }
 
-fn write_atlas_pages_from_slice_builds(
+/// Lays slices out on AVIF atlas pages. Pixels load one page at a time, so a
+/// whole study is never held in memory.
+fn write_atlas_pages(
     storage_root: &Path,
     atlas_root: &Path,
-    slice_assets: &[ZoneModalityAsset],
-    slice_builds: &[DerivedSliceBuild],
+    slices: &[AtlasSlice],
+    load: impl Fn(usize) -> anyhow::Result<RgbaImage>,
 ) -> anyhow::Result<Vec<BuiltAtlasPage>> {
-    if slice_assets.is_empty() {
-        return Ok(Vec::new());
-    }
-    if slice_assets.len() != slice_builds.len() {
-        anyhow::bail!("slice assets and builds are misaligned");
-    }
-
-    let global_cell_width = slice_builds
+    let max_width = slices
         .iter()
-        .map(|build| build.candidate.width.max(1) as u32)
+        .map(|slice| slice.width)
         .max()
-        .unwrap_or(1);
-    let global_cell_height = slice_builds
+        .unwrap_or(1)
+        .max(1);
+    let max_height = slices
         .iter()
-        .map(|build| build.candidate.height.max(1) as u32)
+        .map(|slice| slice.height)
         .max()
-        .unwrap_or(1);
-    let columns_by_width = (MAX_ATLAS_PAGE_EDGE / global_cell_width).max(1) as usize;
-    let rows_by_height = (MAX_ATLAS_PAGE_EDGE / global_cell_height).max(1) as usize;
-    let columns_per_page = columns_by_width.clamp(1, MAX_ATLAS_PAGE_COLUMNS);
-    let rows_per_page = rows_by_height.max(1);
+        .unwrap_or(1)
+        .max(1);
+    let columns_per_page =
+        ((MAX_ATLAS_PAGE_EDGE / max_width).max(1) as usize).min(MAX_ATLAS_PAGE_COLUMNS);
+    let rows_per_page = (MAX_ATLAS_PAGE_EDGE / max_height).max(1) as usize;
     let slices_per_page = (columns_per_page * rows_per_page).clamp(1, MAX_ATLAS_SLICES_PER_PAGE);
     let mut pages = Vec::new();
 
-    for (page_index, start) in (0..slice_assets.len()).step_by(slices_per_page).enumerate() {
-        let end = (start + slices_per_page).min(slice_assets.len());
-        let page_builds = &slice_builds[start..end];
-        let cell_width = page_builds
+    for (page_index, start) in (0..slices.len()).step_by(slices_per_page).enumerate() {
+        let end = (start + slices_per_page).min(slices.len());
+        let images = (start..end)
+            .map(&load)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let cell_width = images
             .iter()
-            .map(|build| build.candidate.width.max(1))
+            .map(RgbaImage::width)
             .max()
-            .unwrap_or(1);
-        let cell_height = page_builds
+            .unwrap_or(1)
+            .max(1);
+        let cell_height = images
             .iter()
-            .map(|build| build.candidate.height.max(1))
+            .map(RgbaImage::height)
             .max()
-            .unwrap_or(1);
-        let columns = columns_per_page.min(end - start).max(1);
-        let rows = (end - start).div_ceil(columns);
-        let page_width = (cell_width as u32) * (columns as u32);
-        let page_height = (cell_height as u32) * (rows as u32);
-        let mut canvas: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_pixel(page_width, page_height, Rgba([0, 0, 0, 0]));
-        let mut frames = Vec::with_capacity(end - start);
+            .unwrap_or(1)
+            .max(1);
+        let columns = columns_per_page.min(images.len()).max(1);
+        let page_width = cell_width * columns as u32;
+        let page_height = cell_height * images.len().div_ceil(columns) as u32;
+        // Opaque, so the encoder drops the alpha plane; viewers only show frames.
+        let mut canvas = RgbaImage::from_pixel(page_width, page_height, Rgba([0, 0, 0, 255]));
+        let mut frames = Vec::with_capacity(images.len());
 
-        for local_index in 0..(end - start) {
-            let asset = &slice_assets[start + local_index];
-            let build = &slice_builds[start + local_index];
-            let image = if let Some(image) = build.atlas_source_image.as_ref() {
-                image.clone()
-            } else {
-                let image_path = storage_root.join(&build.candidate.storage_key);
-                image::open(&image_path)
-                    .with_context(|| {
-                        format!(
-                            "Unable to open derived MPR slice at {}",
-                            image_path.display()
-                        )
-                    })?
-                    .to_rgba8()
-            };
-            let column = local_index % columns;
-            let row = local_index / columns;
-            let x = i64::try_from(column).unwrap_or(0) * i64::from(cell_width);
-            let y = i64::try_from(row).unwrap_or(0) * i64::from(cell_height);
-            overlay(&mut canvas, &image, x, y);
+        for (offset, image) in images.iter().enumerate() {
+            let x = (offset % columns) as u32 * cell_width;
+            let y = (offset / columns) as u32 * cell_height;
+            overlay(&mut canvas, image, i64::from(x), i64::from(y));
             frames.push(AtlasFrameMetadata {
-                asset_id: asset.id.clone(),
-                x: i32::try_from(x).unwrap_or(i32::MAX),
-                y: i32::try_from(y).unwrap_or(i32::MAX),
-                width: i32::try_from(image.width()).unwrap_or(i32::MAX),
-                height: i32::try_from(image.height()).unwrap_or(i32::MAX),
+                asset_id: slices[start + offset].asset_id.clone(),
+                x: x as i32,
+                y: y as i32,
+                width: image.width() as i32,
+                height: image.height() as i32,
             });
         }
 
-        let lossless_page = page_builds
-            .iter()
-            .all(|build| build.atlas_source_image.is_none());
-        let atlas_extension = if lossless_page { "png" } else { "avif" };
-        let atlas_file_name = format!("atlas-{:03}.{atlas_extension}", page_index + 1);
-        let atlas_path = atlas_root.join(&atlas_file_name);
-        let atlas_bytes = if lossless_page {
-            encode_png(&canvas)?
-        } else {
-            encode_avif(&canvas)?
-        };
+        let atlas_path = atlas_root.join(format!("atlas-{:03}.avif", page_index + 1));
+        let atlas_bytes = encode_atlas_page(&canvas)?;
         std::fs::write(&atlas_path, &atlas_bytes)
             .with_context(|| format!("Unable to write atlas image at {}", atlas_path.display()))?;
         let metadata_path = atlas_path.with_extension("json");
-        std::fs::write(
-            &metadata_path,
-            serde_json::to_vec_pretty(&AtlasPageMetadata {
-                width: i32::try_from(page_width).unwrap_or(i32::MAX),
-                height: i32::try_from(page_height).unwrap_or(i32::MAX),
-                frames: frames.clone(),
-            })?,
+        let metadata = AtlasPageMetadata {
+            width: page_width as i32,
+            height: page_height as i32,
+            frames: frames.clone(),
+        };
+        std::fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?).with_context(
+            || {
+                format!(
+                    "Unable to write atlas metadata at {}",
+                    metadata_path.display()
+                )
+            },
         )?;
 
         pages.push(BuiltAtlasPage {
@@ -5414,8 +5671,8 @@ fn write_atlas_pages_from_slice_builds(
                 .map_err(anyhow::Error::from)?,
             checksum: sha256_hex(&atlas_bytes),
             size_bytes: atlas_bytes.len() as i64,
-            width: i32::try_from(page_width).unwrap_or(i32::MAX),
-            height: i32::try_from(page_height).unwrap_or(i32::MAX),
+            width: page_width as i32,
+            height: page_height as i32,
             frames,
         });
     }
@@ -5423,105 +5680,23 @@ fn write_atlas_pages_from_slice_builds(
     Ok(pages)
 }
 
-fn write_atlas_pages(
-    storage_root: &Path,
-    atlas_root: &Path,
-    slice_images: Vec<AtlasSourceSlice>,
-    lossless_atlas: bool,
-) -> anyhow::Result<Vec<BuiltAtlasPage>> {
-    if slice_images.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut global_cell_width = 0u32;
-    let mut global_cell_height = 0u32;
-    for slice in &slice_images {
-        global_cell_width = global_cell_width.max(slice.image.width());
-        global_cell_height = global_cell_height.max(slice.image.height());
-    }
-
-    let columns_by_width = MAX_ATLAS_PAGE_EDGE
-        .checked_div(global_cell_width)
-        .map_or(1, |columns| columns.max(1) as usize);
-    let rows_by_height = MAX_ATLAS_PAGE_EDGE
-        .checked_div(global_cell_height)
-        .map_or(1, |rows| rows.max(1) as usize);
-    let columns_per_page = columns_by_width.clamp(1, MAX_ATLAS_PAGE_COLUMNS);
-    let rows_per_page = rows_by_height.max(1);
-    let slices_per_page = (columns_per_page * rows_per_page).clamp(1, MAX_ATLAS_SLICES_PER_PAGE);
-
-    let mut atlas_pages = Vec::new();
-
-    for (page_index, page_slices) in slice_images.chunks(slices_per_page).enumerate() {
-        let mut cell_width = 0i32;
-        let mut cell_height = 0i32;
-
-        for slice in page_slices {
-            cell_width = cell_width.max(i32::try_from(slice.image.width()).unwrap_or(i32::MAX));
-            cell_height = cell_height.max(i32::try_from(slice.image.height()).unwrap_or(i32::MAX));
+/// Removes atlas page files and their metadata. Leftovers are harmless, so
+/// failures are ignored; only atlas keys are ever passed in.
+async fn remove_atlas_files(storage_root: &Path, storage_keys: &[String]) {
+    for storage_key in storage_keys {
+        let path = storage_root.join(storage_key);
+        let _ = fs::remove_file(path.with_extension("json")).await;
+        let _ = fs::remove_file(&path).await;
+        if let Some(parent) = path.parent()
+            && parent
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name.starts_with("atlases"))
+        {
+            // Succeeds only once the directory is empty.
+            let _ = fs::remove_dir(parent).await;
         }
-
-        let columns = columns_per_page.min(page_slices.len()).max(1);
-        let rows = page_slices.len().div_ceil(columns);
-        let page_width = (cell_width as u32) * (columns as u32);
-        let page_height = (cell_height as u32) * (rows as u32);
-        let mut atlas_canvas: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_pixel(page_width, page_height, Rgba([0, 0, 0, 0]));
-        let mut frames = Vec::with_capacity(page_slices.len());
-
-        for (index, slice) in page_slices.iter().enumerate() {
-            let column = index % columns;
-            let row = index / columns;
-            let x = i64::try_from(column).unwrap_or(0) * i64::from(cell_width);
-            let y = i64::try_from(row).unwrap_or(0) * i64::from(cell_height);
-
-            overlay(&mut atlas_canvas, &slice.image, x, y);
-
-            frames.push(AtlasFrameMetadata {
-                asset_id: slice.asset_id.clone(),
-                x: i32::try_from(x).unwrap_or(i32::MAX),
-                y: i32::try_from(y).unwrap_or(i32::MAX),
-                width: i32::try_from(slice.image.width()).unwrap_or(i32::MAX),
-                height: i32::try_from(slice.image.height()).unwrap_or(i32::MAX),
-            });
-        }
-
-        let atlas_extension = if lossless_atlas { "png" } else { "avif" };
-        let atlas_file_name = format!("atlas-{:03}.{atlas_extension}", page_index + 1);
-        let atlas_path = atlas_root.join(&atlas_file_name);
-        let atlas_bytes = if lossless_atlas {
-            encode_png(&atlas_canvas)?
-        } else {
-            encode_avif(&atlas_canvas)?
-        };
-        std::fs::write(&atlas_path, &atlas_bytes)
-            .with_context(|| format!("Unable to write atlas image at {}", atlas_path.display()))?;
-
-        let metadata_path = atlas_path.with_extension("json");
-        let metadata_json = serde_json::to_vec_pretty(&AtlasPageMetadata {
-            width: i32::try_from(page_width).unwrap_or(i32::MAX),
-            height: i32::try_from(page_height).unwrap_or(i32::MAX),
-            frames: frames.clone(),
-        })?;
-        std::fs::write(&metadata_path, metadata_json).with_context(|| {
-            format!(
-                "Unable to write atlas metadata at {}",
-                metadata_path.display()
-            )
-        })?;
-
-        atlas_pages.push(BuiltAtlasPage {
-            storage_key: storage_key_from_absolute(storage_root, &atlas_path)
-                .map_err(anyhow::Error::from)?,
-            checksum: sha256_hex(&atlas_bytes),
-            size_bytes: atlas_bytes.len() as i64,
-            width: i32::try_from(page_width).unwrap_or(i32::MAX),
-            height: i32::try_from(page_height).unwrap_or(i32::MAX),
-            frames,
-        });
     }
-
-    Ok(atlas_pages)
 }
 
 fn load_atlas_source_image(
@@ -5739,3 +5914,7 @@ fn count_distinct_series(assets: &[ZoneModalityAsset]) -> usize {
         .collect::<std::collections::BTreeSet<_>>()
         .len()
 }
+
+#[cfg(test)]
+#[path = "intake_tests.rs"]
+mod intake_tests;

@@ -16,7 +16,9 @@ export const SYSTEMS:{id:SystemId;name:string;color:string}[]=[
  {id:'integumentary',name:'Body surface',color:'#ba9b7d'},
  {id:'connective',name:'Connective tissue',color:'#aec3bb'},
 ];
-export interface Part {region?:number;system:SystemId;chunk:number;positions:number;normals:number;indices:number;vertexCount:number;indexCount:number;positionBytes?:2|4;normalBytes?:1|2;indexBytes?:2|4;positionMin?:number[];positionScale?:number[];bounds?:[number[],number[]]}
-export interface Atlas {version:string;sex?:'male';source?:string;scope?:string;parts:Part[];chunks:{url:string;bytes:number;gzip?:string;gzipBytes?:number}[];triangles:number;systemCounts?:Partial<Record<SystemId,number>>}
+/** One source structure; [offset, length] ranges point into its chunk. */
+export interface Part {system:SystemId;region:number;chunk:number;vertexCount:number;indexCount:number;bounds:[number[],number[]];position:[number,number];normal:[number,number];index:[number,number]}
+/** Meshopt-packed model (scripts/pack-anatomy-model.mjs); one system per chunk. */
+export interface Atlas {version:'2';sex?:'male';source?:string;scope?:string;parts:Part[];chunks:{url:string;bytes:number;gzip?:string;gzipBytes?:number;system:SystemId}[];quantization:{origin:[number,number,number];step:number};triangles:number;systemCounts?:Partial<Record<SystemId,number>>}
 // Every system except muscles starts visible.
 export const DEFAULT_VISIBLE:SystemId[]=['cardiac','sensory','skeletal','arterial','venous','nervous','respiratory','digestive','urinary','lymphatic','endocrine','reproductive','integumentary','connective'];

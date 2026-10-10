@@ -126,6 +126,7 @@ import {
   createDefaultLabelX,
   formatModalityTypeLabel,
   formatOrientationLabel,
+  mprPlanePixelAspect,
   readMutationError,
   splitMultilineList,
 } from "./modality-viewer/utils";
@@ -3782,6 +3783,11 @@ function ModalityViewerShell({
           allowTimelineChanges={!readOnly}
           timelineControlMode={isMprViewer ? "synchronized-delete" : "full"}
           thumbnailFit={isMprViewer ? "contain" : "cover"}
+          thumbnailPixelAspect={
+            isMprViewer && mprWorkingSpec
+              ? mprPlanePixelAspect(mprActivePlane, mprWorkingSpec.volume.spacing)
+              : 1
+          }
           lazyAtlasThumbnails={isMprViewer}
           mobileCompactNavigation={isMprViewer}
           canDeleteLeftSlices={isMprViewer ? mprCanDeleteLeftSlices : canDeleteLeftSlices}

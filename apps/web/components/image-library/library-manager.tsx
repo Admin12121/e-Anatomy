@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Frame } from "@/components/ui/frame";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -140,7 +140,7 @@ export function LibraryManager({ initialStudies }: { initialStudies: LibraryStud
                     <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`Actions for ${study.name}`}><MoreHorizontalIcon /></Button></DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-44">
                       {["editable", "ready"].includes(study.status) ? <>
-                        <DropdownMenuItem asChild><a href={`/api/image-library/${study.id}/png`}><DownloadIcon />Download PNG</a></DropdownMenuItem>
+                        <DropdownMenuItem asChild><a href={`/api/image-library/${study.id}/png`}><DownloadIcon />{study.modalityType === "mpr" ? "Download all planes" : "Download PNG"}</a></DropdownMenuItem>
                         <DropdownMenuItem disabled={pending} onSelect={() => { editedStudyRef.current = study.id; editedInputRef.current?.click(); }}><UploadIcon />Reupload PNG</DropdownMenuItem>
                         <DropdownMenuSeparator />
                       </> : null}
@@ -179,6 +179,7 @@ export function LibraryManager({ initialStudies }: { initialStudies: LibraryStud
                 <SelectTrigger id="library-kind" size="lg"><SelectValue /></SelectTrigger>
                 <SelectContent>{MODALITY_TYPE_OPTIONS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent>
               </Select>
+              <FieldDescription>Choose MPR to rebuild coronal and sagittal planes from a CT or MRI series. Other types keep only the uploaded slices.</FieldDescription>
             </Field>
             <Field><FieldLabel htmlFor="library-dicom">DICOM ZIP</FieldLabel><Input id="library-dicom" type="file" accept=".zip,application/zip" required disabled={pending} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></Field>
             {importError ? <p role="alert" className="text-sm text-destructive">{importError}</p> : null}

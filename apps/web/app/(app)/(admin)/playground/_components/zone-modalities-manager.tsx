@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircleIcon,
   FileArchiveIcon,
+  DownloadIcon,
   ImageUpIcon,
   LoaderCircleIcon,
   Plus,
@@ -24,8 +25,10 @@ import { ImageUploadDropzone } from "@/components/ui/image-upload-dropzone";
 import { Input } from "@/components/ui/input";
 import {
   analyzeModalityUploadFiles,
-  isLikelyDicomFilename,
   isZipFilename,
+  keepDicomFiles,
+  MAX_DICOM_FILES,
+  NO_DICOM_FILES_MESSAGE,
   type DetectedModalityUpload,
   ModalityUploadValidationError,
 } from "@/lib/playground/modality-upload-shared";
@@ -132,7 +135,6 @@ type StudyUploadProgressState = {
 
 const UPLOAD_READY_PREVIEW_SRC = "/upload%20_ready.png";
 const MAX_UPLOAD_PATH_LENGTH = 260;
-const MAX_UPLOAD_FILES = 512;
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
 const DANGEROUS_PATH_PATTERN = /(^|[\\/])\.\.($|[\\/])/;
 
@@ -168,18 +170,14 @@ function getClientUploadValidationError(files: File[]) {
     return null;
   }
 
-  if (files.length > MAX_UPLOAD_FILES) {
-    return "Too many files were dropped. Split the upload into smaller batches.";
+  if (files.length > MAX_DICOM_FILES) {
+    return `Too many DICOM files were selected (${files.length}). Upload one series at a time, or a ZIP of up to 10,000 files.`;
   }
 
   const hasZip = files.some((file) => isZipFilename(file.name));
 
   if (hasZip && files.length !== 1) {
     return "ZIP packages must be uploaded by themselves.";
-  }
-
-  if (!hasZip && files.some((file) => !isLikelyDicomFilename(file.name))) {
-    return "Only one ZIP package or DICOM files are allowed.";
   }
 
   for (const file of files) {
@@ -856,8 +854,21 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
     setEditorMode("edit");
   }
 
-  async function processSelectedSourceFiles(files: File[]) {
-    const clientValidationError = getClientUploadValidationError(files);
+  async function processSelectedSourceFiles(selected: File[]) {
+    const singleZip = selected.length === 1 && isZipFilename(selected[0].name);
+    setIsAnalyzingSource(true);
+    const { files, skipped } = singleZip
+      ? { files: selected, skipped: 0 }
+      : await keepDicomFiles(selected).finally(() => setIsAnalyzingSource(false));
+    const clientValidationError =
+      selected.length > 0 && files.length === 0
+        ? NO_DICOM_FILES_MESSAGE
+        : getClientUploadValidationError(files);
+    if (skipped > 0 && files.length > 0) {
+      toast.info(
+        `Skipped ${skipped} file${skipped === 1 ? "" : "s"} that ${skipped === 1 ? "is" : "are"} not DICOM images.`,
+      );
+    }
 
     if (clientValidationError) {
       clearSelectedSource();
@@ -1362,7 +1373,7 @@ export function ZoneModalitiesManager({ zoneId }: { zoneId: string }) {
                           Drop files or click to browse
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          ZIP or DICOM, up to 1024 MB
+                          One series as a DICOM folder or ZIP, up to 1024 MB
                         </p>
                         {selectedSourceLabel ? (
                           <p className="mt-2 max-w-full truncate text-xs text-muted-foreground">
@@ -1844,6 +1855,18 @@ function ZoneModalityEditorCard({
                           <AlertCircleIcon />
                         </Button>
                       )}
+                      {variantViewerReady && family.modalityType === "mpr" ? (
+                        <Button asChild size="icon-sm" variant="secondary">
+                          <a
+                            href={`/api/playground/zones/${zoneId}/modalities/${variant.id}/planes`}
+                            download
+                            aria-label="Download all planes"
+                            title="Download axial, coronal and sagittal images"
+                          >
+                            <DownloadIcon />
+                          </a>
+                        </Button>
+                      ) : null}
                       <DeleteConfirmationDialog
                         confirmationLabel={
                           family.variants.length > 1

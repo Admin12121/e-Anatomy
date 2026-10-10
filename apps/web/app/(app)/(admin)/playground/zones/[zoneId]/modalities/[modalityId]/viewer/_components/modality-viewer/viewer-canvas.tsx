@@ -80,6 +80,8 @@ type ViewerCanvasProps = {
   crosshairStroke?: string;
   currentAtlasFrame: ZoneModalityAtlasFrame | null;
   currentImageElement: HTMLImageElement | null;
+  /** Pixel height over width; MPR planes from thick slices are taller than wide. */
+  pixelAspect?: number;
   draftStructureTitle: string;
   draftPointerPlaced: boolean;
   editorMode: boolean;
@@ -143,6 +145,7 @@ export function ViewerCanvas({
   crosshairStroke = "rgba(56, 189, 248, 0.9)",
   currentAtlasFrame,
   currentImageElement,
+  pixelAspect = 1,
   draftStructureTitle,
   draftPointerPlaced,
   editorMode,
@@ -260,8 +263,16 @@ export function ViewerCanvas({
       width: currentImageElement?.width,
     },
   ]) ?? { height: 1, width: 1 };
-  const sourceImageHeight = sourceDimensions.height;
-  const sourceImageWidth = sourceDimensions.width;
+  // Lay the image out at its physical shape, stretching the short axis so no
+  // stored detail is lost. Overlays use normalized points, so they follow.
+  const physicalAspect =
+    Number.isFinite(pixelAspect) && pixelAspect > 0 ? pixelAspect : 1;
+  const sourceImageHeight = Math.round(
+    sourceDimensions.height * Math.max(1, physicalAspect),
+  );
+  const sourceImageWidth = Math.round(
+    sourceDimensions.width * Math.max(1, 1 / physicalAspect),
+  );
   const uncappedViewerLayout = useMemo(
     () =>
       calculateViewerLayout({

@@ -614,7 +614,7 @@ impl PlaygroundRepository {
 
     pub async fn list_zone_modality_atlas_assets(
         &self,
-        pool: &PgPool,
+        pool: impl sqlx::PgExecutor<'_>,
         account_id: Uuid,
         zone_id: Uuid,
         modality_id: Uuid,
@@ -880,7 +880,7 @@ impl PlaygroundRepository {
 
     pub async fn delete_zone_modality_assets(
         &self,
-        pool: &PgPool,
+        pool: impl sqlx::PgExecutor<'_>,
         account_id: Uuid,
         zone_id: Uuid,
         modality_id: Uuid,
@@ -1247,7 +1247,7 @@ impl PlaygroundRepository {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_zone_modality_derived_asset(
         &self,
-        pool: &PgPool,
+        pool: impl sqlx::PgExecutor<'_>,
         asset_id: Uuid,
         modality_id: Uuid,
         ingest_job_id: Uuid,
@@ -1428,7 +1428,8 @@ impl PlaygroundRepository {
             r#"
             SELECT
                 asset.storage_key,
-                asset.mime_type
+                asset.mime_type,
+                asset.asset_kind
             FROM anatomy_zone_modality_assets AS asset
             INNER JOIN anatomy_zone_modalities AS modality ON modality.id = asset.modality_id
             INNER JOIN anatomy_zones AS zone ON zone.id = modality.zone_id
@@ -2728,6 +2729,7 @@ impl From<ZoneModalityAssetRow> for ZoneModalityAsset {
 pub struct ZoneModalityAssetStorageRow {
     pub storage_key: Option<String>,
     pub mime_type: Option<String>,
+    pub asset_kind: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]

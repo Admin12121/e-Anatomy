@@ -51,7 +51,7 @@ type Props = {
 
 let sharedAtlas: Promise<Atlas> | undefined;
 export function preloadAnatomyStageAssets(): Promise<Atlas> {
-  sharedAtlas ??= fetch("/models/atlas.json", { cache: "force-cache" })
+  sharedAtlas ??= fetch("/models/atlas-v2.json", { cache: "no-cache" })
     .then((r) => { if (!r.ok) throw new Error("Anatomical catalogue unavailable"); return r.json() as Promise<Atlas>; })
     .catch((error: unknown) => { sharedAtlas = undefined; throw error; });
   return sharedAtlas;

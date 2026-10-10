@@ -2,7 +2,7 @@
 import {useEffect,useRef} from 'react';
 import * as T from 'three';
 import {RoomEnvironment} from 'three/examples/jsm/environments/RoomEnvironment.js';
-import {mergeGeometries} from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import {MeshoptDecoder} from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import {decodeModelResponse} from './model-download';
 import {SYSTEMS,type Atlas,type SystemId} from './anatomy';
 
@@ -12,16 +12,6 @@ interface SceneController {setVisible:(visible:SystemId[])=>void;setSelected:(re
 
 const REGIONS:BodyRegion[]=['Head','Neck','Chest','Abdomen & Pelvis','Upper Limbs','Lower Limbs','Spine'];
 const regionId=(region:BodyRegion)=>REGIONS.indexOf(region);
-const partRegion=(part:Atlas['parts'][number],positions:Float32Array)=>{
- if(typeof part.region==='number')return part.region;
- // Backward-compatible spatial mapping for a catalogue without embedded regions.
- let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
- for(let i=0;i<positions.length;i+=3){minX=Math.min(minX,positions[i]);maxX=Math.max(maxX,positions[i]);minY=Math.min(minY,positions[i+1]);maxY=Math.max(maxY,positions[i+1]);}
- const x=(minX+maxX)*.5,y=(minY+maxY)*.5,ax=Math.abs(x);
- if(y>=1.515)return 0;if(y>=1.435&&ax<.115)return 1;
- if(y>=.78&&y<1.47&&ax>=(y>1.32?.125:.14))return 4;
- if(y>=1.2)return 2;if(y>=.8)return 3;return 5;
-};
 const neutralColor=(hex:string)=>{
  const c=new T.Color(hex);
  // Preserve detailed surface normals by avoiding the washed-out white base
@@ -166,79 +156,100 @@ export default function AnatomyScene({atlas,visible,selectedRegion,modelZoom=1,c
   // Hover picking keeps only tiny AABB metadata for each source structure.
   // We do NOT keep 2,234 hidden geometry meshes in memory. This retains the
   // accurate body-local selection behavior without duplicating the anatomy.
-  const partBounds=atlas.parts.map(part=>{
-   if(part.bounds)return new T.Box3(new T.Vector3().fromArray(part.bounds[0]),new T.Vector3().fromArray(part.bounds[1]));
-   if(part.positionMin&&part.positionScale){
-    const min=new T.Vector3().fromArray(part.positionMin);
-    const max=new T.Vector3(
-     part.positionMin[0]+part.positionScale[0]*65535,
-     part.positionMin[1]+part.positionScale[1]*65535,
-     part.positionMin[2]+part.positionScale[2]*65535,
-    );
-    return new T.Box3(min,max);
+  const partBounds=atlas.parts.map(part=>new T.Box3(new T.Vector3().fromArray(part.bounds[0]),new T.Vector3().fromArray(part.bounds[1])));
+  const partsByChunk=atlas.chunks.map(()=>[] as Atlas['parts']);
+  atlas.parts.forEach(part=>partsByChunk[part.chunk].push(part));
+
+  // Systems hidden at first (muscles by default) load after the rest, or as
+  // soon as they are switched on, so the first view downloads less.
+  const queue:number[]=[],started=new Set<number>();
+  const initialChunks=atlas.chunks.map((_,i)=>i).filter(i=>visibleSet.has(atlas.chunks[i].system));
+  let backgroundAllowed=false,backgroundActive=0;
+  const promoteVisible=()=>queue.sort((a,b)=>Number(visibleSet.has(atlas.chunks[b].system))-Number(visibleSet.has(atlas.chunks[a].system)));
+  const pumpBackground=()=>{
+   while(!disposed&&backgroundActive<1&&queue.length){
+    const next=queue[0];
+    if(!backgroundAllowed&&!visibleSet.has(atlas.chunks[next].system))return;
+    queue.shift();backgroundActive++;
+    void loadChunk(next).catch(e=>{if(!disposed)callback.current.onError(e instanceof Error?e.message:'Could not load the anatomy.');}).finally(()=>{backgroundActive--;pumpBackground();});
    }
-   return new T.Box3();
-  });
+  };
 
   const syncVisible=(ids:SystemId[])=>{
    visibleSet=new Set(ids);
    body.visible=visibleSet.size>0;
    for(const [system,meshes] of meshesBySystem)for(const mesh of meshes)mesh.visible=visibleSet.has(system);
    if(!ids.length)setHovered(-1);
+   promoteVisible();pumpBackground();
    schedule();
   };
   controller.current={setVisible:syncVisible,setSelected(id){selected=id;applyHighlight();}};
   applyHighlight();
 
-  let loaded=0;
+  const {origin,step}=atlas.quantization;
+  const addBatch=(system:SystemId,batch:{part:Atlas['parts'][number];position:Uint16Array;normal:Int8Array;index:Uint16Array}[],vertices:number,indexCount:number)=>{
+   const position=new Uint16Array(vertices*3),normal=new Int8Array(vertices*3),index=new Uint16Array(indexCount),regions=new Uint8Array(vertices);
+   let vertexBase=0,indexBase=0;
+   for(const item of batch){
+    const count=item.part.vertexCount;
+    for(let v=0;v<count;v++){
+     const from=v*4,to=(vertexBase+v)*3;
+     position[to]=item.position[from];position[to+1]=item.position[from+1];position[to+2]=item.position[from+2];
+     normal[to]=item.normal[from];normal[to+1]=item.normal[from+1];normal[to+2]=item.normal[from+2];
+    }
+    for(let i=0;i<item.index.length;i++)index[indexBase+i]=item.index[i]+vertexBase;
+    // Every vertex of a source structure receives the same region id so hover
+    // restores colour to complete anatomical pieces.
+    regions.fill(item.part.region,vertexBase,vertexBase+count);
+    vertexBase+=count;indexBase+=item.index.length;
+   }
+   const geometry=new T.BufferGeometry();
+   // Positions stay 16-bit grid steps on the GPU; the mesh scales them to metres.
+   geometry.setAttribute('position',new T.BufferAttribute(position,3));
+   geometry.setAttribute('normal',new T.BufferAttribute(normal,3,true));
+   geometry.setAttribute('regionId',new T.BufferAttribute(regions,1));
+   geometry.setIndex(new T.BufferAttribute(index,1));
+   geometry.computeBoundingSphere();geometries.push(geometry);
+   const mesh=new T.Mesh(geometry,systemMaterials.get(system)!);
+   mesh.scale.setScalar(step);mesh.position.fromArray(origin);
+   mesh.visible=visibleSet.has(system);body.add(mesh);
+   const list=meshesBySystem.get(system)??[];list.push(mesh);meshesBySystem.set(system,list);
+  };
+
+  let loadedInitial=0;
   const loadChunk=async(ci:number)=>{
+   if(started.has(ci))return;
+   started.add(ci);
    const chunk=atlas.chunks[ci],compressed=!!chunk.gzip&&typeof DecompressionStream!=='undefined';
    const response=await fetch(compressed?chunk.gzip!:chunk.url,{signal:abort.signal,cache:'force-cache'});
-   const buffer=await decodeModelResponse(response,chunk.bytes,compressed);
+   const bytes=new Uint8Array(await decodeModelResponse(response,chunk.bytes,compressed));
    if(disposed)return;
-   const groups=new Map<SystemId,T.BufferGeometry[]>();
-   atlas.parts.forEach((p,i)=>{
-    if(p.chunk!==ci)return;
-    const g=new T.BufferGeometry();
-    let positions:Float32Array;
-    if(p.positionBytes===2&&p.positionMin&&p.positionScale){
-     const packed=new Uint16Array(buffer,p.positions,p.vertexCount*3);positions=new Float32Array(packed.length);
-     for(let n=0;n<packed.length;n++){const axis=n%3;positions[n]=p.positionMin[axis]+packed[n]*p.positionScale[axis];}
-    }else positions=new Float32Array(buffer,p.positions,p.vertexCount*3);
-    g.setAttribute('position',new T.BufferAttribute(positions,3));
-    const normals=p.normalBytes===1?new Int8Array(buffer,p.normals,p.vertexCount*3):new Int16Array(buffer,p.normals,p.vertexCount*3);
-    g.setAttribute('normal',new T.BufferAttribute(normals,3,true));
-    const IndexArray=p.indexBytes===2?Uint16Array:Uint32Array;
-    g.setIndex(new T.BufferAttribute(new IndexArray(buffer,p.indices,p.indexCount),1));
-    const regions=new Uint8Array(p.vertexCount);
-    // Every vertex of a source structure receives the same region id so hover
-    // restores colour to complete anatomical pieces rather than cutting them
-    // at arbitrary Y/X thresholds.
-    regions.fill(partRegion(p,positions));
-    g.setAttribute('regionId',new T.BufferAttribute(regions,1));
-    const list=groups.get(p.system)??[];list.push(g);groups.set(p.system,list);
-   });
-   groups.forEach((parts,system)=>{
-    let batch:T.BufferGeometry[]=[],vertices=0;
-    const commit=()=>{
-     if(!batch.length)return;
-     const geometry=mergeGeometries(batch,false);
-     batch.forEach(g=>g.dispose());batch=[];vertices=0;
-     if(!geometry)throw new Error('Could not assemble anatomy geometry.');
-     geometry.computeBoundingSphere();geometries.push(geometry);
-     const mesh=new T.Mesh(geometry,systemMaterials.get(system)!);mesh.visible=visibleSet.has(system);body.add(mesh);
-     const list=meshesBySystem.get(system)??[];list.push(mesh);meshesBySystem.set(system,list);
-    };
-    for(const geometry of parts){const count=geometry.getAttribute('position').count;if(batch.length&&vertices+count>60000)commit();batch.push(geometry);vertices+=count;}
-    commit();
-   });
+   const stream=(range:[number,number])=>bytes.subarray(range[0],range[0]+range[1]);
+   let batch:Parameters<typeof addBatch>[1]=[],vertices=0,indexCount=0;
+   for(const part of partsByChunk[ci]){
+    if(batch.length&&vertices+part.vertexCount>65535){addBatch(chunk.system,batch,vertices,indexCount);batch=[];vertices=0;indexCount=0;}
+    const position=new Uint16Array(part.vertexCount*4),normal=new Int8Array(part.vertexCount*4),index=new Uint16Array(part.indexCount);
+    MeshoptDecoder.decodeVertexBuffer(new Uint8Array(position.buffer),part.vertexCount,8,stream(part.position));
+    MeshoptDecoder.decodeVertexBuffer(new Uint8Array(normal.buffer),part.vertexCount,4,stream(part.normal),'OCTAHEDRAL');
+    MeshoptDecoder.decodeIndexBuffer(new Uint8Array(index.buffer),part.indexCount,2,stream(part.index));
+    batch.push({part,position,normal,index});vertices+=part.vertexCount;indexCount+=part.indexCount;
+   }
+   if(batch.length)addBatch(chunk.system,batch,vertices,indexCount);
    body.visible=visibleSet.size>0;
-   loaded++;callback.current.onProgress(Math.round(loaded/atlas.chunks.length*100));schedule();
+   if(initialChunks.includes(ci)){loadedInitial++;callback.current.onProgress(Math.round(loadedInitial/initialChunks.length*100));}
+   schedule();
   };
   (async()=>{try{
+   await MeshoptDecoder.ready;
+   if(disposed)return;
+   queue.push(...atlas.chunks.map((_,i)=>i).filter(i=>!initialChunks.includes(i)));
    let cursor=0;
-   await Promise.all(Array.from({length:profile.concurrency},async()=>{while(cursor<atlas.chunks.length){const i=cursor++;await loadChunk(i);}}));
-   if(!disposed){ready=true;schedule();callback.current.onReady?.();}
+   if(!initialChunks.length)callback.current.onProgress(100);
+   await Promise.all(Array.from({length:profile.concurrency},async()=>{while(cursor<initialChunks.length){const i=initialChunks[cursor++];await loadChunk(i);}}));
+   if(disposed)return;
+   ready=true;schedule();callback.current.onReady?.();
+   // Slow or data-saving connections fetch hidden systems only on demand.
+   backgroundAllowed=!profile.slow;promoteVisible();pumpBackground();
   }catch(e){if(!disposed)callback.current.onError(e instanceof Error?e.message:'Could not load the anatomy.');}})();
 
   const resize=()=>{

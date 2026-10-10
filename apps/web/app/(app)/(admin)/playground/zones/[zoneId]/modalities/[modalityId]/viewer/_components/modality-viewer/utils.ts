@@ -1,4 +1,4 @@
-import type { ZoneModalityAsset } from "@/lib/playground/types";
+import type { MprPlane, ZoneModalityAsset } from "@/lib/playground/types";
 
 export function readMutationError(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -83,6 +83,21 @@ export function formatOrientationLabel(value: string | null | undefined) {
 
 export function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+/**
+ * Height of one plane-image pixel relative to its width. Stored MPR planes
+ * keep one pixel per voxel, so a 1.5 mm slice under 0.47 mm pixels is ~3.2.
+ */
+export function mprPlanePixelAspect(
+  plane: MprPlane,
+  spacing: readonly number[] | null | undefined,
+) {
+  const [x, y, z] = spacing ?? [];
+  const [horizontal, vertical] =
+    plane === "axial" ? [x, y] : plane === "coronal" ? [x, z] : [y, z];
+  if (!(horizontal > 0) || !(vertical > 0)) return 1;
+  return clamp(vertical / horizontal, 1 / 8, 8);
 }
 
 export function buildStackWarmupOrder(

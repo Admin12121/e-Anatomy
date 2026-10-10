@@ -8,10 +8,6 @@ export type DetectedModalityUpload = {
   suggestedName: string
 }
 
-type NamedUpload = {
-  name: string
-}
-
 const MRI_HINTS = ["mri", "mr", "t1", "t2", "pd", "flair", "adc", "dwi"]
 const CT_HINTS = ["ct", "cta"]
 const PET_HINTS = ["pet"]
@@ -25,37 +21,28 @@ const ILLUSTRATION_HINTS = ["illustration", "anatomy", "atlas", "diagram"]
 const PHOTOGRAPHY_HINTS = ["photo", "photography", "clinical", "surgical"]
 const ENDOSCOPY_HINTS = ["endo", "endoscopy", "fibroscopy"]
 
-const DICOM_EXTENSIONS = [".dcm", ".dicom", ".ima"] as const
-const BLOCKED_DICOM_ARCHIVE_EXTENSIONS = [
-  ".css",
-  ".evx",
-  ".gif",
-  ".htm",
-  ".html",
-  ".js",
-  ".lnk",
-  ".mp4",
-  ".mpeg",
-  ".pdf",
-  ".png",
-  ".txt",
-  ".xml",
-] as const
-const BLOCKED_DICOM_ARCHIVE_SEGMENTS = new Set([
+// Files that DICOM exports ship beside the images. Mirrors the API's
+// is_bundled_non_dicom_entry; anything else is judged by its content.
+const BUNDLED_NON_DICOM_EXTENSIONS = new Set([
+  "bat", "bmp", "cab", "cmd", "css", "csv", "db", "dll", "doc", "docx", "evx",
+  "exe", "gif", "htm", "html", "ico", "inf", "ini", "jpeg", "jpg", "js",
+  "json", "lnk", "log", "mp4", "mpeg", "msi", "pdf", "png", "rtf", "svg",
+  "ttf", "txt", "woff", "woff2", "xls", "xlsx", "xml", "zip",
+])
+const BUNDLED_NON_DICOM_FOLDERS = new Set([
+  "__macosx",
   "css",
   "css_en",
   "evlite",
   "help_di",
-  "image",
-  "image_en",
   "javascript",
-  "mpeg",
-  "other",
-  "pdf",
   "viewer",
 ])
 
-export const MAX_DICOM_FILES = 512
+export const NO_DICOM_FILES_MESSAGE =
+  "No DICOM images were found. Export the MRI or CT series from the scanner or PACS as DICOM, then upload its folder or a ZIP of it."
+
+export const MAX_DICOM_FILES = 4096
 export const MAX_TOTAL_UPLOAD_BYTES = 1024 * 1024 * 1024
 
 export class ModalityUploadValidationError extends Error {
@@ -65,41 +52,19 @@ export class ModalityUploadValidationError extends Error {
   }
 }
 
-export function createClientModalityUploadPreview(
-  files: NamedUpload[],
-): DetectedModalityUpload | null {
-  if (files.length === 0) {
-    return null
-  }
+/**
+ * Keeps the DICOM images of a selection. Scanner and PACS exports mix them
+ * with viewers and notes, and name slices by UID, so content decides.
+ */
+export async function keepDicomFiles(files: File[]) {
+  const checks = await Promise.all(
+    files.map(async (file) =>
+      hasDicomSignature(new Uint8Array(await file.slice(0, 132).arrayBuffer())),
+    ),
+  )
+  const dicomFiles = files.filter((_, index) => checks[index])
 
-  const names = files
-    .map((file) => sanitizeUploadName(file.name))
-    .filter((name) => name.length > 0)
-
-  if (names.length === 0) {
-    return null
-  }
-
-  if (names.length === 1 && isZipFilename(names[0])) {
-    return buildModalityUploadSummary({
-      names,
-      sourceFileCount: 1,
-      sourceKind: "zip",
-      sourceLabel: names[0],
-    })
-  }
-
-  if (names.every(isLikelyDicomFilename)) {
-    return buildModalityUploadSummary({
-      names,
-      sourceFileCount: names.length,
-      sourceKind: "dicom_files",
-      sourceLabel:
-        names.length === 1 ? names[0] : `${names.length} DICOM files selected`,
-    })
-  }
-
-  return null
+  return { files: dicomFiles, skipped: files.length - dicomFiles.length }
 }
 
 export async function analyzeModalityUploadFiles(
@@ -137,7 +102,7 @@ export async function analyzeModalityUploadFiles(
 
   if (files.length > MAX_DICOM_FILES) {
     throw new ModalityUploadValidationError(
-      "Too many DICOM files were selected.",
+      `Too many DICOM files were selected (${files.length}). Upload one series at a time, or a ZIP of up to 10,000 files.`,
     )
   }
 
@@ -191,20 +156,6 @@ export function isZipFilename(name: string) {
   return sanitizeUploadName(name).toLowerCase().endsWith(".zip")
 }
 
-export function isLikelyDicomFilename(name: string) {
-  const normalized = sanitizeUploadName(name).toLowerCase()
-
-  if (DICOM_EXTENSIONS.some((extension) => normalized.endsWith(extension))) {
-    return true
-  }
-
-  const extension = normalized.includes(".")
-    ? normalized.slice(normalized.lastIndexOf("."))
-    : ""
-
-  return extension === ""
-}
-
 async function inspectZipUpload(file: File, fileName: string) {
   const normalizedName = sanitizeUploadName(fileName)
 
@@ -218,18 +169,12 @@ async function inspectZipUpload(file: File, fileName: string) {
     throw new ModalityUploadValidationError("ZIP package signature is invalid.")
   }
 
-  const entries = listZipEntries(buffer)
+  const entries = listZipEntries(buffer).filter(
+    (entry) => !isBundledNonDicomEntry(entry),
+  )
 
   if (entries.length === 0) {
-    throw new ModalityUploadValidationError("ZIP package is empty.")
-  }
-
-  const invalidEntry = entries.find((entry) => !isAllowedDicomArchiveEntry(entry))
-
-  if (invalidEntry) {
-    throw new ModalityUploadValidationError(
-      `ZIP package contains non-DICOM viewer or document files (${invalidEntry}). Upload a clean DICOM-only package.`,
-    )
+    throw new ModalityUploadValidationError(NO_DICOM_FILES_MESSAGE)
   }
 
   return buildModalityUploadSummary({
@@ -240,31 +185,27 @@ async function inspectZipUpload(file: File, fileName: string) {
   })
 }
 
-function isAllowedDicomArchiveEntry(name: string) {
-  const normalized = name.replace(/\\/g, "/").trim().toLowerCase()
-  const segments = normalized.split("/").filter(Boolean)
+export function isBundledNonDicomEntry(name: string) {
+  const segments = name
+    .replace(/\\/g, "/")
+    .trim()
+    .toLowerCase()
+    .split("/")
+    .filter(Boolean)
   const fileName = segments.at(-1) ?? ""
 
-  if (!fileName) {
-    return false
+  if (!fileName || fileName.startsWith(".")) {
+    return true
   }
 
-  if (segments.some((segment) => BLOCKED_DICOM_ARCHIVE_SEGMENTS.has(segment))) {
-    return false
+  if (segments.some((segment) => BUNDLED_NON_DICOM_FOLDERS.has(segment))) {
+    return true
   }
 
   const dotIndex = fileName.lastIndexOf(".")
-  const extension = dotIndex >= 0 ? fileName.slice(dotIndex) : ""
-
-  if (extension && !DICOM_EXTENSIONS.includes(extension as (typeof DICOM_EXTENSIONS)[number])) {
-    return false
-  }
-
-  if (BLOCKED_DICOM_ARCHIVE_EXTENSIONS.includes(extension as (typeof BLOCKED_DICOM_ARCHIVE_EXTENSIONS)[number])) {
-    return false
-  }
-
-  return true
+  return (
+    dotIndex >= 0 && BUNDLED_NON_DICOM_EXTENSIONS.has(fileName.slice(dotIndex + 1))
+  )
 }
 
 function inferModalityTypeFromNames(names: string[]): ModalityType {
@@ -332,23 +273,13 @@ async function validateDicomFiles(files: File[]) {
         )
       }
 
-      const header = new Uint8Array(await file.slice(0, 264).arrayBuffer())
+      const header = new Uint8Array(await file.slice(0, 132).arrayBuffer())
 
-      if (!isLikelyDicomFile(normalizedName, header)) {
-        throw new ModalityUploadValidationError(
-          "Only DICOM files or one ZIP package are allowed in modality intake.",
-        )
+      if (!hasDicomSignature(header)) {
+        throw new ModalityUploadValidationError(NO_DICOM_FILES_MESSAGE)
       }
     }),
   )
-}
-
-function isLikelyDicomFile(name: string, header: Uint8Array) {
-  if (hasDicomSignature(header)) {
-    return true
-  }
-
-  return isLikelyDicomFilename(name)
 }
 
 function hasDicomSignature(buffer: Uint8Array) {

@@ -1,9 +1,64 @@
-use axum::http::HeaderMap;
+use std::path::PathBuf;
+
+use axum::{
+    body::Body,
+    http::{HeaderMap, header},
+    response::{IntoResponse, Response},
+};
 use axum_extra::extract::cookie::CookieJar;
 use sqlx::PgPool;
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::infrastructure::{error::AppError, state::AppState};
+
+/// Streams a ZIP written to a temporary file as a download, then deletes the
+/// file, also when the client disconnects early.
+pub async fn temporary_zip_response(path: PathBuf, file_name: &str) -> Result<Response, AppError> {
+    struct TemporaryFile(PathBuf);
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let guard = TemporaryFile(path);
+    let mut file = tokio::fs::File::open(&guard.0)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let stream = async_stream::stream! {
+        let _guard = guard;
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            match file.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(count) => yield Ok::<_, std::io::Error>(buffer[..count].to_vec()),
+                Err(error) => {
+                    yield Err(error);
+                    break;
+                }
+            }
+        }
+    };
+    let file_name = file_name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || "-_.".contains(*character))
+        .collect::<String>();
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{file_name}\""),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response())
+}
 
 #[derive(Debug, Clone)]
 pub struct RequestActorContext {

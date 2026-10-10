@@ -2,24 +2,20 @@ use crate::{
     features::playground::application::service::library::{AttachLibraryInput, MAX_PACKAGE_BYTES},
     infrastructure::{
         error::AppError,
-        http::{require_content_editor, resolve_admin_actor_context},
+        http::{require_content_editor, resolve_admin_actor_context, temporary_zip_response},
         state::AppState,
     },
 };
 use axum::{
     Json, Router,
-    body::Body,
     extract::{DefaultBodyLimit, Multipart, Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use axum_extra::extract::cookie::CookieJar;
 use std::path::PathBuf;
-use tokio::{
-    fs,
-    io::{AsyncReadExt, AsyncWriteExt},
-};
+use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
 
 pub fn routes() -> Router<AppState> {
@@ -265,12 +261,6 @@ async fn attach(
     ))
 }
 
-struct TemporaryExport(PathBuf);
-impl Drop for TemporaryExport {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
 async fn download(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -282,31 +272,5 @@ async fn download(
         .playground_service
         .export_library(actor.account_id, id)
         .await?;
-    let guard = TemporaryExport(path.clone());
-    let mut file = fs::File::open(&path)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    let stream = async_stream::stream! {
-        let _guard = guard;
-        let mut buffer = vec![0u8;64*1024];
-        loop { match file.read(&mut buffer).await {
-            Ok(0) => break,
-            Ok(count) => yield Ok::<_,std::io::Error>(buffer[..count].to_vec()),
-            Err(error) => { yield Err(error); break; }
-        } }
-    };
-    let body = Body::from_stream(stream);
-    Ok((
-        [
-            (header::CONTENT_TYPE, "application/zip".to_string()),
-            (header::CACHE_CONTROL, "no-store".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{id}-png.zip\""),
-            ),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
-        ],
-        body,
-    )
-        .into_response())
+    temporary_zip_response(path, &format!("{id}-png.zip")).await
 }

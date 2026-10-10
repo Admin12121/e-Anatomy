@@ -6,7 +6,7 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{
         HeaderMap, StatusCode,
-        header::{CACHE_CONTROL, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH},
     },
     response::{
         IntoResponse, Response,
@@ -21,7 +21,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::features::playground::application::service::{
-    CreateZoneModalityStudyUploadInput, DerivedAssetBinaryVariant, UploadedSourceFile,
+    CreateZoneModalityStudyUploadInput, DerivedAssetFile, UploadedSourceFile,
 };
 use crate::features::playground::domain::models::{
     CreateViewerAnnotationInput, CreateViewerStructureGroupInput, CreateViewerStructureInput,
@@ -32,12 +32,12 @@ use crate::features::playground::domain::models::{
 };
 use crate::infrastructure::{
     error::AppError,
-    http::{resolve_admin_account_id, resolve_admin_actor_context},
+    http::{resolve_admin_account_id, resolve_admin_actor_context, temporary_zip_response},
     state::AppState,
 };
 
 const MAX_STUDY_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
-const MAX_STUDY_UPLOAD_FILE_COUNT: usize = 512;
+const MAX_STUDY_UPLOAD_FILE_COUNT: usize = 4096;
 const MAX_STUDY_UPLOAD_SINGLE_FILE_BYTES: i64 = MAX_STUDY_UPLOAD_BYTES as i64;
 const MAX_UPLOAD_PATH_LENGTH: usize = 260;
 
@@ -93,6 +93,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/atlases/rebuild",
             axum::routing::post(rebuild_zone_modality_atlases),
+        )
+        .route(
+            "/zones/{zone_id}/modalities/{modality_id}/planes",
+            get(download_zone_modality_planes),
         )
         .route(
             "/zones/{zone_id}/modalities/{modality_id}/viewer/structure-groups",
@@ -588,6 +592,21 @@ async fn rebuild_zone_modality_atlases(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn download_zone_modality_planes(
+    State(state): State<AppState>,
+    Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let account_id = resolve_admin_account_id(&state, &jar, &headers).await?;
+    let (path, file_name) = state
+        .playground_service
+        .export_modality_planes(account_id, zone_id, modality_id)
+        .await?;
+
+    temporary_zip_response(path, &file_name).await
+}
+
 async fn create_viewer_structure_group(
     State(state): State<AppState>,
     Path((zone_id, modality_id)): Path<(Uuid, Uuid)>,
@@ -774,52 +793,61 @@ async fn get_derived_asset_image(
     jar: CookieJar,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    serve_derived_asset_binary(
-        state,
-        asset_id,
-        jar,
-        headers,
-        DerivedAssetBinaryVariant::Image,
-    )
-    .await
+    let account_id = resolve_admin_account_id(&state, &jar, &headers).await?;
+    let file = state
+        .playground_service
+        .derived_asset_file(account_id, asset_id)
+        .await?;
+
+    derived_asset_response(file, &headers, "private").await
 }
 
 async fn get_public_derived_asset_image(
     State(state): State<AppState>,
     Path(asset_id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let (bytes, mime_type) = state
+    let file = state
         .playground_service
-        .get_public_derived_asset_binary(asset_id, DerivedAssetBinaryVariant::Image)
+        .public_derived_asset_file(asset_id)
         .await?;
 
-    Ok((
-        [
-            (CONTENT_TYPE, mime_type),
-            (CACHE_CONTROL, "public, max-age=86400".to_string()),
-        ],
-        bytes,
-    )
-        .into_response())
+    derived_asset_response(file, &headers, "public").await
 }
 
-async fn serve_derived_asset_binary(
-    state: AppState,
-    asset_id: Uuid,
-    jar: CookieJar,
-    headers: HeaderMap,
-    variant: DerivedAssetBinaryVariant,
+/// Serves a slice or atlas page; a matching `If-None-Match` skips the read.
+async fn derived_asset_response(
+    file: DerivedAssetFile,
+    headers: &HeaderMap,
+    scope: &str,
 ) -> Result<Response, AppError> {
-    let account_id = resolve_admin_account_id(&state, &jar, &headers).await?;
-    let (bytes, mime_type) = state
-        .playground_service
-        .get_derived_asset_binary(account_id, asset_id, variant)
-        .await?;
+    let max_age = if file.immutable {
+        "max-age=31536000, immutable"
+    } else {
+        "max-age=86400"
+    };
+    let cache_control = format!("{scope}, {max_age}");
+    let revalidated = headers
+        .get(IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|tags| tags.split(',').any(|tag| tag.trim() == file.etag));
+    if revalidated {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [(ETAG, file.etag), (CACHE_CONTROL, cache_control)],
+        )
+            .into_response());
+    }
+
+    let bytes = fs::read(&file.path)
+        .await
+        .map_err(|_| AppError::not_found("Derived asset file is unavailable"))?;
 
     Ok((
         [
-            (CONTENT_TYPE, mime_type),
-            (CACHE_CONTROL, "private, max-age=86400".to_string()),
+            (CONTENT_TYPE, file.mime_type),
+            (CACHE_CONTROL, cache_control),
+            (ETAG, file.etag),
         ],
         bytes,
     )

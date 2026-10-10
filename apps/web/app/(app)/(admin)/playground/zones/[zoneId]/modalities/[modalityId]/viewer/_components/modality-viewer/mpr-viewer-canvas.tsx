@@ -27,6 +27,7 @@ import {
   type AreaEditTool,
   type MainInteractionTool,
 } from "./viewer-canvas";
+import { mprPlanePixelAspect } from "./utils";
 import { isViewerAnnotationInteractionTarget } from "./viewer-canvas/helpers";
 import type { ViewerAssetImageSource } from "./viewer-data";
 
@@ -600,6 +601,7 @@ function MprViewport({
         currentAssetIndex={sliceIndex}
         currentAtlasFrame={imageSource?.atlasFrame ?? null}
         currentImageElement={currentImageElement}
+        pixelAspect={mprPlanePixelAspect(plane, spec.volume.spacing)}
         draftStructureTitle={draftStructureTitle}
         draftPointerPlaced={draftPointerPlaced}
         editorMode={annotationEditingEnabled && activeForEditing}
