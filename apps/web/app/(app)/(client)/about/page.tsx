@@ -5,7 +5,8 @@ import { PortalLegalShell } from "../_legal/portal-legal-shell";
 
 export const metadata: Metadata = {
   title: "About Us",
-  description: "About Voxel Anatomy",
+  description:
+    "VoxelAnatomy is built by radiologists to make anatomy more visual: explore CT and MRI anatomy in three planes.",
 };
 
 export default async function AboutPage() {
