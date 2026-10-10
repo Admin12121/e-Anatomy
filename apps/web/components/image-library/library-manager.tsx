@@ -27,6 +27,8 @@ export function LibraryManager({ initialStudies }: { initialStudies: LibraryStud
   const [importOpen, setImportOpen] = useState(false);
   const [name, setName] = useState("");
   const [kind, setKind] = useState<ModalityType>("mri");
+  // The import dialog blocks clicks outside itself, so its select list renders inside it.
+  const [importDialog, setImportDialog] = useState<HTMLDivElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -170,14 +172,14 @@ export function LibraryManager({ initialStudies }: { initialStudies: LibraryStud
         if (edited && id) void upload(`/api/image-library/${id}/edited`, edited, id);
       }} />
       <Dialog open={importOpen} onOpenChange={(open) => { if (uploading !== "new") { setImportOpen(open); if (!open) setFile(null); } }}>
-        <DialogContent className="p-6" showCloseButton={uploading !== "new"}>
+        <DialogContent ref={setImportDialog} className="p-6" showCloseButton={uploading !== "new"}>
           <DialogHeader><DialogTitle>Import study</DialogTitle><DialogDescription>DICOM ZIP · up to 1024 MB</DialogDescription></DialogHeader>
           <form className="mt-5 space-y-4" onSubmit={(event) => { event.preventDefault(); if (file) void upload("/api/image-library", file, "new"); }}>
             <Field><FieldLabel htmlFor="library-name">Study name</FieldLabel><Input type="text" id="library-name" value={name} onChange={(event) => setName(event.target.value)} required maxLength={200} disabled={pending} /></Field>
             <Field><FieldLabel htmlFor="library-kind">Modality type</FieldLabel>
               <Select items={MODALITY_TYPE_OPTIONS} value={kind} disabled={pending} onValueChange={(value) => { if (value) setKind(value as ModalityType); }}>
                 <SelectTrigger id="library-kind" size="lg"><SelectValue /></SelectTrigger>
-                <SelectContent>{MODALITY_TYPE_OPTIONS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent>
+                <SelectContent container={importDialog}>{MODALITY_TYPE_OPTIONS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent>
               </Select>
               <FieldDescription>Choose MPR to rebuild coronal and sagittal planes from a CT or MRI series. Other types keep only the uploaded slices.</FieldDescription>
             </Field>

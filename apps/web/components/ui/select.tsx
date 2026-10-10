@@ -111,8 +111,9 @@ export function SelectPopup({
   sideOffset = 4,
   align = "start",
   alignOffset = 0,
-  alignItemWithTrigger = true,
+  alignItemWithTrigger,
   anchor,
+  container,
   ...props
 }: SelectPrimitive.Popup.Props & {
   side?: SelectPrimitive.Positioner.Props["side"];
@@ -121,12 +122,17 @@ export function SelectPopup({
   alignOffset?: SelectPrimitive.Positioner.Props["alignOffset"];
   alignItemWithTrigger?: SelectPrimitive.Positioner.Props["alignItemWithTrigger"];
   anchor?: SelectPrimitive.Positioner.Props["anchor"];
+  /** Where the list renders. Inside a Radix dialog, pass the dialog content:
+   * the dialog blocks pointer events on everything outside itself. The list
+   * then opens below the trigger; overlapping it positions against the
+   * viewport, which a transformed dialog would offset. */
+  container?: SelectPrimitive.Portal.Props["container"];
 }): React.ReactElement {
   return (
-    <SelectPrimitive.Portal>
+    <SelectPrimitive.Portal container={container}>
       <SelectPrimitive.Positioner
         align={align}
-        alignItemWithTrigger={alignItemWithTrigger}
+        alignItemWithTrigger={alignItemWithTrigger ?? !container}
         alignOffset={alignOffset}
         anchor={anchor}
         className="z-50 select-none"
